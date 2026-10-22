@@ -37,6 +37,12 @@ block content
                 details(class="code-history")
                     summary Lịch sử kết quả (user_id/result/#{lang.key}/)
                     div(id="history")
+        if githubUrl
+            div(class="code-share")
+                i(data-lucide="github", class="w-4 h-4")
+                span Link GitHub để chia sẻ:
+                a(id="ghLink", href=githubUrl, target="_blank", rel="noopener noreferrer") #{githubUrl}
+                button(type="button", id="btnCopyLink", class="code-btn") Sao chép
     script#payload(type="application/json")!= payloadJson
     div(id="emuModal", class="emu-modal hidden")
     if lang.key === "emu8086"

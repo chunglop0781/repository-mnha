@@ -3,6 +3,7 @@
 //   {user_id}/result/{dạng-code}/{timestamp}.json       ← kết quả mỗi lần chạy (kể cả lỗi)
 'use strict';
 const gh = require('../githubService');
+const ghCfg = require('../../config/github');
 const { LANGS, LIMITS, NAME_RE } = require('../../config/codeConfig');
 
 const KEEP = '.keep';
@@ -31,6 +32,13 @@ function cleanFileName(lang, name) {
 function filePath(uid, lang, dir, name) {
     const segs = cleanDir(dir);
     return [root(uid, lang), ...segs, cleanFileName(lang, name)].join('/');
+}
+
+/** Link trang GitHub (blob, KHÔNG phải raw) của 1 file code để chia sẻ: https://github.com/<owner>/<repo>/blob/<branch>/<đường dẫn>. Thiếu cấu hình → null. */
+function githubUrl(uid, lang, dir, name) {
+    if (!ghCfg.owner || !ghCfg.repo) return null;
+    const enc = (p) => String(p).split('/').map(encodeURIComponent).join('/');
+    return `https://github.com/${encodeURIComponent(ghCfg.owner)}/${encodeURIComponent(ghCfg.repo)}/blob/${enc(ghCfg.branch || 'main')}/${enc(filePath(uid, lang, dir, name))}`;
 }
 
 async function list(uid, lang, dir) {
@@ -125,4 +133,4 @@ async function readResult(uid, lang, ts) {
     return gh.readJsonFile(`${uid}/result/${lang}/${ts}.json`);
 }
 
-module.exports = { list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveResult, listResults, readResult, cleanDir, cleanFileName };
+module.exports = { githubUrl, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveResult, listResults, readResult, cleanDir, cleanFileName };

@@ -66,7 +66,8 @@ exports.edit = wrap(async (req, res) => {
         res.set('Cross-Origin-Embedder-Policy', 'credentialless');
     }
     const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode };
-    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
+    const githubUrl = store.githubUrl(uidOf(req), lang.key, dir, file);
+    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, githubUrl, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
 });
 
 exports.compile = wrap(async (req, res) => {      // nút Compile của emu8086: chỉ dịch, báo lỗi, không chạy

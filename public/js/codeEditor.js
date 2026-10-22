@@ -25,6 +25,15 @@
     }
     $('btnSave').onclick = function () { save().catch(function () { }); };
 
+    // ---------- sao chép link GitHub để chia sẻ ----------
+    var btnCopy = $('btnCopyLink'), ghLink = $('ghLink');
+    if (btnCopy && ghLink) btnCopy.onclick = function () {
+        var url = ghLink.href;
+        function done(ok) { btnCopy.textContent = ok ? 'Đã sao chép ✓' : 'Chọn & copy thủ công'; setTimeout(function () { btnCopy.textContent = 'Sao chép'; }, 1800); }
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(function () { done(true); }, function () { done(false); });
+        else { var t = document.createElement('textarea'); t.value = url; document.body.appendChild(t); t.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) { } document.body.removeChild(t); done(ok); }
+    };
+
     // ---------- chạy ----------
     function setRunning(on) { if (!btnRun) return; btnRun.classList.toggle('hidden', on); btnStop.classList.toggle('hidden', !on); }
     // ---------- C++ chạy trong trình duyệt (clang WebAssembly) khi máy chủ không có g++ ----------

@@ -7,6 +7,9 @@
 .code-btn:hover{background:#475569}.code-btn-run{background:#16a34a}.code-btn-run:hover{background:#15803d}
 .code-btn-stop{background:#dc2626}.code-btn-stop:hover{background:#b91c1c}.code-btn:disabled{opacity:.5;cursor:default}
 .code-body{display:flex;flex:1;min-height:0}
+.code-share{flex:none;display:flex;gap:8px;align-items:center;padding:6px 14px;background:#1e293b;border-top:1px solid #334155;font-size:12px;color:#94a3b8}
+.code-share a{color:#38bdf8;font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.code-share a:hover{text-decoration:underline}
+.code-share .code-btn{padding:3px 10px;font-size:12px;flex:none}
 .code-left{flex:1 1 52%;display:flex;min-width:0;border-right:1px solid #334155}
 .code-gutter{padding:10px 8px;text-align:right;color:#64748b;font:13px/20px ui-monospace,Menlo,Consolas,monospace;background:#0b1220;user-select:none;overflow:hidden;white-space:pre}
 #editor{flex:1;background:#0f172a;color:#e2e8f0;border:0;outline:0;resize:none;padding:10px;font:13px/20px ui-monospace,Menlo,Consolas,monospace;tab-size:4;white-space:pre;overflow:auto}
