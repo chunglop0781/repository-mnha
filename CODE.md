@@ -28,3 +28,11 @@ Mặc định tự bật khi có biến `VERCEL` (đặt `CPP_RUN_MODE=server|br
 - `public/js/cppWasm.js`: tải SDK, dịch, chạy. Cờ clang ở đầu file (`CLANG_ARGS`, `LINK_ARGS`) — chỉnh nếu clang báo thiếu libc++.
 - Trang sửa code C++ gửi COOP `same-origin` + COEP `credentialless` (cần cho SDK). Kết quả lưu qua `POST /code/cpp/client-result`.
 - Giới hạn: không `std::thread`, không exception (wasi-libc++), nút Dừng chỉ ngừng hiển thị, hết 60 giây tự dừng.
+
+## C++ kiểu OnlineGDB: runner riêng + web ở Vercel (khuyên dùng) — `runner/`
+Web chính chỉ **chuyển yêu cầu** sang dịch vụ `runner/server.js` (Docker có g++, dùng lại `cppRunner.js`) → vẫn nhập `cin` tương tác từng dòng, `freopen` với .txt.
+1. Deploy runner (Render: New → Blueprint, chọn repo, dùng `render.yaml`; hoặc `docker build -f runner/Dockerfile .` ở Railway/Fly/VPS). Đặt `CPP_RUNNER_KEY` (≥ 16 ký tự).
+2. Trên Vercel đặt `CPP_RUNNER_URL=https://<runner>` và `CPP_RUNNER_KEY=<cùng khoá>` rồi redeploy.
+- Khi có `CPP_RUNNER_URL` thì không dùng g++ cục bộ/WASM. Runner kiểm khoá + `x-uid` (người dùng chỉ đọc/nhập/dừng phiên của mình); kết quả vẫn lưu GitHub từ web chính (runner không cần secret GitHub).
+- Gói free của Render ngủ sau ~15 phút không dùng → lần chạy đầu có thể chờ ~30–60 giây. Runner chạy code lạ: chỉ có ulimit + chặn vài hàm (xem cppRunner.js), nên để container không chứa secret nào khác.
+- Runner đang ngủ (Render free): mở trang C++ → web gửi vài yêu cầu `/code/cpp/warmup` thưa dần để đánh thức; bấm Chạy mà runner chưa thức → trình duyệt tự thử lại (mỗi lúc 1 yêu cầu, giãn 4–8 giây, tối đa ~3 phút, nút Dừng hủy ngay). Máy chủ thăm dò `/health` trước khi gửi lệnh chạy thật nên không sinh phiên chạy thừa.

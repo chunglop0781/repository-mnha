@@ -1,0 +1,12 @@
+# Render Blueprint: dịch vụ chạy C++ (web chính vẫn ở Vercel)
+services:
+  - type: web
+    name: mnha-cpp-runner
+    runtime: docker
+    dockerfilePath: ./runner/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: CPP_RUNNER_KEY
+        generateValue: true     # copy giá trị này sang biến CPP_RUNNER_KEY của Vercel

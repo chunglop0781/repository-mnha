@@ -8,7 +8,7 @@
     function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
     function api(method, url, body) {
         return fetch(url, { method: method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body ? JSON.stringify(body) : undefined })
-            .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Lỗi'); return j; }); });
+            .then(function (r) { return r.json().then(function (j) { if (!r.ok) { var er = new Error(j.error || 'Lỗi'); er.wake = !!j.wake; throw er; } return j; }); });
     }
     function lines() { var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gutter.textContent = s; }
     ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', ed.value === saved); });
@@ -60,13 +60,43 @@
             });
         });
     }
+    // Runner C++ (Render gói free) có thể đang ngủ → tự thử lại cho tới khi chạy được. Mỗi lúc chỉ 1 yêu cầu,
+    // giãn dần khoảng cách, tối đa ~3 phút, nút Dừng hủy ngay. (Máy chủ thăm dò /health trước nên không tạo phiên chạy thừa.)
+    var cancelWake = false, wakeTimer = null;
+    function startWithWake(body) {
+        var t0 = Date.now(), n = 0;
+        return new Promise(function (resolve, reject) {
+            (function attempt() {
+                if (cancelWake) return reject(new Error('Đã hủy.'));
+                n++;
+                api('POST', '/code/' + P.lang + '/run', body).then(resolve).catch(function (e) {
+                    if (!e.wake || cancelWake) return reject(e);
+                    var el = Math.round((Date.now() - t0) / 1000);
+                    if (el > 180) return reject(new Error('Máy chạy code không phản hồi sau 3 phút. Kiểm tra dịch vụ runner trên Render rồi thử lại.'));
+                    info.innerHTML = '<span class="ok">Máy chạy code đang thức dậy (Render gói miễn phí) — tự thử lại, đã chờ ' + el + ' giây, thường mất 30–60 giây...</span>';
+                    wakeTimer = setTimeout(attempt, Math.min(3000 + n * 1000, 8000));
+                });
+            })();
+        });
+    }
+    // Mở trang C++ → đánh thức runner sớm (thưa dần, dừng ngay khi sẵn sàng hoặc sau 6 lần)
+    if (P.lang === 'cpp' && P.cppMode === 'server') {
+        var warmTries = 0;
+        (function warm() {
+            if (document.hidden && warmTries) return void setTimeout(warm, 15000);
+            if (++warmTries > 6) return;
+            fetch('/code/cpp/warmup', { headers: { Accept: 'application/json' } }).then(function (r) { return r.json(); })
+                .then(function (j) { if (!j.ready) setTimeout(warm, 10000); }).catch(function () { setTimeout(warm, 15000); });
+        })();
+    }
     function run() {
         if (browserCpp) return P.runnable ? runBrowser() : undefined;
         if (!P.runnable || sid) return;
         termOut.textContent = ''; info.textContent = 'Đang khởi động...'; $('outFiles').innerHTML = ''; since = 0; showInput(false);
         setRunning(true);
+        cancelWake = false;
         (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
-            return api('POST', '/code/' + P.lang + '/run', { dir: P.dir, file: P.file, content: ed.value });
+            return startWithWake({ dir: P.dir, file: P.file, content: ed.value });
         }).then(function (j) { sid = j.sid; poll(); if (isEmu) term.focus(); }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; setRunning(false); });
     }
     if (btnRun) btnRun.onclick = run;
@@ -77,7 +107,7 @@
             else { termOut.innerHTML = j.errors.map(function (e) { return '<div class="t-err">Dòng ' + e.line + ': ' + esc(e.message) + '</div>'; }).join(''); info.innerHTML = '<span class="bad">Có ' + j.errors.length + ' lỗi.</span>'; }
         }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; });
     };
-    if (btnStop) btnStop.onclick = function () { if (wasmRun) { wasmRun.stop(); return; } if (sid) api('POST', '/code/session/' + sid + '/stop').catch(function () { }); };
+    if (btnStop) btnStop.onclick = function () { if (wasmRun) { wasmRun.stop(); return; } if (!sid) { cancelWake = true; clearTimeout(wakeTimer); info.textContent = 'Đã hủy.'; setRunning(false); return; } if (sid) api('POST', '/code/session/' + sid + '/stop').catch(function () { }); };
 
     var isEmu = P.lang === 'emu8086', term = $('term'), keyQ = Promise.resolve();
     // emu8086: gõ phím thẳng vào màn hình (mỗi phím gửi ngay, Enter = mã 13) — giống console thật.

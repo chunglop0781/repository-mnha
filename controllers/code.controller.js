@@ -11,6 +11,7 @@
 'use strict';
 const store = require('../services/code/codeStore');
 const sessions = require('../services/code/sessionManager');
+const remote = require('../services/code/remoteRunner');
 const { LANGS, CPP_RUN_MODE } = require('../config/codeConfig');
 
 const uidOf = (req) => String(req.user._id);
@@ -22,7 +23,7 @@ const wrap = (fn) => async (req, res) => {
         if (req.method === 'GET' && !(req.headers.accept || '').includes('json')) {
             return res.status(status).render('error', { title: 'Lỗi', message: e.message, statusCode: status, stack: null, user: req.user });
         }
-        res.status(status).json({ error: e.message });
+        res.status(status).json({ error: e.message, wake: e.wake || undefined });
     }
 };
 const langOf = (req) => { const l = LANGS[req.params.lang]; if (!l) throw Object.assign(new Error('Không có dạng code này'), { status: 404 }); return l; };
@@ -104,6 +105,10 @@ exports.run = wrap(async (req, res) => {
     if (code.length > 200 * 1024) throw Object.assign(new Error('Code quá dài'), { status: 400 });
     // chạy đúng code đang soạn (kể cả chưa lưu); các .txt cùng thư mục nạp vào thư mục chạy
     const siblingFiles = lang.key === 'cpp' ? await store.siblingTextFiles(uid, lang.key, dir) : [];
+    if (lang.key === 'cpp' && remote.enabled()) {      // chạy ở dịch vụ runner riêng
+        const r = await remote.run(uid, { file, dir, code, files: siblingFiles });
+        return res.json({ sid: r.sid });
+    }
     const s = await sessions.create({ uid, lang: lang.key, code, file, dir, siblingFiles });
     res.json({ sid: s.id });
 });
@@ -114,17 +119,30 @@ function view(s, since) {
 }
 exports.poll = wrap(async (req, res) => {
     const s = sessions.get(req.params.sid, uidOf(req));
+    if (!s && remote.enabled()) {
+        const v = await remote.poll(uidOf(req), req.params.sid, req.query.since);
+        if (v.status === 'finished' && !v.saved && v.result && v.meta) {      // lưu kết quả lên GitHub (runner không giữ secret GitHub)
+            try {
+                v.saved = await store.saveResult(uidOf(req), 'cpp', { lang: 'cpp', file: v.meta.file, dir: v.meta.dir, source: v.meta.source, ...v.result });
+                await remote.markSaved(uidOf(req), req.params.sid, v.saved);
+            } catch (e) { v.saveError = e.message; console.error('[code] lưu kết quả lỗi:', e.message); }
+        }
+        delete v.result; delete v.meta;
+        return res.json({ ...v, lang: 'cpp' });
+    }
     if (!s) return res.status(404).json({ error: 'Phiên chạy không còn (có thể máy chủ đã khởi động lại).' });
     res.json(view(s, Number(req.query.since) || 0));
 });
 exports.input = wrap(async (req, res) => {
     const s = sessions.get(req.params.sid, uidOf(req));
+    if (!s && remote.enabled()) return res.json(await remote.input(uidOf(req), req.params.sid, req.body.text));
     if (!s) return res.status(404).json({ error: 'Phiên chạy không còn' });
     const ok = s.impl.sendInput(req.body.text);
     res.json({ ok });
 });
 exports.stop = wrap(async (req, res) => {
     const s = sessions.get(req.params.sid, uidOf(req));
+    if (!s && remote.enabled()) return res.json(await remote.stop(uidOf(req), req.params.sid));
     if (!s) return res.status(404).json({ error: 'Phiên chạy không còn' });
     s.impl.stop(); res.json({ ok: true });
 });
@@ -135,6 +153,9 @@ exports.saveOutputFile = wrap(async (req, res) => {   // lưu output.txt do chư
     res.json({ ok: true });
 });
 
+exports.warmup = wrap(async (req, res) => {      // đánh thức runner (Render ngủ) khi mở trang code; client gọi thưa, mỗi lần 1 yêu cầu
+    res.json({ ready: remote.enabled() ? await remote.health(5000) : true });
+});
 exports.siblings = wrap(async (req, res) => {     // các .txt cùng thư mục (để trình duyệt nạp vào thư mục ảo khi chạy C++)
     const lang = langOf(req);
     const dir = store.cleanDir(req.query.dir || '').join('/');

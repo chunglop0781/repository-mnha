@@ -28,6 +28,9 @@ const LIMITS = {
 };
 // Chạy C++ ở đâu: 'server' (g++ trên máy chủ) | 'browser' (clang WebAssembly ngay trong trình duyệt).
 // Mặc định: trên Vercel (không có g++) → 'browser'; chỗ khác → 'server'. Ép bằng biến môi trường CPP_RUN_MODE.
-const CPP_RUN_MODE = process.env.CPP_RUN_MODE || (process.env.VERCEL ? 'browser' : 'server');
+// CPP_RUNNER_URL (+ CPP_RUNNER_KEY): trỏ tới dịch vụ runner/ (Docker có g++) → web chính chỉ chuyển yêu cầu sang đó (giống OnlineGDB).
+const CPP_RUNNER_URL = process.env.CPP_RUNNER_URL || '';
+const CPP_RUNNER_KEY = process.env.CPP_RUNNER_KEY || '';
+const CPP_RUN_MODE = process.env.CPP_RUN_MODE || (CPP_RUNNER_URL ? 'server' : (process.env.VERCEL ? 'browser' : 'server'));
 const NAME_RE = /^[A-Za-z0-9_\-]{1,60}$/;
-module.exports = { LANGS, LIMITS, NAME_RE, CPP_RUN_MODE };
+module.exports = { LANGS, LIMITS, NAME_RE, CPP_RUN_MODE, CPP_RUNNER_URL, CPP_RUNNER_KEY };
