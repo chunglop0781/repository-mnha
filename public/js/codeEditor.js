@@ -5,6 +5,7 @@
     var info = $('termInfo'), dirty = $('dirty'), btnRun = $('btnRun'), btnStop = $('btnStop');
     var saved = P.content, sid = null, timer = null, since = 0;
     ed.value = P.content; ed.disabled = false;
+    if (P.online) ed.readOnly = true;      // code lấy từ link trên mạng: chỉ xem, không sửa (vẫn chạy được)
     function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
     function api(method, url, body) {
         return fetch(url, { method: method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body ? JSON.stringify(body) : undefined })
@@ -14,16 +15,17 @@
     ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', ed.value === saved); });
     ed.addEventListener('scroll', function () { gutter.scrollTop = ed.scrollTop; });
     ed.addEventListener('keydown', function (e) {
-        if (e.key === 'Tab') { e.preventDefault(); var s = ed.selectionStart; ed.value = ed.value.slice(0, s) + '    ' + ed.value.slice(ed.selectionEnd); ed.selectionStart = ed.selectionEnd = s + 4; ed.dispatchEvent(new Event('input')); }
+        if (e.key === 'Tab' && !P.online) { e.preventDefault(); var s = ed.selectionStart; ed.value = ed.value.slice(0, s) + '    ' + ed.value.slice(ed.selectionEnd); ed.selectionStart = ed.selectionEnd = s + 4; ed.dispatchEvent(new Event('input')); }
         if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
         if (e.key === 'F5') { e.preventDefault(); run(); }
     });
     lines();
 
     function save() {
+        if (P.online) return Promise.resolve();      // code trên mạng không lưu vào thư mục của tôi
         return api('POST', '/code/' + P.lang + '/save', { dir: P.dir, file: P.file, content: ed.value }).then(function () { saved = ed.value; dirty.classList.add('hidden'); info.innerHTML = '<span class="ok">Đã lưu lên GitHub.</span>'; }).catch(function (e) { info.innerHTML = '<span class="bad">Lưu lỗi: ' + esc(e.message) + '</span>'; throw e; });
     }
-    $('btnSave').onclick = function () { save().catch(function () { }); };
+    if ($('btnSave')) $('btnSave').onclick = function () { save().catch(function () { }); };
 
     // ---------- sao chép link GitHub để chia sẻ ----------
     var btnCopy = $('btnCopyLink'), ghLink = $('ghLink');
@@ -50,6 +52,7 @@
         termOut.textContent = ''; $('outFiles').innerHTML = ''; wasmInputs = []; wasmConsole = ''; setRunning(true);
         info.textContent = 'Đang chuẩn bị...';
         (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
+            if (P.online) return { files: [] };      // code trên mạng: không nạp file nào từ thư mục của tôi
             return api('GET', '/code/cpp/siblings?dir=' + encodeURIComponent(P.dir)).catch(function () { return { files: [] }; });
         }).then(function (j) {
             var code = ed.value;
@@ -63,7 +66,7 @@
                 var ok = r.status === 'finished' && !r.error;
                 info.innerHTML = (ok ? '<span class="ok">Chạy xong (mã thoát ' + r.exitCode + ').</span>' : '<span class="bad">' + esc(r.error || r.status) + '</span>') + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
                 renderOutFiles(r.files);
-                api('POST', '/code/cpp/client-result', { file: P.file, dir: P.dir, source: code, console: wasmConsole, inputs: wasmInputs, exitCode: r.exitCode, error: r.error, files: r.files })
+                api('POST', '/code/cpp/client-result', { file: P.file, dir: P.dir, origin: P.online || undefined, source: code, console: wasmConsole, inputs: wasmInputs, exitCode: r.exitCode, error: r.error, files: r.files })
                     .then(function (x) { $('sv').textContent = 'Đã lưu: ' + x.saved; loadHistory(); })
                     .catch(function (e) { var sv = $('sv'); if (sv) sv.innerHTML = '<span class="bad">Lưu kết quả lỗi: ' + esc(e.message) + '</span>'; });
             });
@@ -105,7 +108,7 @@
         setRunning(true);
         cancelWake = false;
         (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
-            return startWithWake({ dir: P.dir, file: P.file, content: ed.value });
+            return startWithWake(P.online ? { online: P.online } : { dir: P.dir, file: P.file, content: ed.value });
         }).then(function (j) { sid = j.sid; poll(); if (isEmu) term.focus(); }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; setRunning(false); });
     }
     if (btnRun) btnRun.onclick = run;

@@ -80,7 +80,7 @@ class EmuSession {
 
 function countActive(uid) { let n = 0; for (const s of sessions.values()) if (s.uid === uid && s.impl.status !== 'finished') n++; return n; }
 
-async function create({ uid, lang, code, file, dir, siblingFiles }) {
+async function create({ uid, lang, code, file, dir, siblingFiles, origin }) {
     if (countActive(uid) >= LIMITS.MAX_SESSIONS_PER_USER) throw Object.assign(new Error('Bạn đang chạy quá nhiều chương trình cùng lúc — hãy dừng bớt.'), { status: 429 });
     const impl = lang === 'emu8086' ? new EmuSession({ code }) : new CppSession({ code, files: siblingFiles || [] });
     const id = crypto.randomBytes(12).toString('hex');
@@ -89,7 +89,7 @@ async function create({ uid, lang, code, file, dir, siblingFiles }) {
     impl.onFinish(async () => {
         try {
             const res = impl.result();
-            const p = await store.saveResult(uid, lang, { lang, file: s.file, dir: s.dir, source: code, ...res });
+            const p = await store.saveResult(uid, lang, { lang, file: s.file, dir: s.dir, ...(origin ? { origin } : {}), source: code, ...res });
             s.savedPath = p;
         } catch (e) { s.saveError = e.message; console.error('[code] lưu kết quả lỗi:', e.message); }
     });

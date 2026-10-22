@@ -6,10 +6,13 @@ block content
         div(class="code-top")
             div(class="code-title")
                 i(data-lucide="file-code-2", class="w-4 h-4")
-                span #{lang.key}/#{dir ? dir + "/" : ""}#{file}
+                span #{online ? "[online] " + file : lang.key + "/" + (dir ? dir + "/" : "") + file}
+                if online
+                    span(class="code-badge", title="Code lấy từ link trên mạng: chỉ xem, không sửa được — vẫn chạy được") Chỉ xem · chạy được
                 span(id="dirty", class="code-dirty hidden") ● chưa lưu
             div(class="code-actions")
-                button(id="btnSave", class="code-btn") Lưu (Ctrl+S)
+                if !online
+                    button(id="btnSave", class="code-btn") Lưu (Ctrl+S)
                 if lang.key === "emu8086"
                     button(id="btnCompile", class="code-btn", title="Chỉ dịch (assemble), báo lỗi, không chạy") Compile
                     button(type="button", class="code-btn", data-emu-tool="ascii") ASCII codes
@@ -35,12 +38,13 @@ block content
                 div(id="termInfo", class="code-info")
                 div(id="outFiles", class="code-files")
                 details(class="code-history")
-                    summary Lịch sử kết quả (user_id/result/#{lang.key}/)
+                    summary Lịch sử kết quả (user_id/result/#{lang.key}/) —
+                        a(href="/code/" + lang.key + "/history", target="_blank", rel="noopener", style="color:#38bdf8") xem đầy đủ
                     div(id="history")
         if githubUrl
             div(class="code-share")
                 i(data-lucide="github", class="w-4 h-4")
-                span Link GitHub để chia sẻ:
+                span #{shareLabel || "Link GitHub để chia sẻ:"}
                 a(id="ghLink", href=githubUrl, target="_blank", rel="noopener noreferrer") #{githubUrl}
                 button(type="button", id="btnCopyLink", class="code-btn") Sao chép
     script#payload(type="application/json")!= payloadJson

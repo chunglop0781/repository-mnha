@@ -17,6 +17,12 @@ block content
         div(class="mt-5 flex flex-wrap gap-3")
             button(id="btnNewFile", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") + File mới
             button(id="btnNewFolder", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") + Thư mục mới
+            a(href=base + "/history", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50 inline-flex items-center gap-1")
+                i(data-lucide="history", class="w-4 h-4")
+                | Lịch sử chạy code
+            a(href=base + "/online", class="px-4 py-2 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-sm font-medium hover:bg-emerald-50 inline-flex items-center gap-1")
+                i(data-lucide="globe", class="w-4 h-4")
+                | Xem code trên mạng
             if dir
                 button(id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
         p(class="mt-2 text-xs text-gray-500")

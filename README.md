@@ -17,3 +17,10 @@ npm install
 npm start
 ```
 Xem `CODE.md` cho chi tiết emu8086/C++, lưu GitHub và lưu ý triển khai.
+
+## Lịch sử chạy code & xem code trên mạng
+- Trang danh sách file (`/code/emu8086`, `/code/cpp`) có 2 nút:
+  - **Lịch sử chạy code** (`/code/:lang/history`): xem lại từng lần chạy — chỉ XEM code (đúng như lúc chạy) và màn hình kết quả.
+  - **Xem code trên mạng** (`/code/:lang/online`): dán link file trên **github.com** hoặc **gitlab.com** (có hướng dẫn lấy link ngay trên trang) → xem code (không sửa được) và bấm chạy để xem màn hình. Mỗi lần chạy được lưu vào lịch sử cùng link nguồn (`origin`).
+- Máy chủ tự tải code từ link nên chỉ nhận đúng 2 host trên, tự dựng lại địa chỉ raw, kiểm tra từng lần redirect, giới hạn 200KB, từ chối file nhị phân/trang đăng nhập (xem `services/code/remoteSource.js`). Repo chứa code phải công khai.
+- Test: `node test/online-source.js`.

@@ -49,3 +49,12 @@
 .emu-tabs button.on{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
 .emu-tabs .sep{width:1px;height:18px;background:#334155;margin:0 4px}
 .emu-asc{overflow:auto}
+.code-badge{background:#0b3b2e;color:#4ade80;border:1px solid #166534;border-radius:999px;padding:1px 8px;font:11px system-ui,sans-serif}
+.hist-list{flex:0 0 250px;overflow:auto;background:#0b1220;border-right:1px solid #334155;font-size:12px}
+.hist-item{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #1e293b;color:#cbd5e1;padding:8px 10px;cursor:pointer}
+.hist-item:hover{background:#1e293b}.hist-item.on{background:#1e3a5f;color:#fff}
+.hist-item .t{display:block;color:#94a3b8;font-size:11px}.hist-item .f{display:block;font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+.hist-item .ok{color:#4ade80}.hist-item .bad{color:#f87171}.hist-item .web{color:#38bdf8}
+.hist-code{flex:1;margin:0;padding:10px;overflow:auto;background:#0f172a;color:#e2e8f0;font:13px/20px ui-monospace,Menlo,Consolas,monospace;white-space:pre;tab-size:4}
+.code-info a{color:#38bdf8}
+@media (max-width:760px){.code-body{flex-direction:column}.hist-list{flex:0 0 140px;border-right:0;border-bottom:1px solid #334155}.code-left{border-right:0;min-height:200px}}

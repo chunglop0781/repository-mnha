@@ -7,11 +7,14 @@
 //   GET  /code/session/:sid          trạng thái/đầu ra (polling)
 //   POST /code/session/:sid/input|stop
 //   GET  /code/:lang/results[/:ts]   lịch sử kết quả (user_id/result/:lang/timestamp.json)
+//   GET  /code/:lang/history         trang xem lịch sử chạy code (chỉ xem code + màn hình)
+//   GET  /code/:lang/online[?url=]   "xem code trên mạng": dán link GitHub/GitLab → xem code (không sửa) + chạy xem màn hình
 // Không cần duyệt tài khoản: chỉ cần đăng nhập.
 'use strict';
 const store = require('../services/code/codeStore');
 const sessions = require('../services/code/sessionManager');
 const remote = require('../services/code/remoteRunner');
+const remoteSource = require('../services/code/remoteSource');
 const { LANGS, CPP_RUN_MODE } = require('../config/codeConfig');
 
 const uidOf = (req) => String(req.user._id);
@@ -52,22 +55,59 @@ exports.createFile = wrap(async (req, res) => {
     res.json({ ok: true, file: name });
 });
 
+// Dựng trang trình soạn (dùng chung cho file của tôi và code xem trên mạng)
+function renderEditor(req, res, { lang, dir, file, content, results, online, githubUrl, shareLabel }) {
+    const runnable = file.toLowerCase().endsWith('.' + lang.runExt);
+    const cppMode = lang.key === 'cpp' ? CPP_RUN_MODE : null;
+    if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin
+        res.set('Cross-Origin-Opener-Policy', 'same-origin');
+        res.set('Cross-Origin-Embedder-Policy', 'credentialless');
+    }
+    const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode, online: online || null };
+    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, online: online || null, githubUrl, shareLabel, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
+}
+
 exports.edit = wrap(async (req, res) => {
     const lang = langOf(req);
     const dir = store.cleanDir(req.query.dir || '').join('/');
     const file = store.cleanFileName(lang.key, req.query.file);
     const content = await store.readFile(uidOf(req), lang.key, dir, file);
     if (content === null) throw Object.assign(new Error('Không tìm thấy file'), { status: 404 });
-    const runnable = file.toLowerCase().endsWith('.' + lang.runExt);
     const results = await store.listResults(uidOf(req), lang.key, 20).catch(() => []);
-    const cppMode = lang.key === 'cpp' ? CPP_RUN_MODE : null;
-    if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin
-        res.set('Cross-Origin-Opener-Policy', 'same-origin');
-        res.set('Cross-Origin-Embedder-Policy', 'credentialless');
-    }
-    const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode };
-    const githubUrl = store.githubUrl(uidOf(req), lang.key, dir, file);
-    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, githubUrl, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
+    renderEditor(req, res, { lang, dir, file, content, results, githubUrl: store.githubUrl(uidOf(req), lang.key, dir, file) });
+});
+
+// ---- xem code trên mạng (GitHub / GitLab)
+function onlineFileName(lang, parsed) {       // tên file hiển thị/lưu lịch sử: lấy từ link, đã làm sạch cho hợp lệ
+    const last = String(parsed.last || '');
+    const dot = last.lastIndexOf('.');
+    const ext = dot > 0 ? last.slice(dot + 1).toLowerCase() : '';
+    if (!lang.exts.includes(ext)) throw Object.assign(new Error(`Chỉ xem được file ${lang.exts.map((e) => '.' + e).join(', ')} (link của bạn là file "${last.slice(0, 60)}").`), { status: 400 });
+    const base = last.slice(0, dot).replace(/[^A-Za-z0-9_\-]/g, '_').slice(0, 60) || 'code';
+    return store.cleanFileName(lang.key, base + '.' + ext);
+}
+async function loadOnline(lang, url) {
+    const parsed = remoteSource.parseSourceUrl(url);
+    const file = onlineFileName(lang, parsed);
+    const content = await remoteSource.fetchText(parsed);
+    return { parsed, file, content };
+}
+const originOf = (u) => { try { return u ? remoteSource.parseSourceUrl(u).web : undefined; } catch (_) { return undefined; } };
+
+exports.online = wrap(async (req, res) => {
+    const lang = langOf(req);
+    const url = String(req.query.url || '').trim();
+    const form = (error, status = 200) => res.status(status).render('code/online', { title: 'Xem code trên mạng', user: req.user, lang, url, error });
+    if (!url) return form(null);
+    let o;
+    try { o = await loadOnline(lang, url); }
+    catch (e) { if (e.status && e.status < 500) return form(e.message, e.status === 404 ? 404 : 400); throw e; }
+    renderEditor(req, res, { lang, dir: '', file: o.file, content: o.content, results: [], online: o.parsed.web, githubUrl: o.parsed.web, shareLabel: o.parsed.host === 'gitlab' ? 'Nguồn (GitLab):' : 'Nguồn (GitHub):' });
+});
+
+exports.history = wrap(async (req, res) => {
+    const lang = langOf(req);
+    res.render('code/history', { title: 'Lịch sử chạy code', user: req.user, lang });
 });
 
 exports.compile = wrap(async (req, res) => {      // nút Compile của emu8086: chỉ dịch, báo lỗi, không chạy
@@ -99,20 +139,27 @@ exports.remove = wrap(async (req, res) => {
 exports.run = wrap(async (req, res) => {
     const lang = langOf(req);
     const uid = uidOf(req);
-    const dir = store.cleanDir(req.body.dir || '').join('/');
-    const file = store.cleanFileName(lang.key, req.body.file);
+    let dir, file, code, origin;
+    if (req.body.online) {      // chạy code từ link GitHub/GitLab: LUÔN tải lại code từ link (không tin nội dung client gửi) + ghi nguồn vào lịch sử
+        const o = await loadOnline(lang, req.body.online);
+        dir = ''; file = o.file; code = o.content; origin = o.parsed.web;
+    } else {
+        dir = store.cleanDir(req.body.dir || '').join('/');
+        file = store.cleanFileName(lang.key, req.body.file);
+        code = String(req.body.content == null ? '' : req.body.content);
+    }
     if (!file.toLowerCase().endsWith('.' + lang.runExt)) throw Object.assign(new Error('File này không chạy được'), { status: 400 });
-    const code = String(req.body.content == null ? '' : req.body.content);
     if (code.length > 200 * 1024) throw Object.assign(new Error('Code quá dài'), { status: 400 });
     // chạy đúng code đang soạn (kể cả chưa lưu); các .txt cùng thư mục nạp vào thư mục chạy
     // cả file .cpp được nhắc trong code ("input1.cpp") cũng nạp làm dữ liệu (đổi sang .txt khi chạy, in ra thì đổi ngược lại)
+    // (code xem trên mạng: không nạp file nào từ thư mục của người dùng)
     const cppNames = [...code.matchAll(/"([A-Za-z0-9_\-]{1,60})\.cpp"/gi)].map((m) => m[1] + '.cpp');
-    const siblingFiles = lang.key === 'cpp' ? await store.siblingTextFiles(uid, lang.key, dir, { cppNames, exclude: file }) : [];
+    const siblingFiles = lang.key === 'cpp' && !origin ? await store.siblingTextFiles(uid, lang.key, dir, { cppNames, exclude: file }) : [];
     if (lang.key === 'cpp' && remote.enabled()) {      // chạy ở dịch vụ runner riêng
-        const r = await remote.run(uid, { file, dir, code, files: siblingFiles });
+        const r = await remote.run(uid, { file, dir, code, files: siblingFiles, origin: origin || '' });
         return res.json({ sid: r.sid });
     }
-    const s = await sessions.create({ uid, lang: lang.key, code, file, dir, siblingFiles });
+    const s = await sessions.create({ uid, lang: lang.key, code, file, dir, siblingFiles, origin });
     res.json({ sid: s.id });
 });
 
@@ -126,7 +173,7 @@ exports.poll = wrap(async (req, res) => {
         const v = await remote.poll(uidOf(req), req.params.sid, req.query.since);
         if (v.status === 'finished' && !v.saved && v.result && v.meta) {      // lưu kết quả lên GitHub (runner không giữ secret GitHub)
             try {
-                v.saved = await store.saveResult(uidOf(req), 'cpp', { lang: 'cpp', file: v.meta.file, dir: v.meta.dir, source: v.meta.source, ...v.result });
+                v.saved = await store.saveResult(uidOf(req), 'cpp', { lang: 'cpp', file: v.meta.file, dir: v.meta.dir, ...(originOf(v.meta.origin) ? { origin: originOf(v.meta.origin) } : {}), source: v.meta.source, ...v.result });
                 await remote.markSaved(uidOf(req), req.params.sid, v.saved);
             } catch (e) { v.saveError = e.message; console.error('[code] lưu kết quả lỗi:', e.message); }
         }
@@ -168,7 +215,7 @@ exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy tr
     const lang = langOf(req);
     const b = req.body || {};
     const r = {
-        lang: lang.key, file: String(b.file || ''), dir: String(b.dir || ''), source: String(b.source || '').slice(0, 200 * 1024),
+        lang: lang.key, file: String(b.file || ''), dir: String(b.dir || ''), ...(originOf(b.origin) ? { origin: originOf(b.origin) } : {}), source: String(b.source || '').slice(0, 200 * 1024),
         kind: 'cpp-browser', status: b.error ? 'error' : 'ok', console: String(b.console || '').slice(0, 1024 * 1024),
         inputs: Array.isArray(b.inputs) ? b.inputs.slice(0, 500).map((x) => String(x).slice(0, 2000)) : [],
         exitCode: b.exitCode == null ? null : Number(b.exitCode), error: b.error ? String(b.error).slice(0, 2000) : null,

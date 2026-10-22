@@ -48,7 +48,7 @@ const server = http.createServer(async (req, res) => {
                 .map((f) => ({ name: String(f.name || ''), content: String(f.content || '').slice(0, LIMITS.MAX_FILE_BYTES) }));
             const impl = new CppSession({ code, files });
             const sid = crypto.randomBytes(12).toString('hex');
-            sessions.set(sid, { id: sid, uid, impl, createdAt: Date.now(), savedPath: null, meta: { file: String(b.file || ''), dir: String(b.dir || ''), source: code } });
+            sessions.set(sid, { id: sid, uid, impl, createdAt: Date.now(), savedPath: null, meta: { file: String(b.file || ''), dir: String(b.dir || ''), origin: String(b.origin || ''), source: code } });
             impl.start();
             return send(res, 200, { sid });
         }

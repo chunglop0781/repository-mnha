@@ -1,0 +1,49 @@
+extends ../layout
+
+block content
+    - var base = "/code/" + lang.key
+    - var ext = lang.runExt
+    - var extList = lang.exts.map(function (e) { return "." + e; }).join(", ")
+    div(class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8")
+        a(href=base, class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
+            i(data-lucide="arrow-left", class="w-4 h-4")
+            | Quay lại codes/#{lang.key}
+        h1(class="mt-3 text-2xl font-bold text-gray-900") Xem code trên mạng
+        p(class="mt-1 text-sm text-gray-600") Dán link file code (#{lang.name}) trên GitHub hoặc GitLab. Bạn chỉ XEM được code, không sửa được — nhưng bấm chạy để xem màn hình kết quả; mỗi lần chạy được lưu vào lịch sử (kèm link nguồn).
+
+        form(method="get", action=base + "/online", class="mt-5 bg-white rounded-2xl border border-gray-200 p-5")
+            label(for="srcUrl", class="block text-sm font-medium text-gray-800") Link file trên github.com hoặc gitlab.com
+            div(class="mt-2 flex flex-col sm:flex-row gap-2")
+                input(id="srcUrl", name="url", type="url", required, value=url, autocomplete="off", spellcheck="false", placeholder="https://github.com/ten-ban/ten-repo/blob/main/bai1." + ext, class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300")
+                button(type="submit", class="px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700") Xem code
+            if error
+                div(class="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2")= error
+
+        div(class="mt-5 bg-white rounded-2xl border border-gray-200 p-5 text-sm text-gray-700")
+            h2(class="font-semibold text-gray-900") Cách lấy link
+            div(class="mt-3 grid gap-4 sm:grid-cols-2")
+                div
+                    h3(class="font-medium text-gray-900 inline-flex items-center gap-1")
+                        i(data-lucide="github", class="w-4 h-4")
+                        | GitHub
+                    ol(class="mt-1 list-decimal pl-5 space-y-1")
+                        li Mở repo trên github.com, bấm vào file <code>.#{ext}</code> cần chia sẻ.
+                        li Copy link trên thanh địa chỉ trình duyệt.
+                    p(class="mt-2 text-xs text-gray-500") Dạng:
+                    code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://github.com/&lt;user&gt;/&lt;repo&gt;/blob/&lt;nhánh&gt;/&lt;thư-mục&gt;/bai1.#{ext}
+                div
+                    h3(class="font-medium text-gray-900 inline-flex items-center gap-1")
+                        i(data-lucide="gitlab", class="w-4 h-4")
+                        | GitLab
+                    ol(class="mt-1 list-decimal pl-5 space-y-1")
+                        li Mở project trên gitlab.com, bấm vào file <code>.#{ext}</code> cần chia sẻ.
+                        li Copy link trên thanh địa chỉ trình duyệt.
+                    p(class="mt-2 text-xs text-gray-500") Dạng:
+                    code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://gitlab.com/&lt;nhóm&gt;/&lt;dự-án&gt;/-/blob/&lt;nhánh&gt;/bai1.#{ext}
+            ul(class="mt-4 list-disc pl-5 space-y-1 text-xs text-gray-500")
+                li Link phải trỏ tới 1 <b>file</b> (không phải thư mục) và repo phải <b>công khai (public)</b>.
+                li Link <code>/raw/</code> (GitHub: raw.githubusercontent.com, GitLab: <code>/-/raw/</code>) cũng dùng được.
+                li Chỉ nhận file #{extList}, tối đa 200KB.
+                li Tên nhánh có dấu "/" (vd <code>feature/abc</code>) chưa hỗ trợ — hãy dùng link theo mã commit hoặc đổi tên nhánh.
+    script.
+        if (window.lucide) lucide.createIcons();
