@@ -33,17 +33,25 @@
                 if (st.stopped) return finish({ status: 'stopped', exitCode: null, files: {}, error: 'Đã dừng bởi người dùng.' });
                 project = new env.sdk.Directory();
                 try { await project.createDir('bits'); } catch (_) { /* đã có */ }
+                var srcFiles = (opts.files || []).filter(function (f) { return f.src; });     // header / .cpp được #include cùng thư mục
+                var allCode = opts.code + '\n' + srcFiles.map(function (f) { return f.content; }).join('\n');
+                var unitPaths = srcFiles.filter(function (f) { return f.unit; }).map(function (f) { return '/project/' + f.name; });
                 var shim = root.CppShims.files;
                 for (var n in shim) if (n !== 'bits/stdc++.h') await project.writeFile(n, shim[n]);
-                await project.writeFile('bits/stdc++.h', root.CppShims.leanStdcpp(opts.code));   // chỉ include header code thực sự dùng → dịch nhanh hơn nhiều
+                await project.writeFile('bits/stdc++.h', root.CppShims.leanStdcpp(allCode));   // chỉ include header code thực sự dùng → dịch nhanh hơn nhiều
                 if (!root.crossOriginIsolated) opts.onOut('[Cảnh báo] Trang chưa ở chế độ cô lập (crossOriginIsolated=false) nên clang WASM có thể treo. Tải lại bằng Ctrl+F5; nếu vẫn vậy, máy chủ chưa gửi header COOP/COEP.\n', 'err');
                 await project.writeFile('main.cpp', opts.code);
-                (opts.files || []).forEach(function (f) { userFiles[f.name] = f.content; });
+                (opts.files || []).forEach(function (f) { if (!f.src) userFiles[f.name] = f.content; });
+                for (var si = 0; si < srcFiles.length; si++) {
+                    var parts = srcFiles[si].name.split('/'); parts.pop();
+                    for (var pi = 1; pi <= parts.length; pi++) { try { await project.createDir(parts.slice(0, pi).join('/')); } catch (_) { /* đã có */ } }
+                    await project.writeFile(srcFiles[si].name, srcFiles[si].content);
+                }
                 for (var fn in userFiles) await project.writeFile(fn, userFiles[fn]);
 
                 opts.onStatus('Đang biên dịch...');
                 var tryCompile = async function (link) {
-                    var ci = await env.clang.entrypoint.run({ args: CLANG_ARGS.concat(['/project/main.cpp'], link, ['-o', '/project/main.wasm']), mount: { '/project': project } });
+                    var ci = await env.clang.entrypoint.run({ args: CLANG_ARGS.concat(['/project/main.cpp'], unitPaths, link, ['-o', '/project/main.wasm']), mount: { '/project': project } });
                     return ci.wait();
                 };
                 var t0 = Date.now(), tick = setInterval(function () { opts.onStatus('Đang biên dịch... ' + Math.round((Date.now() - t0) / 1000) + ' giây (lần đầu có thể mất 1–3 phút vì phải nạp clang)'); }, 1000);

@@ -15,6 +15,7 @@ const store = require('../services/code/codeStore');
 const sessions = require('../services/code/sessionManager');
 const remote = require('../services/code/remoteRunner');
 const remoteSource = require('../services/code/remoteSource');
+const includeResolver = require('../services/code/includeResolver');
 const { LANGS, CPP_RUN_MODE } = require('../config/codeConfig');
 
 const uidOf = (req) => String(req.user._id);
@@ -92,6 +93,29 @@ async function loadOnline(lang, url) {
     const content = await remoteSource.fetchText(parsed);
     return { parsed, file, content };
 }
+// Gom các file C++ cần khi chạy, đọc từ CÙNG THƯ MỤC với file đang chạy:
+//   • file dữ liệu .txt (và .cpp dùng làm dữ liệu) — code của tôi: mọi .txt trong thư mục; code trên mạng: các tên code nhắc tới
+//   • header/.cpp được #include "..." (đệ quy) + x.cpp đi kèm x.hpp
+// online = kết quả remoteSource.parseSourceUrl (code xem trên mạng) hoặc null (code của tôi)
+async function cppRunFiles({ uid, lang, dir, file, code, online }) {
+    const data = includeResolver.scanDataNames(code, includeResolver.includedNames(code));
+    let files = []; let readFile;
+    if (online) {
+        readFile = async (segs) => {
+            try { return await remoteSource.fetchText(remoteSource.siblingOf(online, segs)); }
+            catch (e) { if (e.status === 404) return null; throw e; }
+        };
+        for (const n of [...data.txt, ...data.cpp].slice(0, 10)) {
+            const c = await readFile([n]).catch(() => null);
+            if (c != null) files.push({ name: n, content: c });
+        }
+    } else {
+        files = await store.siblingTextFiles(uid, lang.key, dir, { cppNames: data.cpp, exclude: file });
+        readFile = (segs) => store.readFile(uid, lang.key, [...store.cleanDir(dir), ...segs.slice(0, -1)].join('/'), segs[segs.length - 1]);
+    }
+    const { files: src } = await includeResolver.collect({ code, readFile });
+    return [...files, ...src];
+}
 const originOf = (u) => { try { return u ? remoteSource.parseSourceUrl(u).web : undefined; } catch (_) { return undefined; } };
 
 exports.online = wrap(async (req, res) => {
@@ -139,10 +163,10 @@ exports.remove = wrap(async (req, res) => {
 exports.run = wrap(async (req, res) => {
     const lang = langOf(req);
     const uid = uidOf(req);
-    let dir, file, code, origin;
+    let dir, file, code, origin, onlineParsed = null;
     if (req.body.online) {      // chạy code từ link GitHub/GitLab: LUÔN tải lại code từ link (không tin nội dung client gửi) + ghi nguồn vào lịch sử
         const o = await loadOnline(lang, req.body.online);
-        dir = ''; file = o.file; code = o.content; origin = o.parsed.web;
+        dir = ''; file = o.file; code = o.content; origin = o.parsed.web; onlineParsed = o.parsed;
     } else {
         dir = store.cleanDir(req.body.dir || '').join('/');
         file = store.cleanFileName(lang.key, req.body.file);
@@ -152,9 +176,8 @@ exports.run = wrap(async (req, res) => {
     if (code.length > 200 * 1024) throw Object.assign(new Error('Code quá dài'), { status: 400 });
     // chạy đúng code đang soạn (kể cả chưa lưu); các .txt cùng thư mục nạp vào thư mục chạy
     // cả file .cpp được nhắc trong code ("input1.cpp") cũng nạp làm dữ liệu (đổi sang .txt khi chạy, in ra thì đổi ngược lại)
-    // (code xem trên mạng: không nạp file nào từ thư mục của người dùng)
-    const cppNames = [...code.matchAll(/"([A-Za-z0-9_\-]{1,60})\.cpp"/gi)].map((m) => m[1] + '.cpp');
-    const siblingFiles = lang.key === 'cpp' && !origin ? await store.siblingTextFiles(uid, lang.key, dir, { cppNames, exclude: file }) : [];
+    // + header/.cpp được #include cùng thư mục; code xem trên mạng thì đọc cùng thư mục trong repo GitHub/GitLab
+    const siblingFiles = lang.key === 'cpp' ? await cppRunFiles({ uid, lang, dir, file, code, online: onlineParsed }) : [];
     if (lang.key === 'cpp' && remote.enabled()) {      // chạy ở dịch vụ runner riêng
         const r = await remote.run(uid, { file, dir, code, files: siblingFiles, origin: origin || '' });
         return res.json({ sid: r.sid });
@@ -210,6 +233,15 @@ exports.siblings = wrap(async (req, res) => {     // các .txt cùng thư mục 
     const lang = langOf(req);
     const dir = store.cleanDir(req.query.dir || '').join('/');
     res.json({ files: lang.key === 'cpp' ? await store.siblingTextFiles(uidOf(req), lang.key, dir) : [] });
+});
+exports.siblingsPost = wrap(async (req, res) => {    // như siblings nhưng theo code đang soạn (kể cả chưa lưu) + header #include; hỗ trợ code xem trên mạng
+    const lang = langOf(req);
+    if (lang.key !== 'cpp') return res.json({ files: [] });
+    const b = req.body || {};
+    let code = String(b.code == null ? '' : b.code).slice(0, 200 * 1024), dir = '', file = String(b.file || ''), online = null;
+    if (b.online) { const o = await loadOnline(lang, b.online); code = o.content; file = o.file; online = o.parsed; }
+    else dir = store.cleanDir(b.dir || '').join('/');
+    res.json({ files: await cppRunFiles({ uid: uidOf(req), lang, dir, file, code, online }) });
 });
 exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy trong trình duyệt → lưu lên GitHub như lần chạy ở server
     const lang = langOf(req);

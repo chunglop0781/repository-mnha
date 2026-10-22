@@ -45,6 +45,15 @@ function checkSource(code) {
     for (const [re, label] of FORBIDDEN) if (re.test(code)) return `Mã nguồn dùng "${label}" — không được phép trên máy chủ chạy code.`;
     return null;
 }
+// file mã nguồn được #include (header/.cpp cùng thư mục, có thể trong thư mục con) — ghi đúng tên, KHÔNG đổi sang .txt
+function safeSrcPath(n) {
+    const segs = String(n).split('/');
+    if (segs.length > 5) return null;
+    const last = segs.pop();
+    if (!/^[A-Za-z0-9_\-]{1,60}\.(h|hpp|hh|hxx|inl|ipp|tpp|cpp)$/i.test(last)) return null;
+    if (!segs.every((s) => /^[A-Za-z0-9_\-]{1,60}$/.test(s))) return null;
+    return [...segs, last].join('/');
+}
 function safeName(n) { return /^[A-Za-z0-9_\-]{1,80}\.txt$/i.test(n); }
 // file dữ liệu đuôi .cpp ⇄ tên .txt trong thư mục chạy:  input1.cpp ⇄ input1__cpp.txt
 function toRunName(n) { const m = /^(.+)\.cpp$/i.exec(String(n)); return m ? m[1] + '__cpp.txt' : String(n); }
@@ -81,12 +90,28 @@ class CppSession {
     async start() {
         const bad = checkSource(this.code);
         if (bad) return this._fail('forbidden', bad);
+        const srcs = [];       // header / file .cpp được #include (mỗi file đều qua bộ lọc như main.cpp)
+        for (const f of this.inFiles) {
+            if (!f.src) continue;
+            const rel = safeSrcPath(f.name);
+            if (!rel || /^(main\.cpp|mnha_prelude\.h)$/i.test(rel)) continue;
+            const bad2 = checkSource(String(f.content));
+            if (bad2) return this._fail('forbidden', `${rel}: ${bad2}`);
+            srcs.push({ rel, content: String(f.content), unit: !!f.unit });
+        }
         try {
             fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
             fs.writeFileSync(path.join(this.dir, 'main.cpp'), this.code);
             fs.writeFileSync(path.join(this.dir, 'mnha_prelude.h'), PRELUDE);
             this.snapshotFiles = {};
+            for (const s of srcs) {
+                const full = path.join(this.dir, ...s.rel.split('/'));
+                if (!full.startsWith(this.dir + path.sep)) continue;
+                fs.mkdirSync(path.dirname(full), { recursive: true, mode: 0o700 });
+                fs.writeFileSync(full, s.content);
+            }
             for (const f of this.inFiles) {
+                if (f.src) continue;
                 const rn = toRunName(f.name);
                 if (!safeName(rn)) continue;
                 fs.writeFileSync(path.join(this.dir, rn), f.content);
@@ -95,7 +120,7 @@ class CppSession {
         } catch (e) { return this._fail('internal', 'Không tạo được thư mục chạy: ' + e.message); }
 
         const exe = path.join(this.dir, IS_WIN ? 'main.exe' : 'main');
-        const args = ['-std=c++17', '-O1', '-Wno-unused-result', '-include', 'mnha_prelude.h', 'main.cpp', '-o', path.basename(exe)];
+        const args = ['-std=c++17', '-O1', '-Wno-unused-result', '-include', 'mnha_prelude.h', 'main.cpp', ...srcs.filter((s) => s.unit).map((s) => s.rel), '-o', path.basename(exe)];
         const cenv = { PATH: process.env.PATH || '', TMPDIR: this.dir, TEMP: this.dir, TMP: this.dir };
         if (IS_WIN && process.env.SystemRoot) cenv.SystemRoot = process.env.SystemRoot;
         const c = spawn(CXX, args, { cwd: this.dir, env: cenv, stdio: ['ignore', 'pipe', 'pipe'] });

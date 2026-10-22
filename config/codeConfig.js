@@ -9,8 +9,8 @@ const LANGS = {
     },
     cpp: {
         key: 'cpp', name: 'C++ (Dev-C++)', icon: 'terminal',
-        description: 'Viết và chạy C++ như Dev-C++; tạo được file .txt để freopen stdin/stdout.',
-        runExt: 'cpp', exts: ['cpp', 'txt'], editorMode: 'cpp',
+        description: 'Viết và chạy C++ như Dev-C++; tạo được file .txt (freopen) và header .h/.hpp (#include "..." cùng thư mục).',
+        runExt: 'cpp', exts: ['cpp', 'txt', 'h', 'hpp', 'hh', 'hxx', 'inl', 'ipp', 'tpp'], editorMode: 'cpp',
         template: ['#include <bits/stdc++.h>', 'using namespace std;', '', 'int main() {', '    // freopen("input.txt", "r", stdin);', '    // freopen("output.txt", "w", stdout);', '    int a, b;', '    cout << "Nhap a, b: ";', '    cin >> a >> b;', '    cout << "Tong = " << a + b << endl;', '    return 0;', '}', ''].join('\n')
     }
 };

@@ -16,6 +16,7 @@ router.get('/:lang', ctrl.files);
 router.get('/:lang/edit', ctrl.edit);
 router.get('/:lang/warmup', ctrl.warmup);
 router.get('/:lang/siblings', ctrl.siblings);
+router.post('/:lang/siblings', ctrl.siblingsPost);
 router.post('/:lang/client-result', ctrl.saveClientResult);
 router.get('/:lang/history', ctrl.history);
 router.get('/:lang/online', ctrl.online);

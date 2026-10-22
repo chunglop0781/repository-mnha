@@ -27,6 +27,27 @@ function checkSegs(names, paths) {
     for (const s of paths) if (!PATH_SEG.test(s) || s === '.' || s === '..') throw bad('Đường dẫn file trong link không hợp lệ.');
 }
 
+/** Dựng địa chỉ từ các thành phần ĐÃ kiểm tra (không bao giờ dùng nguyên link người dùng gửi). */
+function buildLinks(host, base, ref, pathSegs) {
+    const r = encodeURIComponent(ref);
+    const info = { host, base, ref, pathSegs, path: pathSegs.join('/'), last: pathSegs[pathSegs.length - 1] };
+    if (host === 'github') {
+        info.web = `https://github.com/${enc(base)}/blob/${r}/${enc(pathSegs)}`;
+        info.raw = `https://raw.githubusercontent.com/${enc(base)}/${r}/${enc(pathSegs)}`;
+    } else {
+        info.web = `https://gitlab.com/${enc(base)}/-/blob/${r}/${enc(pathSegs)}`;
+        info.raw = `https://gitlab.com/${enc(base)}/-/raw/${r}/${enc(pathSegs)}`;
+    }
+    return info;
+}
+
+/** File khác trong CÙNG repo/nhánh, tính theo thư mục của file đang xem (relSegs: mảng đoạn đường dẫn đã kiểm tra). */
+function siblingOf(parsed, relSegs) {
+    const segs = [...parsed.pathSegs.slice(0, -1), ...relSegs];
+    for (const s of segs) if (!PATH_SEG.test(s) || s === '.' || s === '..') throw bad('Đường dẫn file không hợp lệ.');
+    return buildLinks(parsed.host, parsed.base, parsed.ref, segs);
+}
+
 /**
  * Phân tích link → { host:'github'|'gitlab', web, raw, path, last }
  *   web  = trang xem file (blob, KHÔNG phải raw) — dùng để hiển thị/chia sẻ
@@ -50,12 +71,7 @@ function parseSourceUrl(input) {
             [owner, repo, ref] = segs; path = segs.slice(3);
         }
         checkSegs([owner, repo, ref], path);
-        const tail = `${enc([owner, repo])}`;
-        return {
-            host: 'github', path: path.join('/'), last: path[path.length - 1],
-            web: `https://github.com/${tail}/blob/${encodeURIComponent(ref)}/${enc(path)}`,
-            raw: `https://raw.githubusercontent.com/${tail}/${encodeURIComponent(ref)}/${enc(path)}`
-        };
+        return buildLinks('github', [owner, repo], ref, path);
     }
 
     if (host === 'gitlab.com') {
@@ -65,12 +81,7 @@ function parseSourceUrl(input) {
         if (kind < 0 || ns.length < 2 || !['blob', 'raw'].includes(segs[kind]) || segs.length < kind + 3) throw bad('Link GitLab phải trỏ tới 1 FILE, dạng https://gitlab.com/<nhóm>/<dự-án>/-/blob/<nhánh>/<file>');
         const ref = segs[kind + 1], path = segs.slice(kind + 2);
         checkSegs([...ns, ref], path);
-        const base = `https://gitlab.com/${enc(ns)}/-`;
-        return {
-            host: 'gitlab', path: path.join('/'), last: path[path.length - 1],
-            web: `${base}/blob/${encodeURIComponent(ref)}/${enc(path)}`,
-            raw: `${base}/raw/${encodeURIComponent(ref)}/${enc(path)}`
-        };
+        return buildLinks('gitlab', ns, ref, path);
     }
     throw bad('Chỉ hỗ trợ link từ github.com hoặc gitlab.com.');
 }
@@ -127,4 +138,4 @@ async function fetchText(parsed) {
     throw bad('Link bị chuyển hướng quá nhiều lần.');
 }
 
-module.exports = { parseSourceUrl, fetchText, MAX_BYTES };
+module.exports = { parseSourceUrl, siblingOf, fetchText, MAX_BYTES };

@@ -52,8 +52,8 @@
         termOut.textContent = ''; $('outFiles').innerHTML = ''; wasmInputs = []; wasmConsole = ''; setRunning(true);
         info.textContent = 'Đang chuẩn bị...';
         (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
-            if (P.online) return { files: [] };      // code trên mạng: không nạp file nào từ thư mục của tôi
-            return api('GET', '/code/cpp/siblings?dir=' + encodeURIComponent(P.dir)).catch(function () { return { files: [] }; });
+            // file cùng thư mục: .txt + header #include (code của tôi: thư mục của tôi; code trên mạng: cùng thư mục trong repo GitHub/GitLab)
+            return api('POST', '/code/cpp/siblings', { dir: P.dir, file: P.file, code: ed.value, online: P.online || undefined }).catch(function (e) { info.innerHTML = '<span class="bad">Không nạp được file cùng thư mục: ' + esc(e.message) + '</span>'; return { files: [] }; });
         }).then(function (j) {
             var code = ed.value;
             wasmRun = CppWasm.start({

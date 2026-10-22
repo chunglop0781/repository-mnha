@@ -44,8 +44,8 @@ const server = http.createServer(async (req, res) => {
             if (active() >= MAX_ACTIVE_TOTAL) return send(res, 503, { error: 'Máy chạy code đang bận, thử lại sau ít giây.' });
             const code = String(b.code == null ? '' : b.code);
             if (code.length > 200 * 1024) return send(res, 400, { error: 'Code quá dài' });
-            const files = (Array.isArray(b.files) ? b.files : []).slice(0, LIMITS.MAX_FILES_PER_DIR_SYNC)
-                .map((f) => ({ name: String(f.name || ''), content: String(f.content || '').slice(0, LIMITS.MAX_FILE_BYTES) }));
+            const files = (Array.isArray(b.files) ? b.files : []).slice(0, LIMITS.MAX_FILES_PER_DIR_SYNC + 30)
+                .map((f) => ({ name: String(f.name || ''), content: String(f.content || '').slice(0, LIMITS.MAX_FILE_BYTES), src: !!f.src, unit: !!f.unit }));
             const impl = new CppSession({ code, files });
             const sid = crypto.randomBytes(12).toString('hex');
             sessions.set(sid, { id: sid, uid, impl, createdAt: Date.now(), savedPath: null, meta: { file: String(b.file || ''), dir: String(b.dir || ''), origin: String(b.origin || ''), source: code } });

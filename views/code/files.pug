@@ -27,7 +27,7 @@ block content
                 button(id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
         p(class="mt-2 text-xs text-gray-500")
             if lang.exts.includes("txt")
-                | File .cpp chạy được; file .txt dùng cho freopen (input.txt / output.txt) — các .txt cùng thư mục được nạp sẵn khi chạy.
+                | File .cpp chạy được; file .txt dùng cho freopen (input.txt / output.txt) — các .txt cùng thư mục được nạp sẵn khi chạy. Header .h/.hpp cùng thư mục dùng được qua #include "ten.hpp" (x.hpp có x.cpp đi kèm thì tự biên dịch cùng).
             else
                 | Thư mục chỉ tạo được bên trong codes/#{lang.key}/.
         div(class="mt-5 bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100")
