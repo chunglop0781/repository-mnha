@@ -33,7 +33,7 @@ function send(res, status, obj) { const b = JSON.stringify(obj); res.writeHead(s
 const server = http.createServer(async (req, res) => {
     try {
         const url = new URL(req.url, 'http://x');
-        if (url.pathname === '/health') return send(res, 200, { ok: true, active: active() });
+        if (url.pathname === '/health') return send(res, 200, { ok: true, active: active(), srcFiles: true })      // srcFiles: runner đã biết nhận header #include (bản cũ không có cờ này);
         if (!safeEq(req.headers['x-runner-key'] || '', KEY)) return send(res, 401, { error: 'Sai khoá runner' });
         const uid = String(req.headers['x-uid'] || '');
         if (!uid) return send(res, 400, { error: 'Thiếu x-uid' });

@@ -56,6 +56,7 @@
             return api('POST', '/code/cpp/siblings', { dir: P.dir, file: P.file, code: ed.value, online: P.online || undefined }).catch(function (e) { info.innerHTML = '<span class="bad">Không nạp được file cùng thư mục: ' + esc(e.message) + '</span>'; return { files: [] }; });
         }).then(function (j) {
             var code = ed.value;
+            warnMissing(j.missing);
             wasmRun = CppWasm.start({
                 code: code, files: j.files || [], onOut: wasmOut,
                 onStatus: function (m) { info.textContent = m; },
@@ -101,6 +102,10 @@
                 .then(function (j) { if (!j.ready) setTimeout(warm, 10000); }).catch(function () { setTimeout(warm, 15000); });
         })();
     }
+    function warnMissing(list) {      // #include "..." mà không tìm thấy file cùng thư mục
+        if (!list || !list.length) return;
+        termOut.insertAdjacentHTML('afterbegin', '<div class="t-err">[Không tìm thấy file include cùng thư mục: ' + list.map(esc).join(', ') + '. Kiểm tra tên (phân biệt HOA/thường), đúng nhánh, repo công khai và file nằm cạnh file đang chạy.]</div>');
+    }
     function run() {
         if (browserCpp) return P.runnable ? runBrowser() : undefined;
         if (!P.runnable || sid) return;
@@ -109,7 +114,7 @@
         cancelWake = false;
         (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
             return startWithWake(P.online ? { online: P.online } : { dir: P.dir, file: P.file, content: ed.value });
-        }).then(function (j) { sid = j.sid; poll(); if (isEmu) term.focus(); }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; setRunning(false); });
+        }).then(function (j) { sid = j.sid; poll(); if (isEmu) term.focus(); warnMissing(j.missing); }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; setRunning(false); });
     }
     if (btnRun) btnRun.onclick = run;
     if ($('btnCompile')) $('btnCompile').onclick = function () {

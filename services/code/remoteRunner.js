@@ -25,12 +25,19 @@ async function health(timeoutMs = 6000) {
         return r.ok;
     } catch (_) { return false; }
 }
+// Runner có những khả năng nào (đọc từ /health). Runner bản cũ không có cờ srcFiles → không nhận header #include.
+async function capabilities(timeoutMs = 6000) {
+    try {
+        const r = await fetch(CPP_RUNNER_URL.replace(/\/+$/, '') + '/health', { signal: AbortSignal.timeout(timeoutMs) });
+        return r.ok ? await r.json().catch(() => ({})) : {};
+    } catch (_) { return {}; }
+}
 async function run(uid, body) {
     if (!(await health())) throw Object.assign(new Error('Máy chạy code đang khởi động (gói miễn phí tự ngủ khi lâu không dùng)...'), { status: 503, wake: true });
     return call('POST', '/run', uid, body);
 }
 module.exports = {
-    enabled: () => !!CPP_RUNNER_URL, health,
+    enabled: () => !!CPP_RUNNER_URL, health, capabilities,
     run,
     poll: (uid, sid, since) => call('GET', `/session/${sid}?since=${Number(since) || 0}`, uid),
     input: (uid, sid, text) => call('POST', `/session/${sid}/input`, uid, { text }),

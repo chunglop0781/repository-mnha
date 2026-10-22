@@ -113,8 +113,8 @@ async function cppRunFiles({ uid, lang, dir, file, code, online }) {
         files = await store.siblingTextFiles(uid, lang.key, dir, { cppNames: data.cpp, exclude: file });
         readFile = (segs) => store.readFile(uid, lang.key, [...store.cleanDir(dir), ...segs.slice(0, -1)].join('/'), segs[segs.length - 1]);
     }
-    const { files: src } = await includeResolver.collect({ code, readFile });
-    return [...files, ...src];
+    const { files: src, missing } = await includeResolver.collect({ code, readFile });
+    return { files: [...files, ...src], missing };
 }
 const originOf = (u) => { try { return u ? remoteSource.parseSourceUrl(u).web : undefined; } catch (_) { return undefined; } };
 
@@ -177,13 +177,17 @@ exports.run = wrap(async (req, res) => {
     // chạy đúng code đang soạn (kể cả chưa lưu); các .txt cùng thư mục nạp vào thư mục chạy
     // cả file .cpp được nhắc trong code ("input1.cpp") cũng nạp làm dữ liệu (đổi sang .txt khi chạy, in ra thì đổi ngược lại)
     // + header/.cpp được #include cùng thư mục; code xem trên mạng thì đọc cùng thư mục trong repo GitHub/GitLab
-    const siblingFiles = lang.key === 'cpp' ? await cppRunFiles({ uid, lang, dir, file, code, online: onlineParsed }) : [];
+    const gathered = lang.key === 'cpp' ? await cppRunFiles({ uid, lang, dir, file, code, online: onlineParsed }) : { files: [], missing: [] };
+    const siblingFiles = gathered.files, missing = gathered.missing;
     if (lang.key === 'cpp' && remote.enabled()) {      // chạy ở dịch vụ runner riêng
+        if (siblingFiles.some((f) => f.src) && !(await remote.capabilities()).srcFiles) {      // runner bản cũ sẽ lờ header đi → báo rõ thay vì để g++ báo "No such file"
+            throw Object.assign(new Error('Máy chạy C++ (runner) đang là BẢN CŨ nên chưa nhận file #include. Hãy deploy lại dịch vụ runner (Render) từ code mới, rồi chạy lại.'), { status: 503 });
+        }
         const r = await remote.run(uid, { file, dir, code, files: siblingFiles, origin: origin || '' });
-        return res.json({ sid: r.sid });
+        return res.json({ sid: r.sid, missing });
     }
     const s = await sessions.create({ uid, lang: lang.key, code, file, dir, siblingFiles, origin });
-    res.json({ sid: s.id });
+    res.json({ sid: s.id, missing });
 });
 
 function view(s, since) {
@@ -241,7 +245,7 @@ exports.siblingsPost = wrap(async (req, res) => {    // như siblings nhưng the
     let code = String(b.code == null ? '' : b.code).slice(0, 200 * 1024), dir = '', file = String(b.file || ''), online = null;
     if (b.online) { const o = await loadOnline(lang, b.online); code = o.content; file = o.file; online = o.parsed; }
     else dir = store.cleanDir(b.dir || '').join('/');
-    res.json({ files: await cppRunFiles({ uid: uidOf(req), lang, dir, file, code, online }) });
+    res.json(await cppRunFiles({ uid: uidOf(req), lang, dir, file, code, online }));
 });
 exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy trong trình duyệt → lưu lên GitHub như lần chạy ở server
     const lang = langOf(req);
