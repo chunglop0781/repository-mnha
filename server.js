@@ -6,8 +6,6 @@ const path = require('path');
 const express = require('express');
 const mongoose = require('mongoose');
 const session = require('express-session');
-const connectMongo = require('connect-mongo');
-const MongoStore = connectMongo.default || connectMongo;
 const cookieParser = require('cookie-parser');
 const morgan = require('morgan');
 
@@ -26,16 +24,14 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Nơi lưu session: 'github' (cookies/index.json trên GitHub, mã hoá AES-256-GCM) hoặc 'mongo' (collection repo_mnha_sessions, mặc định)
-const SESSION_STORE = (process.env.SESSION_STORE || 'mongo').toLowerCase();
+// Session CHỈ đọc/ghi ở GitHub (cookies/index.json, mã hoá AES-256-GCM) — KHÔNG còn ghi session vào MongoDB.
+// Thiếu GITHUB_* hoặc SESSION_ENC_KEY thì dừng ngay (không có đường lùi về Mongo).
 let sessionStore;
-if (SESSION_STORE === 'github') {
-    try { sessionStore = new (require('./services/githubSessionStore'))(); }
-    catch (e) { console.error('❌ SESSION_STORE=github nhưng cấu hình thiếu:', e.message); process.exit(1); }
-    console.log('🍪 Session lưu ở GitHub: ' + (process.env.SESSION_INDEX_PATH || 'cookies/index.json') + ' (mã hoá AES-256-GCM)');
-} else {
-    sessionStore = MongoStore.create({ mongoUrl: MONGODB_URI, collectionName: 'repo_mnha_sessions', autoRemove: 'native' });   // bảng session RIÊNG
-}
+try {
+    if (!require('./services/githubService').isConfigured) throw new Error('thiếu GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO');
+    sessionStore = new (require('./services/githubSessionStore'))();
+} catch (e) { console.error('❌ Không khởi tạo được session store trên GitHub:', e.message); process.exit(1); }
+console.log('🍪 Session lưu ở GitHub: ' + (process.env.SESSION_INDEX_PATH || 'cookies/index.json') + ' (mã hoá AES-256-GCM)');
 app.use(session({
     name: 'mnha.sid',
     secret: process.env.SESSION_SECRET || 'change-this-session-secret',

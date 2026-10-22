@@ -7,7 +7,7 @@ KHÔNG phải một phần của "Luyện thi của MNHA" — chỉ **dùng chun
 - Đặt `MONGODB_URI` giống hệt dự án Luyện thi → cùng collection `users` và `otps`.
 - Đăng ký ở web nào, tài khoản (role `client`, status `pending`, userKey `null`, bcrypt 12 — đúng dạng dự án cũ) cũng dùng được ở web kia.
 - repository-mnha không kiểm tra duyệt: đăng nhập được là dùng được (chỉ chặn tài khoản `disabled`/đã xoá hẳn).
-- Session riêng: collection `repo_mnha_sessions`, cookie `mnha.sid`.
+- Session riêng: cookie `mnha.sid`, lưu ở GitHub `cookies/index.json` (mã hoá) — KHÔNG ghi vào MongoDB.
 - ⚠ Schema `models/User.js`, `models/OTP.js` phải GIỮ KHỚP dự án cũ; nếu dự án cũ đổi schema thì sửa theo.
 
 ## Chạy
