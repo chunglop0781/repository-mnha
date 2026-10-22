@@ -1,0 +1,17 @@
+extends ../layout
+
+block content
+    div(class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10")
+        div(class="mb-8")
+            h1(class="text-3xl font-bold text-gray-900") Lập trình
+            p(class="mt-1 text-gray-500") Chọn ngôn ngữ để viết và chạy code trực tiếp trên web.
+        div(class="grid grid-cols-1 sm:grid-cols-2 gap-6")
+            each l in langs
+                a(href="/code/" + l.key, class="group block bg-white rounded-2xl border border-gray-200 hover:border-indigo-300 hover:shadow-lg transition-all p-8")
+                    div(class="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center")
+                        i(data-lucide=l.icon, class="w-7 h-7 text-indigo-600")
+                    h2(class="mt-5 text-xl font-bold text-gray-900 group-hover:text-indigo-600")= l.name
+                    p(class="mt-2 text-sm text-gray-500")= l.description
+                    span(class="mt-5 inline-flex items-center text-sm font-medium text-indigo-600")
+                        | Mở
+                        i(data-lucide="chevron-right", class="w-4 h-4 ml-1")

@@ -1,0 +1,18 @@
+extends ../layout
+include _card
+
+block content
+    div(class="max-w-md mx-auto px-4 py-14")
+        div(class="bg-white rounded-2xl border border-gray-200 p-8")
+            h1(class="text-2xl font-bold") Đăng ký
+            if error
+                div(class="mt-4 rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2")= error
+            form(method="post", action="/auth/register", class="mt-5 space-y-4")
+                +field("Họ tên", "name", "text", name, "name")
+                +field("Email", "email", "email", email, "email")
+                +field("Mật khẩu (≥ 8 ký tự)", "password", "password", "", "new-password")
+                +field("Nhập lại mật khẩu", "confirmPassword", "password", "", "new-password")
+                button(type="submit", class="w-full py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700") Gửi mã OTP
+            p(class="mt-4 text-sm text-gray-600") Đã có tài khoản? 
+                a(href="/auth/login", class="text-indigo-600 hover:underline") Đăng nhập
+    +passwordToggleScript

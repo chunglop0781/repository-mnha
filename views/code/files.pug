@@ -1,0 +1,44 @@
+extends ../layout
+
+block content
+    - var base = "/code/" + lang.key
+    - var parts = dir ? dir.split("/") : []
+    div(class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8", id="codeFiles", data-lang=lang.key, data-dir=dir, data-exts=lang.exts.join(","))
+        a(href="/", class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
+            i(data-lucide="arrow-left", class="w-4 h-4")
+            | Chọn ngôn ngữ
+        h1(class="mt-3 text-2xl font-bold text-gray-900")= lang.name
+        //- đường dẫn
+        nav(class="mt-2 text-sm text-gray-600 flex flex-wrap items-center gap-1")
+            a(href=base, class="text-indigo-600 hover:underline") codes/#{lang.key}
+            each p, i in parts
+                span /
+                a(href=base + "?dir=" + encodeURIComponent(parts.slice(0, i + 1).join("/")), class="text-indigo-600 hover:underline")= p
+        div(class="mt-5 flex flex-wrap gap-3")
+            button(id="btnNewFile", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") + File mới
+            button(id="btnNewFolder", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") + Thư mục mới
+            if dir
+                button(id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
+        p(class="mt-2 text-xs text-gray-500")
+            if lang.exts.includes("txt")
+                | File .cpp chạy được; file .txt dùng cho freopen (input.txt / output.txt) — các .txt cùng thư mục được nạp sẵn khi chạy.
+            else
+                | Thư mục chỉ tạo được bên trong codes/#{lang.key}/.
+        div(class="mt-5 bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100")
+            if dir
+                - var up = parts.slice(0, -1).join("/")
+                a(href=base + (up ? "?dir=" + encodeURIComponent(up) : ""), class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-gray-600")
+                    i(data-lucide="corner-left-up", class="w-4 h-4")
+                    | ..
+            each f in folders
+                a(href=base + "?dir=" + encodeURIComponent((dir ? dir + "/" : "") + f), class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide="folder", class="w-4 h-4 text-amber-500")
+                    span(class="font-medium text-gray-900")= f
+            each f in files
+                div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide="file-code-2", class="w-4 h-4 text-indigo-500")
+                    a(href=base + "/edit?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f), target="_blank", rel="noopener", class="flex-1 text-gray-900 hover:text-indigo-600")= f
+                    button(class="btn-del-file text-xs text-red-500 hover:underline", data-file=f) Xoá
+            if !folders.length && !files.length
+                div(class="px-4 py-10 text-center text-gray-500 text-sm") Thư mục trống. Hãy tạo file hoặc thư mục mới.
+    script(src="/js/codeFiles.js")

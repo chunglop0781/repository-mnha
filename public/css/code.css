@@ -1,0 +1,42 @@
+.code-app{display:flex;flex-direction:column;height:calc(100vh - 56px);background:#0f172a;color:#e2e8f0}
+.code-top{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155}
+.code-title{display:flex;gap:8px;align-items:center;font-size:14px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.code-dirty{color:#fbbf24;font-size:12px}.hidden{display:none!important}
+.code-actions{display:flex;gap:8px}
+.code-btn{background:#334155;color:#e2e8f0;border:0;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer}
+.code-btn:hover{background:#475569}.code-btn-run{background:#16a34a}.code-btn-run:hover{background:#15803d}
+.code-btn-stop{background:#dc2626}.code-btn-stop:hover{background:#b91c1c}.code-btn:disabled{opacity:.5;cursor:default}
+.code-body{display:flex;flex:1;min-height:0}
+.code-left{flex:1 1 52%;display:flex;min-width:0;border-right:1px solid #334155}
+.code-gutter{padding:10px 8px;text-align:right;color:#64748b;font:13px/20px ui-monospace,Menlo,Consolas,monospace;background:#0b1220;user-select:none;overflow:hidden;white-space:pre}
+#editor{flex:1;background:#0f172a;color:#e2e8f0;border:0;outline:0;resize:none;padding:10px;font:13px/20px ui-monospace,Menlo,Consolas,monospace;tab-size:4;white-space:pre;overflow:auto}
+.code-right{flex:1 1 48%;display:flex;flex-direction:column;min-width:0;background:#020617;overflow:auto}
+.code-panel-title{padding:6px 12px;font-size:12px;color:#94a3b8;background:#0b1220;border-bottom:1px solid #1e293b}
+.emu-regs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 10px;padding:8px 12px;font:12px ui-monospace,Consolas,monospace;border-bottom:1px solid #1e293b}
+.emu-regs b{color:#38bdf8}.emu-regs .fl-on{color:#4ade80}.emu-regs .fl-off{color:#64748b}
+.code-term{display:flex;flex-direction:column;flex:1;min-height:160px;padding:10px 12px;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+.code-term-out{white-space:pre-wrap;word-break:break-all;flex:0 1 auto}
+.code-term-out .t-err{color:#f87171}.code-term-out .t-in{color:#fde047}
+.code-input{display:flex;gap:6px;align-items:center;margin-top:6px}
+.code-prompt{color:#4ade80}
+#inputBox{flex:1;background:#0f172a;border:1px solid #4ade80;color:#fde047;border-radius:4px;padding:4px 8px;font:13px ui-monospace,Consolas,monospace;outline:0}
+.code-info{padding:6px 12px;font-size:12px;color:#94a3b8}.code-info .bad{color:#f87171}.code-info .ok{color:#4ade80}
+.code-files{padding:0 12px}.code-files .f{margin:8px 0;border:1px solid #334155;border-radius:6px}
+.code-files .fh{display:flex;justify-content:space-between;padding:4px 8px;background:#1e293b;font-size:12px}
+.code-files pre{margin:0;padding:8px;font:12px ui-monospace,Consolas,monospace;white-space:pre-wrap}
+.code-history{padding:8px 12px;font-size:12px;color:#94a3b8}.code-history a{color:#38bdf8;cursor:pointer;display:block;padding:2px 0}
+@media(max-width:800px){.code-body{flex-direction:column}.code-left{flex:1 1 50%;border-right:0}}
+
+#term{outline:0}#term:focus{box-shadow:inset 0 0 0 1px #4ade80}
+.code-term-out .cur{background:#e2e8f0;color:#020617;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{background:transparent;color:inherit}}
+.emu-modal{position:fixed;inset:0;background:rgba(2,6,23,.7);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px}
+.emu-box{background:#0f172a;border:1px solid #334155;border-radius:10px;max-width:760px;width:100%;max-height:90vh;display:flex;flex-direction:column;color:#e2e8f0}
+.emu-box>header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #334155;font-weight:600}
+.emu-box>header button{background:0;border:0;color:#94a3b8;font-size:20px;cursor:pointer}
+.emu-box .body{padding:12px 14px;overflow:auto;font:13px ui-monospace,Consolas,monospace}
+.emu-ascii{border-collapse:collapse;width:100%}.emu-ascii th,.emu-ascii td{border:1px solid #1e293b;padding:2px 8px;text-align:center}
+.emu-ascii th{position:sticky;top:0;background:#1e293b;color:#38bdf8}.emu-ascii tr:hover td{background:#1e293b}
+.emu-row{display:flex;gap:8px;align-items:center;margin:8px 0}.emu-row label{width:90px;color:#38bdf8}
+.emu-box input,.emu-box select{background:#020617;border:1px solid #334155;color:#fde047;border-radius:4px;padding:4px 8px;font:13px ui-monospace,Consolas,monospace;outline:0}
+.emu-box input.wide{flex:1}.emu-note{color:#94a3b8;font-size:12px;margin-top:8px}

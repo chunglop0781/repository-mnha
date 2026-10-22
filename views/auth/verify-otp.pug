@@ -1,0 +1,15 @@
+extends ../layout
+
+block content
+    div(class="max-w-md mx-auto px-4 py-14")
+        div(class="bg-white rounded-2xl border border-gray-200 p-8")
+            h1(class="text-2xl font-bold") Xác minh email
+            p(class="mt-1 text-sm text-gray-500") Nhập mã 6 chữ số đã gửi tới #{email}.
+            if error
+                div(class="mt-4 rounded-lg bg-red-50 text-red-700 text-sm px-3 py-2")= error
+            if debugOtp
+                div(class="mt-4 rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2") (dev) OTP: #{debugOtp}
+            form(method="post", action="/auth/verify-otp", class="mt-5 space-y-4")
+                input(type="hidden", name="email", value=email)
+                input(name="code", inputmode="numeric", maxlength="6", required, autofocus, class="w-full text-center tracking-[0.5em] text-xl rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500")
+                button(type="submit", class="w-full py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700") Xác minh

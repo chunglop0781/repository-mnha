@@ -1,0 +1,44 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/code.css")
+    div(class="code-app", id="codeApp")
+        div(class="code-top")
+            div(class="code-title")
+                i(data-lucide="file-code-2", class="w-4 h-4")
+                span #{lang.key}/#{dir ? dir + "/" : ""}#{file}
+                span(id="dirty", class="code-dirty hidden") ● chưa lưu
+            div(class="code-actions")
+                button(id="btnSave", class="code-btn") Lưu (Ctrl+S)
+                if lang.key === "emu8086"
+                    button(id="btnCompile", class="code-btn", title="Chỉ dịch (assemble), báo lỗi, không chạy") Compile
+                    button(type="button", class="code-btn", data-emu-tool="ascii") ASCII codes
+                    button(type="button", class="code-btn", data-emu-tool="calc") Calculator
+                    button(type="button", class="code-btn", data-emu-tool="conv") Convertor
+                if runnable
+                    button(id="btnRun", class="code-btn code-btn-run") ▶ #{lang.key === "emu8086" ? "Emulate (F5)" : "Chạy (F5)"}
+                    button(id="btnStop", class="code-btn code-btn-stop hidden") ■ Dừng
+        div(class="code-body")
+            div(class="code-left")
+                div(class="code-gutter", id="gutter")
+                textarea(id="editor", spellcheck="false", wrap="off")
+            div(class="code-right")
+                div(class="code-panel-title") Ứng dụng code &amp; kết quả chạy
+                if lang.key === "emu8086"
+                    div(class="emu-regs", id="emuRegs")
+                div(class="code-term", id="term", tabindex="0")
+                    div(class="code-term-out", id="termOut")
+                    form(id="inputRow", class="code-input hidden")
+                        span(id="inputPrompt", class="code-prompt") &gt;
+                        input(id="inputBox", type="text", autocomplete="off", spellcheck="false")
+                        button(type="submit", class="code-btn") Gửi
+                div(id="termInfo", class="code-info")
+                div(id="outFiles", class="code-files")
+                details(class="code-history")
+                    summary Lịch sử kết quả (user_id/result/#{lang.key}/)
+                    div(id="history")
+    script#payload(type="application/json")!= payloadJson
+    div(id="emuModal", class="emu-modal hidden")
+    if lang.key === "emu8086"
+        script(src="/js/emuTools.js")
+    script(src="/js/codeEditor.js")
