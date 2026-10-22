@@ -24,7 +24,9 @@ const LIMITS = {
     IDLE_INPUT_MS: 5 * 60 * 1000,     // chờ nhập quá lâu → dừng
     COMPILE_MS: 25 * 1000,
     MAX_CONSOLE_BYTES: 1024 * 1024,
-    MAX_SESSIONS_PER_USER: 3
+    MAX_SESSIONS_PER_USER: 3,
+    ONLINE_OUT_DIR: 'tren-mang',      // file .txt chương trình ghi ra khi chạy code "xem trên mạng" → tự lưu vào codes/cpp/tren-mang/
+    ONLINE_OUT_MAX_FILES: 10
 };
 // Chạy C++ ở đâu: 'server' (g++ trên máy chủ) | 'browser' (clang WebAssembly ngay trong trình duyệt).
 // Mặc định: trên Vercel (không có g++) → 'browser'; chỗ khác → 'server'. Ép bằng biến môi trường CPP_RUN_MODE.

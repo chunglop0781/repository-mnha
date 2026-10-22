@@ -110,6 +110,27 @@ async function siblingTextFiles(uid, lang, dir, opt = {}) {
     return out;
 }
 
+// ---- file do chương trình ghi ra khi chạy code "xem trên mạng" (output.txt ...)
+// Tự tạo trong {user_id}/codes/{lang}/tren-mang/ (thư mục tự có khi ghi file đầu tiên). Chỉ lưu file MỚI hoặc ĐÃ ĐỔI;
+// trùng tên thì ghi đè bản cũ. Không bao giờ ném lỗi — trả {saved:[đường dẫn tương đối trong codes/lang], skipped:[{name,reason}]}.
+async function saveOnlineOutputs(uid, lang, files) {
+    const out = { saved: [], skipped: [] };
+    const dir = LIMITS.ONLINE_OUT_DIR;
+    if (!files || typeof files !== 'object') return out;
+    let n = 0;
+    for (const name of Object.keys(files)) {
+        const f = files[name];
+        if (!f || typeof f.content !== 'string' || !(f.isNew || f.changed)) continue;
+        if (n >= LIMITS.ONLINE_OUT_MAX_FILES) { out.skipped.push({ name, reason: `quá ${LIMITS.ONLINE_OUT_MAX_FILES} file` }); continue; }
+        try {
+            const clean = cleanFileName(lang, name);
+            await writeFile(uid, lang, dir, clean, f.content);
+            out.saved.push(`${dir}/${clean}`); n++;
+        } catch (e) { out.skipped.push({ name: String(name).slice(0, 80), reason: e.message }); }
+    }
+    return out;
+}
+
 // ---- kết quả chạy
 async function saveResult(uid, lang, result) {
     assertLang(lang);
@@ -133,4 +154,4 @@ async function readResult(uid, lang, ts) {
     return gh.readJsonFile(`${uid}/result/${lang}/${ts}.json`);
 }
 
-module.exports = { githubUrl, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveResult, listResults, readResult, cleanDir, cleanFileName };
+module.exports = { githubUrl, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName };

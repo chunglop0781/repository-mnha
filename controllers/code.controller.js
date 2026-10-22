@@ -192,7 +192,7 @@ exports.run = wrap(async (req, res) => {
 
 function view(s, since) {
     const v = s.impl.view(since);
-    return { ...v, lang: s.lang, saved: s.savedPath, saveError: s.saveError };
+    return { ...v, lang: s.lang, saved: s.savedPath, saveError: s.saveError, autoSaved: s.autoSaved };
 }
 exports.poll = wrap(async (req, res) => {
     const s = sessions.get(req.params.sid, uidOf(req));
@@ -200,7 +200,9 @@ exports.poll = wrap(async (req, res) => {
         const v = await remote.poll(uidOf(req), req.params.sid, req.query.since);
         if (v.status === 'finished' && !v.saved && v.result && v.meta) {      // lưu kết quả lên GitHub (runner không giữ secret GitHub)
             try {
-                v.saved = await store.saveResult(uidOf(req), 'cpp', { lang: 'cpp', file: v.meta.file, dir: v.meta.dir, ...(originOf(v.meta.origin) ? { origin: originOf(v.meta.origin) } : {}), source: v.meta.source, ...v.result });
+                const origin = originOf(v.meta.origin);
+                if (origin) { v.autoSaved = await store.saveOnlineOutputs(uidOf(req), 'cpp', v.result.outputFiles); v.result.autoSaved = v.autoSaved; }      // code xem trên mạng: output.txt... → codes/cpp/tren-mang/
+                v.saved = await store.saveResult(uidOf(req), 'cpp', { lang: 'cpp', file: v.meta.file, dir: v.meta.dir, ...(origin ? { origin } : {}), source: v.meta.source, ...v.result });
                 await remote.markSaved(uidOf(req), req.params.sid, v.saved);
             } catch (e) { v.saveError = e.message; console.error('[code] lưu kết quả lỗi:', e.message); }
         }
@@ -257,7 +259,9 @@ exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy tr
         exitCode: b.exitCode == null ? null : Number(b.exitCode), error: b.error ? String(b.error).slice(0, 2000) : null,
         files: b.files && typeof b.files === 'object' ? b.files : {}, finishedAt: new Date().toISOString()
     };
-    res.json({ ok: true, saved: await store.saveResult(uidOf(req), lang.key, r) });
+    // code xem trên mạng (có origin hợp lệ): file chương trình ghi ra → codes/cpp/tren-mang/ (tên/kích thước được kiểm lại ở saveOnlineOutputs)
+    if (r.origin && lang.key === 'cpp') { r.autoSaved = await store.saveOnlineOutputs(uidOf(req), lang.key, r.files); }
+    res.json({ ok: true, saved: await store.saveResult(uidOf(req), lang.key, r), autoSaved: r.autoSaved });
 });
 
 exports.results = wrap(async (req, res) => {

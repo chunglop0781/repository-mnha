@@ -89,6 +89,11 @@ async function create({ uid, lang, code, file, dir, siblingFiles, origin }) {
     impl.onFinish(async () => {
         try {
             const res = impl.result();
+            // chạy code xem trên mạng (có origin): file chương trình ghi ra (output.txt...) tự lưu vào codes/cpp/tren-mang/ — làm TRƯỚC khi lưu kết quả để client thấy cả hai cùng lúc
+            if (origin && lang === 'cpp') {
+                s.autoSaved = await store.saveOnlineOutputs(uid, lang, res.outputFiles);
+                res.autoSaved = s.autoSaved;
+            }
             const p = await store.saveResult(uid, lang, { lang, file: s.file, dir: s.dir, ...(origin ? { origin } : {}), source: code, ...res });
             s.savedPath = p;
         } catch (e) { s.saveError = e.message; console.error('[code] lưu kết quả lỗi:', e.message); }

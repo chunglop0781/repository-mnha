@@ -3,7 +3,7 @@
     var $ = function (id) { return document.getElementById(id); };
     var ed = $('editor'), gutter = $('gutter'), termOut = $('termOut'), inputRow = $('inputRow'), inputBox = $('inputBox');
     var info = $('termInfo'), dirty = $('dirty'), btnRun = $('btnRun'), btnStop = $('btnStop');
-    var saved = P.content, sid = null, timer = null, since = 0;
+    var saved = P.content, sid = null, timer = null, since = 0, firstAuto = null;
     ed.value = P.content; ed.disabled = false;
     if (P.online) ed.readOnly = true;      // code lấy từ link trên mạng: chỉ xem, không sửa (vẫn chạy được)
     function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
@@ -68,7 +68,7 @@
                 info.innerHTML = (ok ? '<span class="ok">Chạy xong (mã thoát ' + r.exitCode + ').</span>' : '<span class="bad">' + esc(r.error || r.status) + '</span>') + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
                 renderOutFiles(r.files);
                 api('POST', '/code/cpp/client-result', { file: P.file, dir: P.dir, origin: P.online || undefined, source: code, console: wasmConsole, inputs: wasmInputs, exitCode: r.exitCode, error: r.error, files: r.files })
-                    .then(function (x) { $('sv').textContent = 'Đã lưu: ' + x.saved; loadHistory(); })
+                    .then(function (x) { $('sv').innerHTML = 'Đã lưu: ' + esc(x.saved) + autoNote(x.autoSaved); loadHistory(); })
                     .catch(function (e) { var sv = $('sv'); if (sv) sv.innerHTML = '<span class="bad">Lưu kết quả lỗi: ' + esc(e.message) + '</span>'; });
             });
         });
@@ -177,11 +177,19 @@
         h += '<div style="grid-column:1/-1">'; Object.keys(v.flags).forEach(function (k) { h += '<span class="' + (v.flags[k] ? 'fl-on' : 'fl-off') + '">' + k + '=' + v.flags[k] + '</span> '; }); h += '</div>';
         box.innerHTML = h;
     }
+    // code xem trên mạng: file chương trình ghi ra (output.txt...) được máy chủ tự lưu vào codes/cpp/tren-mang/
+    function autoNote(a) {
+        if (!a) return '';
+        var h = '';
+        if (a.saved && a.saved.length) h += ' <span class="ok">Đã tự tạo trong codes/' + esc(P.lang) + '/: ' + a.saved.map(esc).join(', ') + '.</span>';
+        if (a.skipped && a.skipped.length) h += ' <span class="bad">Không lưu được: ' + a.skipped.map(function (k) { return esc(k.name) + ' (' + esc(k.reason) + ')'; }).join('; ') + '.</span>';
+        return h;
+    }
     function renderOutFiles(files) {
         var o = $('outFiles'); if (!files) return; var h = '';
         Object.keys(files).forEach(function (n) {
             var f = files[n]; if (!f.changed && !f.isNew) return;
-            h += '<div class="f"><div class="fh"><span>' + esc(n) + (f.isNew ? ' (mới)' : ' (đã đổi)') + '</span><a href="#" data-save="' + esc(n) + '" style="color:#38bdf8">Lưu vào thư mục</a></div><pre>' + esc(f.content) + '</pre></div>';
+            h += '<div class="f"><div class="fh"><span>' + esc(n) + (f.isNew ? ' (mới)' : ' (đã đổi)') + '</span>' + (P.online ? '<span style="color:#38bdf8">tự lưu → codes/' + esc(P.lang) + '/tren-mang/' + esc(n) + '</span>' : '<a href="#" data-save="' + esc(n) + '" style="color:#38bdf8">Lưu vào thư mục</a>') + '</div><pre>' + esc(f.content) + '</pre></div>';
         });
         o.innerHTML = h;
         o.querySelectorAll('[data-save]').forEach(function (a) {
@@ -205,7 +213,7 @@
             if (v.status === 'finished') {
                 var msg = v.error ? '<span class="bad">' + esc(v.error) + '</span>' : '<span class="ok">Chạy xong' + (v.exitCode != null ? ' (mã thoát ' + v.exitCode + ')' : '') + '.</span>';
                 info.innerHTML = msg + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
-                renderOutFiles(v.files); finish(v); return;
+                renderOutFiles(v.files); firstAuto = v.autoSaved || null; finish(v); return;
             }
             info.textContent = v.waiting ? (isEmu && v.waitMode === 'char' ? 'Đang chờ phím — gõ trực tiếp vào màn hình đen (Enter = xuống dòng).' : 'Chương trình đang chờ bạn nhập...') : 'Đang chạy...';
             timer = setTimeout(poll, 150);
@@ -217,7 +225,7 @@
         (function waitSaved() {
             api('GET', '/code/session/' + id + '?since=999999').then(function (x) {
                 var sv = $('sv'); if (!sv) return;
-                if (x.saved) { sv.textContent = 'Đã lưu: ' + x.saved; sid = null; loadHistory(); }
+                if (x.saved) { sv.innerHTML = 'Đã lưu: ' + esc(x.saved) + autoNote(x.autoSaved || firstAuto); sid = null; loadHistory(); }
                 else if (x.saveError) { sv.innerHTML = '<span class="bad">Lưu kết quả lỗi: ' + esc(x.saveError) + '</span>'; sid = null; }
                 else if (++tries < 40) setTimeout(waitSaved, 500); else sid = null;
             }).catch(function () { sid = null; });
