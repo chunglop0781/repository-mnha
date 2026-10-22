@@ -26,11 +26,21 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Nơi lưu session: 'github' (cookies/index.json trên GitHub, mã hoá AES-256-GCM) hoặc 'mongo' (collection repo_mnha_sessions, mặc định)
+const SESSION_STORE = (process.env.SESSION_STORE || 'mongo').toLowerCase();
+let sessionStore;
+if (SESSION_STORE === 'github') {
+    try { sessionStore = new (require('./services/githubSessionStore'))(); }
+    catch (e) { console.error('❌ SESSION_STORE=github nhưng cấu hình thiếu:', e.message); process.exit(1); }
+    console.log('🍪 Session lưu ở GitHub: ' + (process.env.SESSION_INDEX_PATH || 'cookies/index.json') + ' (mã hoá AES-256-GCM)');
+} else {
+    sessionStore = MongoStore.create({ mongoUrl: MONGODB_URI, collectionName: 'repo_mnha_sessions', autoRemove: 'native' });   // bảng session RIÊNG
+}
 app.use(session({
     name: 'mnha.sid',
     secret: process.env.SESSION_SECRET || 'change-this-session-secret',
     resave: false, saveUninitialized: false, proxy: true,
-    store: MongoStore.create({ mongoUrl: MONGODB_URI, collectionName: 'repo_mnha_sessions', autoRemove: 'native' }),   // bảng session RIÊNG
+    store: sessionStore,
     cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 24 * 60 * 60 * 1000 }
 }));
 
