@@ -40,3 +40,9 @@
 .emu-row{display:flex;gap:8px;align-items:center;margin:8px 0}.emu-row label{width:90px;color:#38bdf8}
 .emu-box input,.emu-box select{background:#020617;border:1px solid #334155;color:#fde047;border-radius:4px;padding:4px 8px;font:13px ui-monospace,Consolas,monospace;outline:0}
 .emu-box input.wide{flex:1}.emu-note{color:#94a3b8;font-size:12px;margin-top:8px}
+
+.emu-tabs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
+.emu-tabs button{background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px}
+.emu-tabs button.on{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
+.emu-tabs .sep{width:1px;height:18px;background:#334155;margin:0 4px}
+.emu-asc{overflow:auto}

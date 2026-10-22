@@ -85,10 +85,14 @@ async function removeFolder(uid, lang, dir) {
 }
 
 // các file .txt (hoặc đuôi cho phép khác .runExt) cùng thư mục → nạp vào thư mục chạy để freopen
-async function siblingTextFiles(uid, lang, dir) {
+// opt.cppNames: các file .cpp (làm file dữ liệu, vd freopen("input1.cpp")) mà code có nhắc tới → cũng nạp (runner đổi sang .txt)
+async function siblingTextFiles(uid, lang, dir, opt = {}) {
     const cfg = assertLang(lang);
     const { files } = await list(uid, lang, dir);
-    const txt = files.filter((f) => f.toLowerCase().endsWith('.txt')).slice(0, LIMITS.MAX_FILES_PER_DIR_SYNC);
+    const want = new Set((opt.cppNames || []).map((n) => String(n).toLowerCase()));
+    const skip = String(opt.exclude || '').toLowerCase();
+    const txt = files.filter((f) => { const l = f.toLowerCase(); return l.endsWith('.txt') || (l.endsWith('.cpp') && l !== skip && want.has(l)); })
+        .slice(0, LIMITS.MAX_FILES_PER_DIR_SYNC);
     if (!cfg.exts.includes('txt')) return [];
     const out = [];
     for (const f of txt) {

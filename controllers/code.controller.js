@@ -104,7 +104,9 @@ exports.run = wrap(async (req, res) => {
     const code = String(req.body.content == null ? '' : req.body.content);
     if (code.length > 200 * 1024) throw Object.assign(new Error('Code quá dài'), { status: 400 });
     // chạy đúng code đang soạn (kể cả chưa lưu); các .txt cùng thư mục nạp vào thư mục chạy
-    const siblingFiles = lang.key === 'cpp' ? await store.siblingTextFiles(uid, lang.key, dir) : [];
+    // cả file .cpp được nhắc trong code ("input1.cpp") cũng nạp làm dữ liệu (đổi sang .txt khi chạy, in ra thì đổi ngược lại)
+    const cppNames = [...code.matchAll(/"([A-Za-z0-9_\-]{1,60})\.cpp"/gi)].map((m) => m[1] + '.cpp');
+    const siblingFiles = lang.key === 'cpp' ? await store.siblingTextFiles(uid, lang.key, dir, { cppNames, exclude: file }) : [];
     if (lang.key === 'cpp' && remote.enabled()) {      // chạy ở dịch vụ runner riêng
         const r = await remote.run(uid, { file, dir, code, files: siblingFiles });
         return res.json({ sid: r.sid });

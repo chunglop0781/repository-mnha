@@ -13,7 +13,17 @@ const { LIMITS } = require('../../config/codeConfig');
 const IS_WIN = process.platform === 'win32';
 const CXX = process.env.CPP_COMPILER || 'g++';
 const PRELUDE = `#include <cstdio>
+#include <cctype>
+#include <string>
 namespace { struct MnhaInit { MnhaInit() { setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0); } } mnhaInitObj; }
+// Tên file *.cpp (dùng làm file dữ liệu) được đổi sang *__cpp.txt trong thư mục chạy; sau khi chạy xong đổi ngược lại thành *.cpp
+namespace mnha { inline std::string map_name(const char* n) {
+    std::string s(n ? n : ""); size_t l = s.size();
+    if (l > 4 && s[l-4] == '.' && tolower((unsigned char)s[l-3]) == 'c' && tolower((unsigned char)s[l-2]) == 'p' && tolower((unsigned char)s[l-1]) == 'p') s = s.substr(0, l - 4) + "__cpp.txt";
+    return s;
+} }
+#define freopen(p, m, s) freopen(mnha::map_name(p).c_str(), (m), (s))
+#define fopen(p, m) fopen(mnha::map_name(p).c_str(), (m))
 `;
 // Danh sách chặn đơn giản (lớp phòng thủ nông — không thay thế sandbox)
 const FORBIDDEN = [
@@ -35,7 +45,10 @@ function checkSource(code) {
     for (const [re, label] of FORBIDDEN) if (re.test(code)) return `Mã nguồn dùng "${label}" — không được phép trên máy chủ chạy code.`;
     return null;
 }
-function safeName(n) { return /^[A-Za-z0-9_\-]{1,60}\.txt$/i.test(n); }
+function safeName(n) { return /^[A-Za-z0-9_\-]{1,80}\.txt$/i.test(n); }
+// file dữ liệu đuôi .cpp ⇄ tên .txt trong thư mục chạy:  input1.cpp ⇄ input1__cpp.txt
+function toRunName(n) { const m = /^(.+)\.cpp$/i.exec(String(n)); return m ? m[1] + '__cpp.txt' : String(n); }
+function fromRunName(n) { const m = /^(.+)__cpp\.txt$/.exec(n); return m ? m[1] + '.cpp' : n; }
 function cleanMsg(s, dir) { return String(s).split(dir + path.sep).join('').split(dir).join('').replace(/\r/g, ''); }
 
 class CppSession {
@@ -74,9 +87,10 @@ class CppSession {
             fs.writeFileSync(path.join(this.dir, 'mnha_prelude.h'), PRELUDE);
             this.snapshotFiles = {};
             for (const f of this.inFiles) {
-                if (!safeName(f.name)) continue;
-                fs.writeFileSync(path.join(this.dir, f.name), f.content);
-                this.snapshotFiles[f.name] = f.content;
+                const rn = toRunName(f.name);
+                if (!safeName(rn)) continue;
+                fs.writeFileSync(path.join(this.dir, rn), f.content);
+                this.snapshotFiles[rn] = f.content;
             }
         } catch (e) { return this._fail('internal', 'Không tạo được thư mục chạy: ' + e.message); }
 
@@ -175,7 +189,7 @@ class CppSession {
                 if (!st.isFile()) continue;
                 let content = fs.readFileSync(fp, 'utf8').slice(0, LIMITS.MAX_OUT_FILE_BYTES);
                 const before = this.snapshotFiles && this.snapshotFiles[f];
-                this.outFiles[f] = { content, changed: before !== content, isNew: before === undefined };
+                this.outFiles[fromRunName(f)] = { content, changed: before !== content, isNew: before === undefined };
                 n++;
             }
         } catch (_) { /* bỏ qua */ }
