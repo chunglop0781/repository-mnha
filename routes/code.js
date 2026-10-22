@@ -14,6 +14,8 @@ router.post('/session/:sid/stop', ctrl.stop);
 
 router.get('/:lang', ctrl.files);
 router.get('/:lang/edit', ctrl.edit);
+router.get('/:lang/siblings', ctrl.siblings);
+router.post('/:lang/client-result', ctrl.saveClientResult);
 router.get('/:lang/results', ctrl.results);
 router.get('/:lang/results/:ts', ctrl.resultOne);
 router.post('/:lang/folder', ctrl.createFolder);

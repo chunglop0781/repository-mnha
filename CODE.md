@@ -20,3 +20,11 @@ File .txt chương trình ghi ra được hiện dưới khung kết quả (nút
 - Cần máy chủ chạy liên tục có g++ (VPS/Render/Railway/Docker). KHÔNG chạy được trên Vercel serverless.
 - Chạy code lạ là rủi ro: cppRunner chỉ có lớp bảo vệ nông (ulimit, bỏ biến môi trường, chặn vài hàm, unshare -rn nếu có).
   Nên chạy cả app trong container không có secret, hoặc đưa cppRunner vào nsjail/firejail/Docker riêng.
+
+## C++ chạy trong trình duyệt (Vercel) — CPP_RUN_MODE=browser
+Mặc định tự bật khi có biến `VERCEL` (đặt `CPP_RUN_MODE=server|browser` để ép). Trình duyệt tải Wasmer JS SDK (unpkg) + gói `clang/clang`
+(vài chục MB, cache lại), dịch `main.cpp` → wasm rồi chạy; `cin` nhập qua ô nhập, `freopen` dùng các .txt cùng thư mục (nạp qua `/code/cpp/siblings`).
+- `public/js/cppShims.js`: header giả `bits/stdc++.h`, `conio.h`, `windows.h` và `system("pause"/"cls")` (không đổi số dòng code người dùng).
+- `public/js/cppWasm.js`: tải SDK, dịch, chạy. Cờ clang ở đầu file (`CLANG_ARGS`, `LINK_ARGS`) — chỉnh nếu clang báo thiếu libc++.
+- Trang sửa code C++ gửi COOP `same-origin` + COEP `credentialless` (cần cho SDK). Kết quả lưu qua `POST /code/cpp/client-result`.
+- Giới hạn: không `std::thread`, không exception (wasi-libc++), nút Dừng chỉ ngừng hiển thị, hết 60 giây tự dừng.

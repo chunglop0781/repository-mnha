@@ -26,5 +26,8 @@ const LIMITS = {
     MAX_CONSOLE_BYTES: 1024 * 1024,
     MAX_SESSIONS_PER_USER: 3
 };
+// Chạy C++ ở đâu: 'server' (g++ trên máy chủ) | 'browser' (clang WebAssembly ngay trong trình duyệt).
+// Mặc định: trên Vercel (không có g++) → 'browser'; chỗ khác → 'server'. Ép bằng biến môi trường CPP_RUN_MODE.
+const CPP_RUN_MODE = process.env.CPP_RUN_MODE || (process.env.VERCEL ? 'browser' : 'server');
 const NAME_RE = /^[A-Za-z0-9_\-]{1,60}$/;
-module.exports = { LANGS, LIMITS, NAME_RE };
+module.exports = { LANGS, LIMITS, NAME_RE, CPP_RUN_MODE };

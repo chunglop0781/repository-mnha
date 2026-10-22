@@ -41,4 +41,7 @@ block content
     div(id="emuModal", class="emu-modal hidden")
     if lang.key === "emu8086"
         script(src="/js/emuTools.js")
+    if cppMode === "browser"
+        script(src="/js/cppShims.js")
+        script(src="/js/cppWasm.js")
     script(src="/js/codeEditor.js")

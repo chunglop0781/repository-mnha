@@ -11,7 +11,7 @@
 'use strict';
 const store = require('../services/code/codeStore');
 const sessions = require('../services/code/sessionManager');
-const { LANGS } = require('../config/codeConfig');
+const { LANGS, CPP_RUN_MODE } = require('../config/codeConfig');
 
 const uidOf = (req) => String(req.user._id);
 const wrap = (fn) => async (req, res) => {
@@ -59,8 +59,13 @@ exports.edit = wrap(async (req, res) => {
     if (content === null) throw Object.assign(new Error('Không tìm thấy file'), { status: 404 });
     const runnable = file.toLowerCase().endsWith('.' + lang.runExt);
     const results = await store.listResults(uidOf(req), lang.key, 20).catch(() => []);
-    const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results };
-    res.render('code/editor', { title: file, user: req.user, lang, dir, file, runnable, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
+    const cppMode = lang.key === 'cpp' ? CPP_RUN_MODE : null;
+    if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin
+        res.set('Cross-Origin-Opener-Policy', 'same-origin');
+        res.set('Cross-Origin-Embedder-Policy', 'credentialless');
+    }
+    const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode };
+    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
 });
 
 exports.compile = wrap(async (req, res) => {      // nút Compile của emu8086: chỉ dịch, báo lỗi, không chạy
@@ -128,6 +133,24 @@ exports.saveOutputFile = wrap(async (req, res) => {   // lưu output.txt do chư
     if (lang.key !== 'cpp') throw Object.assign(new Error('Không hỗ trợ'), { status: 400 });
     await store.writeFile(uidOf(req), lang.key, req.body.dir || '', req.body.name, req.body.content);
     res.json({ ok: true });
+});
+
+exports.siblings = wrap(async (req, res) => {     // các .txt cùng thư mục (để trình duyệt nạp vào thư mục ảo khi chạy C++)
+    const lang = langOf(req);
+    const dir = store.cleanDir(req.query.dir || '').join('/');
+    res.json({ files: lang.key === 'cpp' ? await store.siblingTextFiles(uidOf(req), lang.key, dir) : [] });
+});
+exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy trong trình duyệt → lưu lên GitHub như lần chạy ở server
+    const lang = langOf(req);
+    const b = req.body || {};
+    const r = {
+        lang: lang.key, file: String(b.file || ''), dir: String(b.dir || ''), source: String(b.source || '').slice(0, 200 * 1024),
+        kind: 'cpp-browser', status: b.error ? 'error' : 'ok', console: String(b.console || '').slice(0, 1024 * 1024),
+        inputs: Array.isArray(b.inputs) ? b.inputs.slice(0, 500).map((x) => String(x).slice(0, 2000)) : [],
+        exitCode: b.exitCode == null ? null : Number(b.exitCode), error: b.error ? String(b.error).slice(0, 2000) : null,
+        files: b.files && typeof b.files === 'object' ? b.files : {}, finishedAt: new Date().toISOString()
+    };
+    res.json({ ok: true, saved: await store.saveResult(uidOf(req), lang.key, r) });
 });
 
 exports.results = wrap(async (req, res) => {

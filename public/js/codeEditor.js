@@ -27,7 +27,41 @@
 
     // ---------- chạy ----------
     function setRunning(on) { if (!btnRun) return; btnRun.classList.toggle('hidden', on); btnStop.classList.toggle('hidden', !on); }
+    // ---------- C++ chạy trong trình duyệt (clang WebAssembly) khi máy chủ không có g++ ----------
+    var wasmRun = null, wasmInputs = [], wasmConsole = '';
+    var browserCpp = P.lang === 'cpp' && P.cppMode === 'browser' && window.CppWasm;
+    function wasmOut(text, kind) {
+        wasmConsole += text;
+        if (/\x1b\[2J/.test(text)) { termOut.textContent = ''; text = text.slice(text.lastIndexOf('\x1b[2J') + 4); }
+        text = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '');
+        var sp = document.createElement('span'); if (kind === 'err') sp.className = 't-err'; else if (kind === 'in') sp.className = 't-in'; sp.textContent = text; termOut.appendChild(sp);
+    }
+    function runBrowser() {
+        if (wasmRun) return;
+        termOut.textContent = ''; $('outFiles').innerHTML = ''; wasmInputs = []; wasmConsole = ''; setRunning(true);
+        info.textContent = 'Đang chuẩn bị...';
+        (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
+            return api('GET', '/code/cpp/siblings?dir=' + encodeURIComponent(P.dir)).catch(function () { return { files: [] }; });
+        }).then(function (j) {
+            var code = ed.value;
+            wasmRun = CppWasm.start({
+                code: code, files: j.files || [], onOut: wasmOut,
+                onStatus: function (m) { info.textContent = m; },
+                onCompiled: function () { showInput(true, 'line'); }
+            });
+            wasmRun.done.then(function (r) {
+                wasmRun = null; setRunning(false); showInput(false);
+                var ok = r.status === 'finished' && !r.error;
+                info.innerHTML = (ok ? '<span class="ok">Chạy xong (mã thoát ' + r.exitCode + ').</span>' : '<span class="bad">' + esc(r.error || r.status) + '</span>') + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
+                renderOutFiles(r.files);
+                api('POST', '/code/cpp/client-result', { file: P.file, dir: P.dir, source: code, console: wasmConsole, inputs: wasmInputs, exitCode: r.exitCode, error: r.error, files: r.files })
+                    .then(function (x) { $('sv').textContent = 'Đã lưu: ' + x.saved; loadHistory(); })
+                    .catch(function (e) { var sv = $('sv'); if (sv) sv.innerHTML = '<span class="bad">Lưu kết quả lỗi: ' + esc(e.message) + '</span>'; });
+            });
+        });
+    }
     function run() {
+        if (browserCpp) return P.runnable ? runBrowser() : undefined;
         if (!P.runnable || sid) return;
         termOut.textContent = ''; info.textContent = 'Đang khởi động...'; $('outFiles').innerHTML = ''; since = 0; showInput(false);
         setRunning(true);
@@ -43,7 +77,7 @@
             else { termOut.innerHTML = j.errors.map(function (e) { return '<div class="t-err">Dòng ' + e.line + ': ' + esc(e.message) + '</div>'; }).join(''); info.innerHTML = '<span class="bad">Có ' + j.errors.length + ' lỗi.</span>'; }
         }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; });
     };
-    if (btnStop) btnStop.onclick = function () { if (sid) api('POST', '/code/session/' + sid + '/stop').catch(function () { }); };
+    if (btnStop) btnStop.onclick = function () { if (wasmRun) { wasmRun.stop(); return; } if (sid) api('POST', '/code/session/' + sid + '/stop').catch(function () { }); };
 
     var isEmu = P.lang === 'emu8086', term = $('term'), keyQ = Promise.resolve();
     // emu8086: gõ phím thẳng vào màn hình (mỗi phím gửi ngay, Enter = mã 13) — giống console thật.
@@ -83,7 +117,9 @@
         }).join('\n');
     }
     inputRow.addEventListener('submit', function (e) {
-        e.preventDefault(); if (!sid) return;
+        e.preventDefault();
+        if (wasmRun) { var w = inputBox.value; inputBox.value = ''; wasmInputs.push(w); wasmOut(w + '\n', 'in'); wasmRun.send(w + '\n'); return; }
+        if (!sid) return;
         var t = inputBox.value; inputBox.value = ''; showInput(false);
         api('POST', '/code/session/' + sid + '/input', { text: t }).catch(function (er) { info.innerHTML = '<span class="bad">' + esc(er.message) + '</span>'; });
     });
