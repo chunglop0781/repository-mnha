@@ -51,7 +51,7 @@ const LIMITS = {
 const CPP_RUNNER_URL = process.env.CPP_RUNNER_URL || '';
 const CPP_RUNNER_KEY = process.env.CPP_RUNNER_KEY || '';
 const CPP_RUN_MODE = process.env.CPP_RUN_MODE || (CPP_RUNNER_URL ? 'server' : (process.env.VERCEL ? 'browser' : 'server'));
-const NAME_RE = /^[A-Za-z0-9_\-]{1,60}$/;                                   // tên thư mục
+const NAME_RE = /^[A-Za-z0-9_\-()]{1,60}$/;                                 // tên thư mục: chữ, số, - _ và dấu ngoặc ( ), vd "Cac_phuong_phap_toi_uu-1-1-26(N02)"
 const FILE_STEM_RE = /^(?=.{1,60}$)[A-Za-z0-9_\-]+(?: [A-Za-z0-9_\-]+)*$/;      // tên file (không đuôi): cho phép dấu cách giữa các từ, vd "Chu thuong thanh hoa"
 
 // ---- Tải lên ảnh / âm thanh / video cho dạng 'web' (html) — xem services/code/mediaService.js

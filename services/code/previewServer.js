@@ -56,7 +56,7 @@ function ownSource(uid, gh) {
     return {
         kind: 'own',
         async read(segs) {
-            if (!segs.every((s) => /^[A-Za-z0-9_.\- ]{1,100}$/.test(s))) return null;
+            if (!segs.every((s) => /^[A-Za-z0-9_.\-() ]{1,100}$/.test(s))) return null;
             const p = root + segs.join('/');
             let sha = (await gh.getRepoTree()).files.get(p);
             if (!sha && Date.now() - lastForce > 2000) { lastForce = Date.now(); sha = (await gh.getRepoTree({ force: true })).files.get(p); }   // file vừa lưu < 15s

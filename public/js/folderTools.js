@@ -11,7 +11,7 @@
         b.addEventListener('click', function (e) {
             e.preventDefault(); e.stopPropagation();
             var path = b.dataset.rename, old = path.split('/').pop();
-            var n = prompt('Đổi tên thư mục "' + old + '" thành (chữ, số, - và _):', old);
+            var n = prompt('Đổi tên thư mục "' + old + '" thành (chữ, số, - _ và dấu ngoặc ( )):', old);
             if (n === null) return; n = n.trim(); if (!n || n === old) return;
             b.disabled = true; var t = b.textContent; b.textContent = 'Đang đổi...';
             post('/code/' + lang + '/rename-folder', { dir: path, name: n }).then(function (j) {

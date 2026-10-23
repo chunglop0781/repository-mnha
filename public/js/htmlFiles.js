@@ -20,7 +20,7 @@
         }).catch(function (e) { alert(e.message); });
     };
     document.getElementById('btnNewFolder').onclick = function () {
-        var n = prompt('Tên thư mục (chữ, số, - và _)'); if (!n) return;
+        var n = prompt('Tên thư mục (chữ, số, - _ và dấu ngoặc ( ))'); if (!n) return;
         post('/code/html/folder', { dir: dir, name: n.trim() }).then(function () { location.reload(); }).catch(function (e) { alert(e.message); });
     };
     var df = document.getElementById('btnDelFolder');

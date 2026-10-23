@@ -17,7 +17,7 @@ function cleanDir(dir) {
     const segs = String(dir || '').split('/').map((s) => s.trim()).filter(Boolean);
     if (segs.length > LIMITS.MAX_DEPTH) throw bad(`Thư mục lồng tối đa ${LIMITS.MAX_DEPTH} cấp`);
     for (const s of segs) {
-        if (!NAME_RE.test(s)) throw bad('Tên thư mục chỉ gồm chữ, số, "-" và "_"');
+        if (!NAME_RE.test(s)) throw bad('Tên thư mục chỉ gồm chữ, số, "-", "_" và dấu ngoặc ( )');
         if (s === MEDIA.HIDDEN_DIR) throw bad('Tên thư mục "' + MEDIA.HIDDEN_DIR + '" dành riêng cho hệ thống (chứa media đã mã hoá).');
     }
     return segs;
@@ -125,7 +125,7 @@ async function renameFolder(uid, lang, dir, newName) {
     const segs = cleanDir(dir);
     if (!segs.length) throw bad('Không đổi tên được thư mục gốc');
     const name = String(newName == null ? '' : newName).trim();
-    if (!NAME_RE.test(name)) throw bad('Tên thư mục chỉ gồm chữ, số, "-" và "_" (tối đa 60 ký tự)');
+    if (!NAME_RE.test(name)) throw bad('Tên thư mục chỉ gồm chữ, số, "-", "_" và dấu ngoặc ( ) (tối đa 60 ký tự)');
     if (name === MEDIA.HIDDEN_DIR) throw bad('Tên thư mục "' + MEDIA.HIDDEN_DIR + '" dành riêng cho hệ thống.');
     const old = segs[segs.length - 1];
     const next = [...segs.slice(0, -1), name];
