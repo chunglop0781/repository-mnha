@@ -10,8 +10,9 @@
 
     if (!items.length) { stage.innerHTML = '<div class="pl-empty">Thư mục này chưa có ảnh, âm thanh hoặc video.</div>'; side.style.display = 'none'; return; }
 
+    function kText(it) { return LABEL[it.kind] + (it.cut ? ' · m3u8' : '') + (P.own && it.pub === false ? ' · 🔒' : ''); }
     side.innerHTML = items.map(function (it, i) {
-        return '<button type="button" class="pl-item" data-i="' + i + '"><span>' + ICON[it.kind] + '</span><span class="n">' + esc(it.name) + '</span><span class="k">' + LABEL[it.kind] + (it.cut ? ' · m3u8' : '') + '</span></button>';
+        return '<button type="button" class="pl-item" data-i="' + i + '"><span>' + ICON[it.kind] + '</span><span class="n">' + esc(it.name) + '</span><span class="k">' + kText(it) + '</span></button>';
     }).join('');
     side.addEventListener('click', function (e) { var b = e.target.closest('.pl-item'); if (b) select(Number(b.dataset.i)); });
 
@@ -76,11 +77,30 @@
         var ctl = document.createElement('div'); ctl.className = 'pl-ctl';
         ctl.innerHTML = '<button type="button" class="hx-btn" id="plPrev">⏮ Trước</button><button type="button" class="hx-btn" id="plNext">Sau ⏭</button>' +
             '<a class="hx-btn hx-btn-green" href="' + esc(it.dl) + '" download>⬇ Tải về (' + esc(it.name) + ')</a>' +
+            (P.own && !it.pending ? '<button type="button" class="hx-btn" id="plPub"></button>' : '') +
             (it.kind !== 'image' ? '<label class="text-sm text-slate-300 inline-flex items-center gap-1"><input type="checkbox" id="plAuto"' + (auto ? ' checked' : '') + '> Tự phát tiếp</label>' : '');
         stage.appendChild(ctl);
         document.getElementById('plPrev').onclick = function () { select(cur - 1); };
         document.getElementById('plNext').onclick = function () { select(cur + 1); };
         document.getElementById('plPrev').disabled = cur === 0; document.getElementById('plNext').disabled = cur === items.length - 1;
+        var pb = document.getElementById('plPub');
+        if (pb) {
+            var paint = function () { pb.textContent = it.pub === false ? '🔒 Đang riêng tư — bấm để công khai' : '🌐 Đang công khai — bấm để tắt'; pb.title = it.pub === false ? 'Ẩn khỏi danh sách và trình phát khi xem thư mục trên mạng; nhúng vào trang HTML vẫn dùng được' : 'Hiện trong danh sách và trình phát khi xem thư mục trên mạng'; };
+            paint();
+            pb.onclick = function () {
+                var want = it.pub === false;       // true = bật công khai
+                if (!want && !confirm('Tắt công khai "' + it.name + '"?\nFile sẽ không hiện trong danh sách/trình phát khi xem thư mục trên mạng (nhúng vào HTML vẫn dùng được)' + (it.kind === 'image' ? ' và ảnh chưa mã hoá sẽ được mã hoá' : '') + '.')) return;
+                pb.disabled = true;
+                fetch(P.visUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ dir: P.dir, name: it.name, public: want }) })
+                    .then(function (r) { return r.json().then(function (j) { return { r: r, j: j }; }, function () { return { r: r, j: {} }; }); })
+                    .then(function (o) {
+                        if (!o.r.ok) throw new Error(o.j.error || ('Lỗi ' + o.r.status));
+                        it.pub = o.j.public !== false; paint(); pb.disabled = false;
+                        var sb = side.querySelector('.pl-item[data-i="' + i + '"] .k'); if (sb) sb.textContent = kText(it);
+                    })
+                    .catch(function (e) { alert(e.message); pb.disabled = false; });
+            };
+        }
         var a = document.getElementById('plAuto'); if (a) a.onchange = function () { auto = a.checked; };
         if (it.kind !== 'image' && (it.cut || false)) { var note = document.createElement('div'); note.className = 'text-xs text-slate-500'; note.textContent = 'File lớn: phát theo m3u8 (đã cắt & mã hoá). Tải về sẽ là luồng MPEG-TS đã giải mã, giữ đuôi gốc.'; stage.appendChild(note); }
     }

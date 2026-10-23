@@ -29,6 +29,7 @@ router.post('/html/upload/finish', html.uploadFinish);
 router.put('/html/upload/seg', raw, html.uploadSeg);
 router.post('/html/upload/commit', html.uploadCommit);
 router.post('/html/media/delete', html.mediaDelete);
+router.post('/html/media/visibility', html.mediaVisibility);
 
 router.get('/:lang', ctrl.files);
 router.get('/:lang/edit', ctrl.edit);

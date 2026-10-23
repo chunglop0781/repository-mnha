@@ -112,7 +112,8 @@ async function readLimited(res, max = MAX_BYTES) {
 }
 
 /** Tải nội dung file (chuỗi UTF-8) từ link đã qua parseSourceUrl. */
-async function fetchText(parsed) {
+async function fetchText(parsed, opts) {
+    const maxBytes = (opts && opts.maxBytes) || MAX_BYTES;
     const hit = cache.get(parsed.raw);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.text;
 
@@ -130,7 +131,7 @@ async function fetchText(parsed) {
         if (res.status === 404) throw bad('Không tìm thấy file. Kiểm tra lại link (đúng nhánh/đường dẫn) — repo phải CÔNG KHAI (public).', 404);
         if (!res.ok) throw bad('Nơi lưu code trả lỗi ' + res.status + '.', 502);
         if (/text\/html/i.test(res.headers.get('content-type') || '')) throw bad('Link trả về trang web chứ không phải file code (repo riêng tư/cần đăng nhập?). Hãy dùng repo công khai.');
-        const buf = await readLimited(res);
+        const buf = await readLimited(res, maxBytes);
         if (buf.includes(0)) throw bad('Đây không phải file văn bản (code).');
         const text = buf.toString('utf8').replace(/^\uFEFF/, '');
         if (cache.size > 50) cache.delete(cache.keys().next().value);
@@ -278,9 +279,12 @@ async function listFolder(f) {
             if (j.length < 100) break;
         }
     }
+    const hasManifest = items.some((x) => x.type === 'file' && x.name === 'mnha-media.json');   // thư mục chỉ có media đã cắt m3u8 thì danh sách hiện rỗng nhưng vẫn có manifest
     items = items.filter((x) => PATH_SEG.test(x.name) && x.name !== '_media' && x.name !== 'mnha-media.json' && x.name !== '.keep');
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
-    return items.slice(0, MAX_LIST);
+    items = items.slice(0, MAX_LIST);
+    Object.defineProperty(items, 'hasManifest', { value: hasManifest });
+    return items;
 }
 
 module.exports = { parseSourceUrl, parseFolderUrl, resolveRef, listFolder, treeWeb, siblingOf, fromParts, fetchText, fetchBuffer, MAX_BYTES, MAX_ASSET_BYTES };

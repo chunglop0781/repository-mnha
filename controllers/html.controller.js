@@ -5,6 +5,7 @@
 //   GET  /code/html/player?dir=[&file=]      trình phát ảnh / âm thanh / video của thư mục
 //   POST /code/html/upload/init|finish|commit, PUT /code/html/upload/part|seg      tải lên (mã hoá, cắt m3u8)
 //   POST /code/html/media/delete             xoá media đã cắt m3u8
+//   POST /code/html/media/visibility         bật/tắt công khai 1 file ảnh/âm thanh/video (tắt → ảnh bị mã hoá, ẩn khỏi trang xem trên mạng)
 //   POST /code/html/preview-token            xin token xem trước mới (token hết hạn sau 12 giờ)
 //   GET  /code/html/online[?url=]            xem code trên mạng (link file GitHub/GitLab) + xem trang (kèm css/js/ảnh cùng thư mục)
 //   GET  /code/html/online/folder?url=       xem thư mục trên mạng
@@ -128,20 +129,23 @@ exports.player = wrap(async (req, res) => {
     const uid = uidOf(req);
     const dirSegs = store.cleanDir(req.query.dir || '');
     const data = await store.list(uid, 'html', dirSegs.join('/'));
-    const hls = await media.listMedia(uid, dirSegs).catch(() => []);
+    const m = await media.readManifest(uid, dirSegs).catch(() => null);
+    const hls = m ? media.listFrom(m) : [];
+    const priv = new Set(m && Array.isArray(m.private) ? m.private : []);
     const tok = ownToken(uid);
     const base = (n) => previewUrl(tok, [...dirSegs, n]);
     const names = new Set();
     const items = [];
-    for (const f of data.files) { const k = mediaKind(f); if (k) { names.add(f); items.push({ name: f, kind: k, url: base(f), dl: base(f) + '?dl=1' }); } }
-    for (const m of hls) if (!names.has(m.name)) items.push({ name: m.name, kind: m.kind, url: base(m.name), dl: base(m.name) + '?dl=1', cut: true, pending: m.state !== 'ready' });
-    const payload = { items: sortItems(items), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL };
+    for (const f of data.files) { const k = mediaKind(f); if (k) { names.add(f); items.push({ name: f, kind: k, url: base(f), dl: base(f) + '?dl=1', pub: !priv.has(f) }); } }
+    for (const x of hls) if (!names.has(x.name)) items.push({ name: x.name, kind: x.kind, url: base(x.name), dl: base(x.name) + '?dl=1', cut: true, pending: x.state !== 'ready', pub: !priv.has(x.name) });
+    const payload = { items: sortItems(items), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, own: true, dir: dirSegs.join('/'), visUrl: '/code/html/media/visibility' };
     res.render('code/html-player', {
         title: 'Trình phát' + (dirSegs.length ? ' — ' + dirSegs.join('/') : ''), user: req.user, lang: LANG,
         backUrl: '/code/html' + (dirSegs.length ? '?dir=' + encodeURIComponent(dirSegs.join('/')) : ''), heading: 'Thư mục: ' + (dirSegs.join('/') || 'gốc'),
         payloadJson: json(payload)
     });
 });
+exports.mediaVisibility = wrap(async (req, res) => res.json(await media.setPublic(uidOf(req), req.body || {})));
 
 // ---------------------------------------------------------------- tải lên
 const asBuf = (b) => (Buffer.isBuffer(b) ? b : Buffer.alloc(0));
@@ -181,11 +185,13 @@ async function loadFolder(url) {
     let f = await remoteSource.resolveRef(remoteSource.parseFolderUrl(url));
     const items = await remoteSource.listFolder(f);
     let manifest = null;
-    if (items.some((x) => x.type === 'file' || x.type === 'dir')) {
-        try { manifest = JSON.parse(await remoteSource.fetchText(remoteSource.fromParts(f, [...f.dirSegs, MEDIA.MANIFEST]))); } catch (_) { manifest = null; }
+    // Có mnha-media.json (kể cả khi thư mục chỉ có media đã cắt m3u8 → danh sách file rỗng) thì phải đọc để hiện video/âm thanh gốc
+    if (items.hasManifest || items.some((x) => x.type === 'file' || x.type === 'dir')) {
+        try { manifest = JSON.parse(await remoteSource.fetchText(remoteSource.fromParts(f, [...f.dirSegs, MEDIA.MANIFEST]), { maxBytes: 4 * 1024 * 1024 })); } catch (_) { manifest = null; }
     }
     return { f, items, manifest };
 }
+const privateSet = (manifest) => new Set(manifest && Array.isArray(manifest.private) ? manifest.private.map(String) : []);
 const kindOfItem = (name) => (isPage(name) ? 'page' : LANG.exts.includes(extOf(name)) ? 'text' : mediaKind(name) || 'other');
 
 exports.onlineFolder = wrap(async (req, res) => {
@@ -197,12 +203,13 @@ exports.onlineFolder = wrap(async (req, res) => {
     const { f, items, manifest } = d;
     const here = (segs) => '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(f, segs));
     const fileLink = (name) => remoteSource.fromParts(f, [...f.dirSegs, name]).web;
-    const list = items.map((x) => x.type === 'dir'
+    const priv = privateSet(manifest);           // file chủ sở hữu đã tắt công khai: không hiện, các file còn lại hiện bình thường
+    const list = items.filter((x) => !(x.type === 'file' && priv.has(x.name))).map((x) => x.type === 'dir'
         ? { name: x.name, type: 'dir', href: here([...f.dirSegs, x.name]) }
         : { name: x.name, type: 'file', kind: kindOfItem(x.name), size: x.size, href: '/code/html/online?url=' + encodeURIComponent(fileLink(x.name)), web: fileLink(x.name) });
     const have = new Set(items.map((x) => x.name));
     if (manifest && manifest.files) for (const [name, e] of Object.entries(manifest.files)) {
-        if (!have.has(name) && e && e.state === 'ready' && mediaKind(name)) list.push({ name, type: 'file', kind: mediaKind(name), size: e.size, cut: true });
+        if (!have.has(name) && !priv.has(name) && e && e.state === 'ready' && mediaKind(name)) list.push({ name, type: 'file', kind: mediaKind(name), size: e.size, cut: true });
     }
     const playUrl = '/code/html/online/player?url=' + encodeURIComponent(remoteSource.treeWeb(f, f.dirSegs));
     const hasMedia = list.some((x) => x.type === 'file' && ['image', 'audio', 'video'].includes(x.kind));
@@ -225,8 +232,9 @@ exports.onlinePlayer = wrap(async (req, res) => {
     const tok = webToken(f);
     const mk = (name, extra) => ({ name, kind: mediaKind(name), url: previewUrl(tok, [...f.dirSegs, name]), dl: previewUrl(tok, [...f.dirSegs, name]) + '?dl=1', ...extra });
     const out = [], have = new Set();
-    for (const x of items) if (x.type === 'file' && mediaKind(x.name)) { out.push(mk(x.name)); have.add(x.name); }
-    if (manifest && manifest.files) for (const [name, e] of Object.entries(manifest.files)) if (!have.has(name) && e && e.state === 'ready' && mediaKind(name)) out.push(mk(name, { cut: true }));
+    const priv = privateSet(manifest);
+    for (const x of items) if (x.type === 'file' && mediaKind(x.name) && !priv.has(x.name)) { out.push(mk(x.name)); have.add(x.name); }
+    if (manifest && manifest.files) for (const [name, e] of Object.entries(manifest.files)) if (!have.has(name) && !priv.has(name) && e && e.state === 'ready' && mediaKind(name)) out.push(mk(name, { cut: true }));
     const payload = { items: sortItems(out), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL };
     res.render('code/html-player', {
         title: 'Trình phát trên mạng', user: req.user, lang: LANG,

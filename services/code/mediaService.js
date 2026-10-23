@@ -43,6 +43,10 @@ async function readManifest(uid, dirSegs) {
     const j = await gh.readJsonFile(manifestPath(uid, dirSegs)).catch((e) => { if (e.status === 404) return null; throw e; });
     return j && typeof j === 'object' && j.files && typeof j.files === 'object' ? j : { v: 1, files: {} };
 }
+// Danh sách file TẮT CÔNG KHAI của thư mục: m.private = ["a.png", "phim.mp4", ...] (tên file, cùng thư mục với mnha-media.json)
+const privList = (m) => (Array.isArray(m && m.private) ? m.private.map(String) : []);
+const keepManifest = (m) => Object.keys(m.files).length > 0 || privList(m).length > 0;      // còn mục media hoặc còn file riêng tư → giữ json
+function dropPrivate(m, name) { const l = privList(m).filter((n) => n !== name); if (l.length) m.private = l; else delete m.private; }
 async function treePaths(prefix) {
     const t = await gh.getRepoTree({ force: true });
     return [...t.files.keys()].filter((p) => p.startsWith(prefix));
@@ -98,7 +102,7 @@ async function dropEntryIfAny(uid, c) {          // ghi file trực tiếp cùng
     if (!entry) return;
     delete manifest.files[c.name];
     const mp = manifestPath(uid, c.dirSegs);
-    if (Object.keys(manifest.files).length) out.push({ path: mp, content: Buffer.from(JSON.stringify(manifest, null, 2)) });
+    if (keepManifest(manifest)) out.push({ path: mp, content: Buffer.from(JSON.stringify(manifest, null, 2)) });
     else out.push({ path: mp, remove: true });
     await gh.commitFiles(out, `media: thay ${c.name}`);
 }
@@ -111,7 +115,8 @@ async function putPart(uid, q, body) {
     if (!Buffer.isBuffer(body) || !body.length) throw bad('Phần dữ liệu rỗng.');
     if (body.length > MEDIA.PART_BYTES) throw bad('Phần dữ liệu quá lớn.', 413);
     if (!Number.isInteger(i) || !Number.isInteger(n) || n < 1 || n > 8 || i < 0 || i >= n) throw bad('Số thứ tự phần không hợp lệ.');
-    const encrypt = c.kind === 'image' ? String(q.encrypt) !== '0' : true;
+    let encrypt = c.kind === 'image' ? String(q.encrypt) !== '0' : true;
+    if (!encrypt && n === 1 && privList(await readManifest(uid, c.dirSegs)).includes(c.name)) encrypt = true;      // tên đang tắt công khai → luôn mã hoá, không để lộ bản rõ
     if (n === 1) {
         await dropEntryIfAny(uid, c);
         const data = encrypt ? mc.encryptBuffer(body) : body;
@@ -234,8 +239,8 @@ async function commit(uid, b) {
 }
 
 // ---------------------------------------------------------------- liệt kê / xoá
-async function listMedia(uid, dirSegs) {
-    const m = await readManifest(uid, dirSegs);
+async function listMedia(uid, dirSegs) { return listFrom(await readManifest(uid, dirSegs)); }
+function listFrom(m) {
     return Object.entries(m.files).map(([name, e]) => ({ name, kind: e.kind, mode: e.mode, size: e.size, state: e.state, done: e.done || 0, total: e.total || null, duration: e.duration || null }))
         .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -246,9 +251,41 @@ async function deleteMedia(uid, q) {
     if (!entry) throw bad('Không có media này trong json.', 404);
     delete manifest.files[name];
     const mp = manifestPath(uid, dirSegs);
-    out.push(Object.keys(manifest.files).length ? { path: mp, content: Buffer.from(JSON.stringify(manifest, null, 2)) } : { path: mp, remove: true });
+    dropPrivate(manifest, name);
+    out.push(keepManifest(manifest) ? { path: mp, content: Buffer.from(JSON.stringify(manifest, null, 2)) } : { path: mp, remove: true });
     await gh.commitFiles(out, `media: xoá ${name}`);
     return { ok: true };
 }
 
-module.exports = { cleanAssetName, init, putPart, finish, putSeg, commit, listMedia, deleteMedia, readManifest, mediaId };
+
+// ---------------------------------------------------------------- bật / tắt công khai (trình phát của tôi)
+// Tắt công khai → file chỉ bị ẨN khỏi danh sách + trình phát của "Xem thư mục trên mạng" (nhúng vào html vẫn chạy bình thường); ảnh chưa mã hoá BẮT BUỘC mã hoá
+// (repo công khai nên bản rõ vẫn tải thẳng được). Âm thanh/video vốn luôn mã hoá. Bật lại công khai: giữ nguyên bản đã mã hoá (máy chủ tự giải mã khi phát).
+async function setPublic(uid, b) {
+    const dirSegs = store.cleanDir(b.dir || '');
+    const name = String(b.name || '');
+    if (!name || /[\\/]/.test(name) || !mediaKind(name)) throw bad('Tên file ảnh/âm thanh/video không hợp lệ.');
+    const pub = b.public === true;
+    const m = await readManifest(uid, dirSegs);
+    const ent = m.files[name];
+    const filePath = join(root(uid), dirRel(dirSegs), name);
+    const tree = await gh.getRepoTree({ force: true });
+    if (!ent && !tree.files.has(filePath)) throw bad('Không tìm thấy file này.', 404);
+    const cur = privList(m), isPriv = cur.includes(name);
+    if (pub === !isPriv) return { ok: true, public: pub, changed: false };
+    const changes = [];
+    let encrypted = true;
+    if (!pub && !ent && mediaKind(name) === 'image') {
+        const buf = await gh.readBinaryFile(filePath);
+        if (!buf) throw bad('Không đọc được file ảnh.', 404);
+        if (!mc.isEncrypted(buf)) { changes.push({ path: filePath, content: mc.encryptBuffer(buf) }); encrypted = false; }
+    }
+    if (pub) dropPrivate(m, name); else m.private = [...new Set([...cur, name])].sort();
+    m.v = 1;
+    const mp = manifestPath(uid, dirSegs);
+    changes.push(keepManifest(m) ? { path: mp, content: Buffer.from(JSON.stringify(m, null, 2)) } : { path: mp, remove: true });
+    await gh.commitFiles(changes, `media: ${pub ? 'công khai' : 'tắt công khai'} ${name}`);
+    return { ok: true, public: pub, changed: true, encryptedNow: !pub && !encrypted };
+}
+
+module.exports = { cleanAssetName, init, putPart, finish, putSeg, commit, listMedia, listFrom, deleteMedia, readManifest, mediaId, setPublic };
