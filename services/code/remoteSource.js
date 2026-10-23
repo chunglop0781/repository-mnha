@@ -11,6 +11,7 @@
 'use strict';
 
 const MAX_BYTES = 200 * 1024;
+const MAX_ASSET_BYTES = 32 * 1024 * 1024;     // ảnh/âm thanh/video/css/js trong trang HTML xem trước (media mã hoá ≤ 23MB + đệm)
 const FETCH_HOSTS = new Set(['raw.githubusercontent.com', 'github.com', 'gitlab.com']);
 const NAME_SEG = /^[A-Za-z0-9_.\-]{1,100}$/;           // owner / repo / nhóm / nhánh
 const PATH_SEG = /^[^\\/\x00-\x1f]{1,200}$/;           // thư mục / tên file trong repo
@@ -90,12 +91,13 @@ function parseSourceUrl(input) {
 const cache = new Map();
 const CACHE_MS = 60 * 1000;
 
-async function readLimited(res) {
+async function readLimited(res, max = MAX_BYTES) {
+    const tooBig = () => bad(max === MAX_BYTES ? 'File quá lớn (tối đa 200KB).' : `File quá lớn (tối đa ${Math.round(max / 1048576)}MB).`, 413);
     const len = Number(res.headers.get('content-length') || 0);
-    if (len > MAX_BYTES) throw bad('File quá lớn (tối đa 200KB).');
+    if (len > max) throw tooBig();
     if (!res.body || !res.body.getReader) {
         const buf = Buffer.from(await res.arrayBuffer());
-        if (buf.length > MAX_BYTES) throw bad('File quá lớn (tối đa 200KB).');
+        if (buf.length > max) throw tooBig();
         return buf;
     }
     const reader = res.body.getReader(); const chunks = []; let total = 0;
@@ -103,7 +105,7 @@ async function readLimited(res) {
         const { done, value } = await reader.read();
         if (done) break;
         total += value.length;
-        if (total > MAX_BYTES) { try { await reader.cancel(); } catch (_) { /* */ } throw bad('File quá lớn (tối đa 200KB).'); }
+        if (total > max) { try { await reader.cancel(); } catch (_) { /* */ } throw tooBig(); }
         chunks.push(Buffer.from(value));
     }
     return Buffer.concat(chunks);
@@ -138,4 +140,147 @@ async function fetchText(parsed) {
     throw bad('Link bị chuyển hướng quá nhiều lần.');
 }
 
-module.exports = { parseSourceUrl, siblingOf, fetchText, MAX_BYTES };
+// ---- tải file NHỊ PHÂN trong cùng repo/nhánh (ảnh, css, js, âm thanh, video... của trang HTML xem trên mạng)
+const bcache = new Map();
+const BCACHE_ITEM = 2 * 1024 * 1024, BCACHE_TOTAL = 24 * 1024 * 1024;
+let bcacheBytes = 0;
+function bcachePut(key, buf) {
+    if (buf.length > BCACHE_ITEM) return;
+    bcache.set(key, { at: Date.now(), buf }); bcacheBytes += buf.length;
+    while (bcacheBytes > BCACHE_TOTAL || bcache.size > 200) { const k = bcache.keys().next().value; bcacheBytes -= bcache.get(k).buf.length; bcache.delete(k); }
+}
+
+/** Link tới file khác (đường dẫn tính từ GỐC repo/nhánh) — segs: mảng đoạn đường dẫn, được kiểm tra chặt. */
+function fromParts(parsedOrParts, segs) {
+    const { host, base, ref } = parsedOrParts;
+    if (!['github', 'gitlab'].includes(host) || !Array.isArray(base) || typeof ref !== 'string') throw bad('Nguồn không hợp lệ.');
+    checkSegs([...base, ref], []);
+    if (!Array.isArray(segs) || !segs.length || segs.length > 24) throw bad('Đường dẫn file không hợp lệ.');
+    for (const sg of segs) if (!PATH_SEG.test(sg) || sg === '.' || sg === '..') throw bad('Đường dẫn file không hợp lệ.');
+    return buildLinks(host, base, ref, segs);
+}
+
+/** Tải nội dung file (Buffer) từ link đã qua parseSourceUrl/fromParts. 404 → lỗi status 404. Cùng chống SSRF/redirect như fetchText. */
+async function fetchBuffer(parsed, { maxBytes = MAX_ASSET_BYTES } = {}) {
+    const hit = bcache.get(parsed.raw);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.buf;
+    let url = parsed.raw;
+    for (let hop = 0; hop <= 3; hop++) {
+        const u = new URL(url);
+        if (u.protocol !== 'https:' || !FETCH_HOSTS.has(u.hostname)) throw bad('Link bị chuyển hướng tới nơi không được phép.');
+        let res;
+        try {
+            res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'repository-mnha', accept: '*/*' } });
+        } catch (e) {
+            throw bad('Không tải được file từ ' + u.hostname + ' (' + ((e.cause && e.cause.code) || e.message) + ').', 502);
+        }
+        if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { url = new URL(res.headers.get('location'), url).toString(); continue; }
+        if (res.status === 404) throw bad('Không tìm thấy file.', 404);
+        if (!res.ok) throw bad('Nơi lưu code trả lỗi ' + res.status + '.', 502);
+        if (/text\/html/i.test(res.headers.get('content-type') || '')) throw bad('Link trả về trang web chứ không phải file (repo riêng tư/cần đăng nhập?). Hãy dùng repo công khai.', 403);
+        const buf = await readLimited(res, maxBytes);
+        bcachePut(parsed.raw, buf);
+        return buf;
+    }
+    throw bad('Link bị chuyển hướng quá nhiều lần.');
+}
+
+// ---- "Xem thư mục" trên mạng: nhận link thư mục (hoặc file / gốc repo) và liệt kê qua API công khai của GitHub/GitLab.
+// KHÔNG gửi token của app (tránh lộ repo riêng tư của app qua link người dùng nhập); chỉ 2 host API được phép, không theo redirect ra ngoài.
+const API_HOSTS = new Set(['api.github.com', 'gitlab.com']);
+const MAX_LIST = 300;
+
+/** → { host, base[], ref|null, dirSegs[] } ; ref null = gốc repo (chưa biết nhánh mặc định → resolveRef). */
+function parseFolderUrl(input) {
+    let u;
+    try { u = new URL(String(input || '').trim()); } catch (_) { throw bad('Link không hợp lệ. Hãy dán link thư mục hoặc file trên github.com / gitlab.com.'); }
+    if (u.protocol !== 'https:') throw bad('Chỉ nhận link bắt đầu bằng https://');
+    if (u.username || u.password || (u.port && u.port !== '443')) throw bad('Link không hợp lệ.');
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    const segs = splitPath(u);
+    if (host === 'github.com') {
+        if (segs.length < 2) throw bad('Link GitHub cần có dạng https://github.com/<user>/<repo>[/tree/<nhánh>/<thư-mục>]');
+        const [owner, repo] = segs;
+        if (segs.length === 2) { checkSegs([owner, repo], []); return { host: 'github', base: [owner, repo], ref: null, dirSegs: [] }; }
+        if (!['tree', 'blob'].includes(segs[2]) || segs.length < 4) throw bad('Link GitHub cần có dạng https://github.com/<user>/<repo>/tree/<nhánh>/<thư-mục>');
+        const ref = segs[3]; let dir = segs.slice(4); if (segs[2] === 'blob') dir = dir.slice(0, -1);
+        checkSegs([owner, repo, ref], dir);
+        return { host: 'github', base: [owner, repo], ref, dirSegs: dir };
+    }
+    if (host === 'gitlab.com') {
+        const dash = segs.indexOf('-');
+        if (dash < 0) {
+            if (segs.length < 2) throw bad('Link GitLab cần có dạng https://gitlab.com/<nhóm>/<dự-án>[/-/tree/<nhánh>/<thư-mục>]');
+            checkSegs(segs, []); return { host: 'gitlab', base: segs, ref: null, dirSegs: [] };
+        }
+        const ns = segs.slice(0, dash), kind = segs[dash + 1];
+        if (ns.length < 2) throw bad('Link GitLab không hợp lệ.');
+        if (!kind) { checkSegs(ns, []); return { host: 'gitlab', base: ns, ref: null, dirSegs: [] }; }
+        if (!['tree', 'blob'].includes(kind) || segs.length < dash + 3) throw bad('Link GitLab cần có dạng https://gitlab.com/<nhóm>/<dự-án>/-/tree/<nhánh>/<thư-mục>');
+        const ref = segs[dash + 2]; let dir = segs.slice(dash + 3); if (kind === 'blob') dir = dir.slice(0, -1);
+        checkSegs([...ns, ref], dir);
+        return { host: 'gitlab', base: ns, ref, dirSegs: dir };
+    }
+    throw bad('Chỉ hỗ trợ link từ github.com hoặc gitlab.com.');
+}
+
+async function fetchJson(url) {
+    let cur = url;
+    for (let hop = 0; hop <= 2; hop++) {
+        const u = new URL(cur);
+        if (u.protocol !== 'https:' || !API_HOSTS.has(u.hostname)) throw bad('Link bị chuyển hướng tới nơi không được phép.');
+        let res;
+        try { res = await fetch(cur, { redirect: 'manual', signal: AbortSignal.timeout(15000), headers: { 'user-agent': 'repository-mnha', accept: 'application/json' } }); }
+        catch (e) { throw bad('Không gọi được ' + u.hostname + ' (' + ((e.cause && e.cause.code) || e.message) + ').', 502); }
+        if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { cur = new URL(res.headers.get('location'), cur).toString(); continue; }
+        if (res.status === 404) throw bad('Không tìm thấy thư mục/repo. Kiểm tra link (đúng nhánh, repo công khai).', 404);
+        if (res.status === 403 || res.status === 429) throw bad('GitHub/GitLab đang giới hạn số lần xem thư mục (quá nhiều yêu cầu) — thử lại sau ít phút, hoặc dán link từng file.', 429);
+        if (!res.ok) throw bad('Nơi lưu code trả lỗi ' + res.status + '.', 502);
+        const buf = await readLimited(res, 2 * 1024 * 1024);
+        try { return JSON.parse(buf.toString('utf8')); } catch (_) { throw bad('Phản hồi không hợp lệ từ ' + u.hostname + '.', 502); }
+    }
+    throw bad('Link bị chuyển hướng quá nhiều lần.');
+}
+
+/** Bổ sung nhánh mặc định nếu link chỉ là gốc repo. */
+async function resolveRef(f) {
+    if (f.ref) return f;
+    if (f.host === 'github') {
+        const j = await fetchJson(`https://api.github.com/repos/${enc(f.base)}`);
+        if (!j || !j.default_branch) throw bad('Không biết nhánh mặc định của repo.');
+        checkSegs([j.default_branch], []); return { ...f, ref: j.default_branch };
+    }
+    const j = await fetchJson(`https://gitlab.com/api/v4/projects/${encodeURIComponent(f.base.join('/'))}`);
+    if (!j || !j.default_branch) throw bad('Không biết nhánh mặc định của dự án.');
+    checkSegs([j.default_branch], []); return { ...f, ref: j.default_branch };
+}
+
+/** Trang web (tree) của thư mục — dùng làm link chia sẻ. */
+function treeWeb(f, dirSegs) {
+    const r = encodeURIComponent(f.ref), d = dirSegs && dirSegs.length ? '/' + enc(dirSegs) : '';
+    return f.host === 'github' ? `https://github.com/${enc(f.base)}/tree/${r}${d}` : `https://gitlab.com/${enc(f.base)}/-/tree/${r}${d}`;
+}
+/** Liệt kê thư mục → [{name, type:'dir'|'file', size|null}] (thư mục trước, tên A→Z). Ẩn _media và mnha-media.json (hệ thống). */
+async function listFolder(f) {
+    if (!f.ref) throw bad('Thiếu nhánh.');
+    let items = [];
+    if (f.host === 'github') {
+        const p = f.dirSegs.length ? '/' + enc(f.dirSegs) : '';
+        const j = await fetchJson(`https://api.github.com/repos/${enc(f.base)}/contents${p}?ref=${encodeURIComponent(f.ref)}`);
+        if (!Array.isArray(j)) throw bad('Link này là file, không phải thư mục.');
+        items = j.map((x) => ({ name: String(x.name), type: x.type === 'dir' ? 'dir' : 'file', size: x.type === 'dir' ? null : (Number(x.size) || 0) }));
+    } else {
+        const id = encodeURIComponent(f.base.join('/'));
+        for (let page = 1; page <= 3; page++) {
+            const j = await fetchJson(`https://gitlab.com/api/v4/projects/${id}/repository/tree?ref=${encodeURIComponent(f.ref)}&path=${encodeURIComponent(f.dirSegs.join('/'))}&per_page=100&page=${page}`);
+            if (!Array.isArray(j)) break;
+            items.push(...j.map((x) => ({ name: String(x.name), type: x.type === 'tree' ? 'dir' : 'file', size: null })));
+            if (j.length < 100) break;
+        }
+    }
+    items = items.filter((x) => PATH_SEG.test(x.name) && x.name !== '_media' && x.name !== 'mnha-media.json' && x.name !== '.keep');
+    items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+    return items.slice(0, MAX_LIST);
+}
+
+module.exports = { parseSourceUrl, parseFolderUrl, resolveRef, listFolder, treeWeb, siblingOf, fromParts, fetchText, fetchBuffer, MAX_BYTES, MAX_ASSET_BYTES };

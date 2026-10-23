@@ -13,6 +13,9 @@ block content
             div(class="code-actions")
                 if !online
                     button(id="btnSave", class="code-btn") Lưu (Ctrl+S)
+                    button(id="btnComment", type="button", class="code-btn", title="Chú thích / bỏ chú thích các dòng đang chọn") Chú thích (Ctrl+/)
+                if folderUrl
+                    a(href=folderUrl, class="code-btn", style="text-decoration:none", title="Đọc các file cùng thư mục này trên mạng") Đọc thư mục
                 if lang.key === "emu8086"
                     button(id="btnCompile", class="code-btn", title="Chỉ dịch (assemble), báo lỗi, không chạy") Compile
                     button(type="button", class="code-btn", data-emu-tool="ascii") ASCII codes
@@ -54,4 +57,5 @@ block content
     if cppMode === "browser"
         script(src="/js/cppShims.js")
         script(src="/js/cppWasm.js")
+    script(src="/js/editorKit.js")
     script(src="/js/codeEditor.js")

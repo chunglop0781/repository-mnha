@@ -22,9 +22,17 @@ block content
                 | Lịch sử chạy code
             a(href=base + "/online", class="px-4 py-2 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-sm font-medium hover:bg-emerald-50 inline-flex items-center gap-1")
                 i(data-lucide="globe", class="w-4 h-4")
-                | Xem code trên mạng
+                | Xem tệp code / Đọc thư mục trên mạng
+            if dir
+                button(type="button", id="btnRenFolder", data-rename=dir, class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") Đổi tên
             if dir
                 button(id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
+        if shareUrl
+            div(class="mt-4 flex items-center gap-2 text-sm bg-white border border-gray-200 rounded-xl px-3 py-2")
+                i(data-lucide="github", class="w-4 h-4 shrink-0 text-gray-600")
+                span(class="text-gray-600 whitespace-nowrap") Link GitHub của thư mục này (để chia sẻ):
+                a(id="ghFolderLink", href=shareUrl, target="_blank", rel="noopener noreferrer", class="flex-1 min-w-0 truncate text-indigo-600 hover:underline font-mono text-xs")= shareUrl
+                button(type="button", id="btnCopyFolderLink", class="px-3 py-1 rounded-lg bg-gray-100 text-xs font-medium hover:bg-gray-200 whitespace-nowrap") Sao chép
         p(class="mt-2 text-xs text-gray-500")
             if lang.exts.includes("txt")
                 | File .cpp chạy được; file .txt dùng cho freopen (input.txt / output.txt) — các .txt cùng thư mục được nạp sẵn khi chạy. Header .h/.hpp cùng thư mục dùng được qua #include "ten.hpp" (x.hpp có x.cpp đi kèm thì tự biên dịch cùng).
@@ -37,14 +45,17 @@ block content
                     i(data-lucide="corner-left-up", class="w-4 h-4")
                     | ..
             each f in folders
-                a(href=base + "?dir=" + encodeURIComponent((dir ? dir + "/" : "") + f), class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
                     i(data-lucide="folder", class="w-4 h-4 text-amber-500")
-                    span(class="font-medium text-gray-900")= f
+                    a(href=base + "?dir=" + encodeURIComponent((dir ? dir + "/" : "") + f), class="flex-1 font-medium text-gray-900 hover:text-indigo-600")= f
+                    button(type="button", class="text-xs text-indigo-600 hover:underline", data-rename=(dir ? dir + "/" : "") + f) Đổi tên
             each f in files
                 div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
                     i(data-lucide="file-code-2", class="w-4 h-4 text-indigo-500")
                     a(href=base + "/edit?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f), target="_blank", rel="noopener", class="flex-1 text-gray-900 hover:text-indigo-600")= f
+                    button(type="button", class="text-xs text-indigo-600 hover:underline", data-rename-file=f) Đổi tên
                     button(class="btn-del-file text-xs text-red-500 hover:underline", data-file=f) Xoá
             if !folders.length && !files.length
                 div(class="px-4 py-10 text-center text-gray-500 text-sm") Thư mục trống. Hãy tạo file hoặc thư mục mới.
     script(src="/js/codeFiles.js")
+    script(src="/js/folderTools.js")

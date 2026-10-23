@@ -19,6 +19,8 @@ const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) { console.error('❌ Thiếu MONGODB_URI (dùng cùng chuỗi với dự án Luyện thi để chung tài khoản)'); process.exit(1); }
 
 app.use(morgan('dev'));
+// Xem trước trang HTML (iframe sandbox, KHÔNG cookie): quyền đọc nằm trong token ký → gắn TRƯỚC cookie/session để khỏi chạm session store (GitHub)
+app.use('/preview', require('./services/code/previewServer').createHandler({ mount: '/preview' }));
 app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));

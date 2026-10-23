@@ -1,0 +1,54 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/html.css")
+    div(class="hx-app is-code", id="hxApp")
+        div(class="hx-top")
+            div(class="hx-title")
+                i(data-lucide="layout-template", class="w-4 h-4 shrink-0")
+                span #{online ? "[online] " + file : "html/" + (dir ? dir + "/" : "") + file}
+                if online
+                    span(class="hx-badge", title="Code lấy từ link trên mạng: chỉ xem, không sửa") Chỉ xem
+                span(id="hxDirty", class="hx-dirty hidden") ● chưa lưu
+            div(class="hx-tabs", role="tablist")
+                button(type="button", id="tabCode", class="on", role="tab") Code
+                if canView
+                    button(type="button", id="tabView", role="tab") View
+            div(class="hx-actions")
+                span(id="hxStatus", class="hx-status")
+                if !online
+                    button(type="button", id="btnSave", class="hx-btn") Lưu (Ctrl+S)
+                    button(type="button", id="btnComment", class="hx-btn", title="Chú thích / bỏ chú thích các dòng đang chọn") Chú thích (Ctrl+/)
+                if canView
+                    span(id="viewTools", class="hx-actions hidden")
+                        span(class="hx-seg", title="Độ rộng khung xem")
+                            button(type="button", data-w="full", class="on") Rộng
+                            button(type="button", data-w="tablet") 768
+                            button(type="button", data-w="mobile") 390
+                        button(type="button", id="btnReload", class="hx-btn") ↻ Tải lại
+                        a(id="btnNewTab", class="hx-btn", target="_blank", rel="noopener", href="#") Mở tab mới
+                if playerUrl
+                    a(href=playerUrl, class="hx-btn", title="Xem ảnh / nghe nhạc / xem video trong thư mục này") Trình phát
+                if folderUrl
+                    a(href=folderUrl, class="hx-btn", title="Xem các file trong thư mục này trên mạng") Xem thư mục
+        div(id="hxErrors", class="hx-errors hidden")
+            header
+                span(id="hxErrTitle") Lỗi khi xem trang
+                button(type="button", id="hxErrClear") Xoá
+            ul(id="hxErrList")
+        div(class="hx-code", id="hxCode")
+            div(class="hx-gutter", id="hxGutter")
+            textarea(id="hxEditor", spellcheck="false", wrap="off", readonly=!!online)
+        if canView
+            div(class="hx-view", id="hxView")
+                div(class="hx-stage", id="hxStage")
+                    iframe(id="hxFrame", class="hx-frame", title="Xem trang", sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock", allow="autoplay; fullscreen; picture-in-picture", allowfullscreen)
+        if githubUrl
+            div(class="hx-share", id="hxShare")
+                i(data-lucide="github", class="w-4 h-4")
+                span #{shareLabel}
+                a(id="ghLink", class="link", href=githubUrl, target="_blank", rel="noopener noreferrer") #{githubUrl}
+                button(type="button", id="btnCopyLink", class="hx-btn") Sao chép
+    script#payload(type="application/json")!= payloadJson
+    script(src="/js/editorKit.js")
+    script(src="/js/htmlEditor.js")

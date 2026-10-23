@@ -1,0 +1,92 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/html.css")
+    - var base = "/code/html"
+    - var parts = dir ? dir.split("/") : []
+    div(class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8", id="htmlFiles", data-dir=dir)
+        a(href="/", class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
+            i(data-lucide="arrow-left", class="w-4 h-4")
+            | Chọn ngôn ngữ
+        h1(class="mt-3 text-2xl font-bold text-gray-900")= lang.name
+        nav(class="mt-2 text-sm text-gray-600 flex flex-wrap items-center gap-1")
+            a(href=base, class="text-indigo-600 hover:underline") codes/html
+            each p, i in parts
+                span /
+                a(href=base + "?dir=" + encodeURIComponent(parts.slice(0, i + 1).join("/")), class="text-indigo-600 hover:underline")= p
+        div(class="mt-5 flex flex-wrap gap-3")
+            button(id="btnNewFile", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") + File mới
+            button(id="btnNewFolder", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") + Thư mục mới
+            a(href=base + "/player?dir=" + encodeURIComponent(dir), class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50 inline-flex items-center gap-1")
+                i(data-lucide="play-circle", class="w-4 h-4")
+                | Trình phát ảnh / âm thanh / video
+            a(href=base + "/online", class="px-4 py-2 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-sm font-medium hover:bg-emerald-50 inline-flex items-center gap-1")
+                i(data-lucide="globe", class="w-4 h-4")
+                | Xem tệp code / Xem thư mục trên mạng
+            if dir
+                button(type="button", id="btnRenFolder", data-rename=dir, class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") Đổi tên
+            if dir
+                button(id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
+        if shareUrl
+            div(class="mt-4 flex items-center gap-2 text-sm bg-white border border-gray-200 rounded-xl px-3 py-2")
+                i(data-lucide="github", class="w-4 h-4 shrink-0 text-gray-600")
+                span(class="text-gray-600 whitespace-nowrap") Link GitHub của thư mục này (để chia sẻ):
+                a(id="ghFolderLink", href=shareUrl, target="_blank", rel="noopener noreferrer", class="flex-1 min-w-0 truncate text-indigo-600 hover:underline font-mono text-xs")= shareUrl
+                button(type="button", id="btnCopyFolderLink", class="px-3 py-1 rounded-lg bg-gray-100 text-xs font-medium hover:bg-gray-200 whitespace-nowrap") Sao chép
+        p(class="mt-2 text-xs text-gray-500") Tạo file .html, .css, .js, .json, .svg, .txt cùng thư mục: trang html nhúng được css/js/ảnh/âm thanh/video bằng đường dẫn tương đối (vd href="style.css", src="anh.png"). Bấm "Xem" để mở thẳng tab View.
+
+        //- danh sách
+        div(class="mt-5 bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100")
+            if dir
+                - var up = parts.slice(0, -1).join("/")
+                a(href=base + (up ? "?dir=" + encodeURIComponent(up) : ""), class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-gray-600")
+                    i(data-lucide="corner-left-up", class="w-4 h-4")
+                    | ..
+            each f in folders
+                div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide="folder", class="w-4 h-4 text-amber-500")
+                    a(href=base + "?dir=" + encodeURIComponent((dir ? dir + "/" : "") + f), class="flex-1 font-medium text-gray-900 hover:text-indigo-600")= f
+                    button(type="button", class="text-xs text-indigo-600 hover:underline", data-rename=(dir ? dir + "/" : "") + f) Đổi tên
+            each f in textFiles
+                div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide=isPage(f) ? "layout-template" : "file-code-2", class="w-4 h-4 text-indigo-500")
+                    a(href=base + "/edit?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f), target="_blank", rel="noopener", class="flex-1 text-gray-900 hover:text-indigo-600 break-all")= f
+                    if isPage(f)
+                        a(href=base + "/edit?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f) + "&view=1", target="_blank", rel="noopener", class="text-xs text-emerald-600 hover:underline") Xem
+                    button(type="button", class="text-xs text-indigo-600 hover:underline", data-rename-file=f) Đổi tên
+                    button(class="btn-del-file text-xs text-red-500 hover:underline", data-file=f) Xoá
+            each asset in assets
+                div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide=asset.kind === "image" ? "image" : asset.kind === "audio" ? "music" : "film", class="w-4 h-4 text-gray-500")
+                    a(href=base + "/player?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(asset.name), class="flex-1 text-gray-900 hover:text-indigo-600 break-all")= asset.name
+                    span(class="asset-pill " + asset.kind)= asset.kind === "image" ? "ảnh" : asset.kind === "audio" ? "âm thanh" : "video"
+                    if asset.cut
+                        if asset.state === "ready"
+                            span(class="text-xs text-gray-500", title="Đã cắt thành m3u8 + đoạn .ts mã hoá, tên gốc khai báo trong mnha-media.json") m3u8
+                        else
+                            span(class="text-xs text-amber-600", title="Chọn lại đúng file này ở khung tải lên để làm tiếp") dở dang #{asset.done}#{asset.total ? "/" + asset.total : ""} đoạn
+                    a(href=base + "/player?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(asset.name), class="text-xs text-indigo-600 hover:underline") Phát
+                    button(class="btn-del-asset text-xs text-red-500 hover:underline", data-name=asset.name, data-cut=asset.cut ? "1" : "0") Xoá
+            if !folders.length && !textFiles.length && !assets.length
+                div(class="px-4 py-10 text-center text-gray-500 text-sm") Thư mục trống. Hãy tạo file, thư mục hoặc tải ảnh/âm thanh/video lên.
+
+        //- tải lên
+        h2(class="mt-8 text-lg font-semibold text-gray-900") Tải ảnh / âm thanh / video lên
+        div(id="upDrop", class="up-drop mt-3")
+            p(class="text-sm font-medium") Kéo thả file vào đây hoặc
+                label(class="ml-1 underline cursor-pointer")
+                    | chọn file
+                    input(type="file", id="upInput", multiple, class="hidden", accept="image/*,audio/*,video/*,.mp3,.m4a,.aac,.flac,.opus,.mp4,.m4v,.mov,.mkv,.webm")
+            label(class="mt-2 inline-flex items-center gap-2 text-sm")
+                input(type="checkbox", id="upEnc", checked)
+                | Mã hoá ảnh (khuyên dùng — ảnh không mã hoá chỉ tối đa 3.5MB; âm thanh/video luôn được mã hoá)
+        ul(class="mt-2 text-xs text-gray-500 list-disc pl-5 space-y-1")
+            li ≤ 23MB: mã hoá trực tiếp, giữ nguyên đuôi. Lớn hơn: tự cắt m3u8 (mp3, aac, m4a, mp4/m4v/mov H.264 + AAC) — video mã hoá DRM AES-128, âm thanh mã hoá từng đoạn .ts; tên gốc vẫn dùng bình thường trong html (src="phim.mp4").
+            li File lớn được xử lý ngay trong trình duyệt (đọc từng đoạn, không nạp cả file) — giữ tab mở. Bị đứt thì chọn lại đúng file đó để làm tiếp.
+            li Nhúng vào html: <code>&lt;img src="anh.png"&gt;</code>, <code>&lt;audio controls src="nhac.mp3"&gt;</code>, <code>&lt;video controls src="phim.mp4"&gt;</code>. Khi xem trang, rê chuột vào ảnh/âm thanh/video sẽ có nút Tải.
+        div(id="upList", class="mt-3 grid gap-2")
+    script#payload(type="application/json")!= payloadJson
+    script(src="/js/tsMux.js")
+    script(src="/js/mediaUpload.js")
+    script(src="/js/htmlFiles.js")
+    script(src="/js/folderTools.js")

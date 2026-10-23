@@ -1,0 +1,39 @@
+extends ../layout
+
+block content
+    - var base = "/code/" + lang.key
+    - function fmt(n) { return n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB" }
+    div(class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8")
+        a(href=base + "/online", class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
+            i(data-lucide="arrow-left", class="w-4 h-4")
+            | Xem code trên mạng
+        h1(class="mt-3 text-2xl font-bold text-gray-900") Đọc thư mục trên mạng · #{lang.name}
+        nav(class="mt-2 text-sm text-gray-600 flex flex-wrap items-center gap-1")
+            each c, i in crumbs
+                if i
+                    span /
+                a(href=c.href, class="text-indigo-600 hover:underline break-all")= c.name
+        div(class="mt-4 flex flex-wrap gap-3")
+            a(href=web, target="_blank", rel="noopener noreferrer", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") Mở trên #{host}
+        p(class="mt-2 text-xs text-gray-500") Chỉ hiện file liên quan tới #{lang.name}: #{extList}. Bấm tên file để xem code (chỉ xem, vẫn chạy được).
+        div(class="mt-5 bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100")
+            if !list.length
+                div(class="px-4 py-10 text-center text-gray-500 text-sm") Thư mục này không có file #{extList} hoặc thư mục con nào.
+            each x in list
+                if x.type === "dir"
+                    a(href=x.href, class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                        i(data-lucide="folder", class="w-4 h-4 text-amber-500")
+                        span(class="font-medium text-gray-900 break-all")= x.name
+                else
+                    div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                        i(data-lucide="file-code-2", class="w-4 h-4 " + (x.runnable ? "text-indigo-500" : "text-gray-400"))
+                        a(href=x.href, class="flex-1 text-gray-900 hover:text-indigo-600 break-all")= x.name
+                        if x.runnable
+                            span(class="text-xs text-emerald-600") chạy được
+                        span(class="text-xs text-gray-400 whitespace-nowrap")= fmt(x.size)
+        if hidden
+            p(class="mt-2 text-xs text-gray-500") Đã ẩn #{hidden} file không liên quan tới #{lang.name}.
+        if truncated
+            p(class="mt-2 text-xs text-amber-600") Chỉ hiện 300 mục đầu tiên.
+    script.
+        if (window.lucide) lucide.createIcons();

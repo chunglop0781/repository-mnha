@@ -1,0 +1,57 @@
+extends ../layout
+
+block content
+    - var base = "/code/html"
+    - var extList = lang.exts.map(function (e) { return "." + e; }).join(", ")
+    div(class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8")
+        a(href=base, class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
+            i(data-lucide="arrow-left", class="w-4 h-4")
+            | Quay lại codes/html
+        h1(class="mt-3 text-2xl font-bold text-gray-900") Xem code trên mạng
+        p(class="mt-1 text-sm text-gray-600") Dán link trên GitHub hoặc GitLab (repo công khai). Chỉ XEM, không sửa. Trang html được hiển thị đầy đủ (tab View) cùng css, js, ảnh, âm thanh, video nằm trong cùng repo/thư mục.
+
+        //- 1) xem file
+        form(method="get", action=base + "/online", class="mt-5 bg-white rounded-2xl border border-gray-200 p-5")
+            label(for="srcUrl", class="block text-sm font-medium text-gray-800") Xem code — link FILE (#{extList})
+            div(class="mt-2 flex flex-col sm:flex-row gap-2")
+                input(id="srcUrl", name="url", type="url", required, value=url, autocomplete="off", spellcheck="false", placeholder="https://github.com/ten-ban/ten-repo/blob/main/index.html", class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300")
+                button(type="submit", class="px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700") Xem code
+            if error && errorFor !== "folder"
+                div(class="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2")= error
+
+        //- 2) xem thư mục
+        form(method="get", action=base + "/online/folder", class="mt-5 bg-white rounded-2xl border border-gray-200 p-5")
+            label(for="folderUrl", class="block text-sm font-medium text-gray-800") Xem thư mục — link THƯ MỤC (hoặc cả repo)
+            div(class="mt-2 flex flex-col sm:flex-row gap-2")
+                input(id="folderUrl", name="url", type="url", required, value=folderUrl, autocomplete="off", spellcheck="false", placeholder="https://github.com/ten-ban/ten-repo/tree/main/thu-muc", class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300")
+                button(type="submit", class="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") Xem thư mục
+            if error && errorFor === "folder"
+                div(class="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2")= error
+            p(class="mt-2 text-xs text-gray-500") Liệt kê file và thư mục con; mở từng trang html, xem code, hoặc phát ảnh / âm thanh / video bằng trình phát.
+
+        div(class="mt-5 bg-white rounded-2xl border border-gray-200 p-5 text-sm text-gray-700")
+            h2(class="font-semibold text-gray-900") Cách lấy link
+            div(class="mt-3 grid gap-4 sm:grid-cols-2")
+                div
+                    h3(class="font-medium text-gray-900 inline-flex items-center gap-1")
+                        i(data-lucide="github", class="w-4 h-4")
+                        | GitHub
+                    p(class="mt-1 text-xs text-gray-500") File:
+                    code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://github.com/&lt;user&gt;/&lt;repo&gt;/blob/&lt;nhánh&gt;/&lt;thư-mục&gt;/index.html
+                    p(class="mt-2 text-xs text-gray-500") Thư mục:
+                    code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://github.com/&lt;user&gt;/&lt;repo&gt;/tree/&lt;nhánh&gt;/&lt;thư-mục&gt;
+                div
+                    h3(class="font-medium text-gray-900 inline-flex items-center gap-1")
+                        i(data-lucide="gitlab", class="w-4 h-4")
+                        | GitLab
+                    p(class="mt-1 text-xs text-gray-500") File:
+                    code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://gitlab.com/&lt;nhóm&gt;/&lt;dự-án&gt;/-/blob/&lt;nhánh&gt;/index.html
+                    p(class="mt-2 text-xs text-gray-500") Thư mục:
+                    code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://gitlab.com/&lt;nhóm&gt;/&lt;dự-án&gt;/-/tree/&lt;nhánh&gt;/&lt;thư-mục&gt;
+            ul(class="mt-4 list-disc pl-5 space-y-1 text-xs text-gray-500")
+                li Repo phải <b>công khai (public)</b>. Link <code>/raw/</code> cũng dùng được cho file.
+                li Ảnh / âm thanh / video đã mã hoá bằng trang này sẽ được giải mã ở máy chủ khi xem (cần cùng khoá MEDIA_ENC_KEY của hệ thống); nếu không giải mã được sẽ báo lỗi rõ ràng. Ảnh/âm thanh/video bình thường (chưa mã hoá) xem thẳng, không cần giải mã.
+                li Xem thư mục dùng API công khai của GitHub/GitLab nên có thể bị giới hạn số lần xem trong 1 giờ — khi đó hãy thử lại sau.
+                li Tên nhánh có dấu "/" (vd <code>feature/abc</code>) chưa hỗ trợ.
+    script.
+        if (window.lucide) lucide.createIcons();

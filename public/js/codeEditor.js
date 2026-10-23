@@ -14,8 +14,13 @@
     function lines() { var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gutter.textContent = s; }
     ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', ed.value === saved); });
     ed.addEventListener('scroll', function () { gutter.scrollTop = ed.scrollTop; });
+    // Tab/Shift+Tab, tự đóng ngoặc, Enter giữ độ thụt, Ctrl+/ chú thích — dùng chung mọi ngôn ngữ (public/js/editorKit.js)
+    var kit = window.EditorKit ? EditorKit.attach(ed, { lang: P.lang, file: P.file, readOnly: !!P.online }) : null;
+    if ($('btnComment')) {
+        if (!kit || !kit.canComment) $('btnComment').classList.add('hidden');
+        else { $('btnComment').onmousedown = function (e) { e.preventDefault(); }; $('btnComment').onclick = function () { ed.focus(); kit.comment(); }; }
+    }
     ed.addEventListener('keydown', function (e) {
-        if (e.key === 'Tab' && !P.online) { e.preventDefault(); var s = ed.selectionStart; ed.value = ed.value.slice(0, s) + '    ' + ed.value.slice(ed.selectionEnd); ed.selectionStart = ed.selectionEnd = s + 4; ed.dispatchEvent(new Event('input')); }
         if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
         if (e.key === 'F5') { e.preventDefault(); run(); }
     });

@@ -30,16 +30,28 @@ const wrap = (fn) => async (req, res) => {
         res.status(status).json({ error: e.message, wake: e.wake || undefined });
     }
 };
-const langOf = (req) => { const l = LANGS[req.params.lang]; if (!l) throw Object.assign(new Error('Không có dạng code này'), { status: 404 }); return l; };
+const langOf = (req) => { const l = LANGS[req.params.lang]; if (!l || l.disabled) throw Object.assign(new Error('Không có dạng code này'), { status: 404 }); return l; };
 
 exports.hub = wrap(async (req, res) => {
-    res.render('code/hub', { title: 'Lập trình', user: req.user, langs: Object.values(LANGS) });
+    res.render('code/hub', { title: 'Lập trình', user: req.user, langs: Object.values(LANGS).filter((l) => !l.disabled) });
 });
 
 exports.files = wrap(async (req, res) => {
     const lang = langOf(req);
     const data = await store.list(uidOf(req), lang.key, req.query.dir || '');
-    res.render('code/files', { title: lang.name, user: req.user, lang, ...data });
+    res.render('code/files', { title: lang.name, user: req.user, lang, ...data, shareUrl: store.githubFolderUrl(uidOf(req), lang.key, data.dir) });
+});
+
+exports.renameFile = wrap(async (req, res) => {      // đổi tên file (cùng thư mục), mọi dạng code kể cả html
+    const lang = langOf(req);
+    const r = await store.renameFile(uidOf(req), lang.key, req.body.dir || '', req.body.file, req.body.name);
+    res.json({ ok: true, ...r });
+});
+
+exports.renameFolder = wrap(async (req, res) => {      // đổi tên thư mục (đoạn cuối của dir); dùng chung cho mọi dạng code kể cả html
+    const lang = langOf(req);
+    const r = await store.renameFolder(uidOf(req), lang.key, req.body.dir || '', req.body.name);
+    res.json({ ok: true, ...r });
 });
 
 exports.createFolder = wrap(async (req, res) => {
@@ -57,7 +69,7 @@ exports.createFile = wrap(async (req, res) => {
 });
 
 // Dựng trang trình soạn (dùng chung cho file của tôi và code xem trên mạng)
-function renderEditor(req, res, { lang, dir, file, content, results, online, githubUrl, shareLabel }) {
+function renderEditor(req, res, { lang, dir, file, content, results, online, githubUrl, shareLabel, folderUrl }) {
     const runnable = file.toLowerCase().endsWith('.' + lang.runExt);
     const cppMode = lang.key === 'cpp' ? CPP_RUN_MODE : null;
     if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin
@@ -65,15 +77,16 @@ function renderEditor(req, res, { lang, dir, file, content, results, online, git
         res.set('Cross-Origin-Embedder-Policy', 'credentialless');
     }
     const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode, online: online || null };
-    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, online: online || null, githubUrl, shareLabel, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
+    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, online: online || null, githubUrl, shareLabel, folderUrl: folderUrl || null, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
 }
 
 exports.edit = wrap(async (req, res) => {
     const lang = langOf(req);
     const dir = store.cleanDir(req.query.dir || '').join('/');
     const file = store.cleanFileName(lang.key, req.query.file);
-    const content = await store.readFile(uidOf(req), lang.key, dir, file);
+    let content = await store.readFile(uidOf(req), lang.key, dir, file);
     if (content === null) throw Object.assign(new Error('Không tìm thấy file'), { status: 404 });
+    content = store.displayText(file, content);      // .txt đang trắng → hiện tạm dòng gợi ý (không ghi lên GitHub cho tới khi bấm Lưu)
     const results = await store.listResults(uidOf(req), lang.key, 20).catch(() => []);
     renderEditor(req, res, { lang, dir, file, content, results, githubUrl: store.githubUrl(uidOf(req), lang.key, dir, file) });
 });
@@ -121,12 +134,43 @@ const originOf = (u) => { try { return u ? remoteSource.parseSourceUrl(u).web : 
 exports.online = wrap(async (req, res) => {
     const lang = langOf(req);
     const url = String(req.query.url || '').trim();
-    const form = (error, status = 200) => res.status(status).render('code/online', { title: 'Xem code trên mạng', user: req.user, lang, url, error });
+    const form = (error, status = 200) => res.status(status).render('code/online', { title: 'Xem code trên mạng', user: req.user, lang, url, folderUrl: '', error, errorFor: error ? 'file' : null });
     if (!url) return form(null);
     let o;
     try { o = await loadOnline(lang, url); }
     catch (e) { if (e.status && e.status < 500) return form(e.message, e.status === 404 ? 404 : 400); throw e; }
-    renderEditor(req, res, { lang, dir: '', file: o.file, content: o.content, results: [], online: o.parsed.web, githubUrl: o.parsed.web, shareLabel: o.parsed.host === 'gitlab' ? 'Nguồn (GitLab):' : 'Nguồn (GitHub):' });
+    renderEditor(req, res, {
+        lang, dir: '', file: o.file, content: o.content, results: [], online: o.parsed.web, githubUrl: o.parsed.web, shareLabel: o.parsed.host === 'gitlab' ? 'Nguồn (GitLab):' : 'Nguồn (GitHub):',
+        folderUrl: `/code/${lang.key}/online/folder?url=` + encodeURIComponent(remoteSource.treeWeb(o.parsed, o.parsed.pathSegs.slice(0, -1)))      // nút "Đọc thư mục" cạnh file đang xem
+    });
+});
+
+// ---- đọc thư mục trên mạng (GitHub / GitLab): chỉ liệt kê file LIÊN QUAN tới dạng code này (vd cpp: .cpp .txt .h .hpp...; emu8086: .asm)
+// Thư mục con vẫn hiện để đi sâu vào; file không liên quan (ảnh, .md, .exe...) bị ẩn và chỉ đếm số lượng.
+exports.onlineFolder = wrap(async (req, res) => {
+    const lang = langOf(req);
+    const base = '/code/' + lang.key;
+    const url = String(req.query.url || '').trim();
+    const form = (error, status = 400) => res.status(status).render('code/online', { title: 'Xem code trên mạng', user: req.user, lang, url: '', folderUrl: url, error, errorFor: 'folder' });
+    if (!url) return form('Hãy dán link thư mục.');
+    let f, items;
+    try { f = await remoteSource.resolveRef(remoteSource.parseFolderUrl(url)); items = await remoteSource.listFolder(f); }
+    catch (e) { if (e.status && e.status < 500) return form(e.message, e.status === 404 ? 404 : e.status === 429 ? 429 : 400); throw e; }
+    const extOf = (n) => { const i = String(n).lastIndexOf('.'); return i > 0 ? String(n).slice(i + 1).toLowerCase() : ''; };
+    const here = (segs) => base + '/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(f, segs));
+    const list = []; let hidden = 0;
+    for (const x of items) {
+        if (x.type === 'dir') { list.push({ name: x.name, type: 'dir', href: here([...f.dirSegs, x.name]) }); continue; }
+        if (!lang.exts.includes(extOf(x.name))) { hidden++; continue; }
+        const web = remoteSource.fromParts(f, [...f.dirSegs, x.name]).web;
+        list.push({ name: x.name, type: 'file', size: x.size, runnable: extOf(x.name) === lang.runExt, href: base + '/online?url=' + encodeURIComponent(web), web });
+    }
+    const crumbs = [{ name: f.base.join('/') + ' @ ' + f.ref, href: here([]) }];
+    f.dirSegs.forEach((s, i) => crumbs.push({ name: s, href: here(f.dirSegs.slice(0, i + 1)) }));
+    res.render('code/online-folder', {
+        title: 'Đọc thư mục trên mạng', user: req.user, lang, crumbs, list, hidden, web: remoteSource.treeWeb(f, f.dirSegs),
+        host: f.host === 'gitlab' ? 'GitLab' : 'GitHub', truncated: items.length >= 300, extList: lang.exts.map((e) => '.' + e).join(', ')
+    });
 });
 
 exports.history = wrap(async (req, res) => {
@@ -228,7 +272,7 @@ exports.stop = wrap(async (req, res) => {
 exports.saveOutputFile = wrap(async (req, res) => {   // lưu output.txt do chương trình ghi vào thư mục code
     const lang = langOf(req);
     if (lang.key !== 'cpp') throw Object.assign(new Error('Không hỗ trợ'), { status: 400 });
-    await store.writeFile(uidOf(req), lang.key, req.body.dir || '', req.body.name, req.body.content);
+    await store.writeFile(uidOf(req), lang.key, req.body.dir || '', req.body.name, req.body.content, { placeholder: false });
     res.json({ ok: true });
 });
 

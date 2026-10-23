@@ -387,6 +387,7 @@ async function readBinaryFile(path) {
             throw new Error(`Path không phải file: ${path}`);
         }
         if (!res.data.content) {
+            if (res.data.size === 0) return Buffer.alloc(0);      // file RỖNG hợp lệ (vd input.txt vừa tạo) — không phải "quá lớn"
             throw new Error(`File quá lớn để đọc qua Contents API: ${path}`);
         }
         return Buffer.from(res.data.content, 'base64');
@@ -412,6 +413,7 @@ async function readBinaryFileLarge(path) {
             throw new Error(`Path không phải file: ${path}`);
         }
         if (res.data.content) return Buffer.from(res.data.content, 'base64');
+        if (res.data.size === 0) return Buffer.alloc(0);
         if (!res.data.sha) throw new Error(`Không đọc được nội dung file: ${path}`);
         const blob = await octokit.git.getBlob({ owner, repo, file_sha: res.data.sha });
         return Buffer.from(blob.data.content, 'base64');
@@ -469,6 +471,63 @@ async function writeBinaryFileBig(path, buffer, commitMessage = 'Update file') {
         invalidateTree();
         return { path, sha: res.data.content.sha, commitSha: res.data.commit.sha };
     }, `writeBinaryBig:${path}`);
+}
+
+/**
+ * MỘT commit gồm nhiều thay đổi (Git Data API): ghi/đè file bằng Buffer hoặc bằng sha blob đã tạo sẵn (createBlob),
+ * và/hoặc xoá file. Dùng cho media tải lên (hàng trăm đoạn m3u8 + json đánh dấu trong 1 commit).
+ *   changes: [{ path, content: Buffer } | { path, sha } | { path, remove: true }]
+ * Đường dẫn muốn xoá mà không còn trên GitHub sẽ bị bỏ qua (createTree báo lỗi nếu xoá file không tồn tại).
+ * Tranh chấp nhánh (có commit khác chen vào → 422/409) thì lấy lại đầu nhánh và thử lại.
+ */
+async function commitFiles(changes, commitMessage = 'Update files') {
+    assertConfigured();
+    if (!Array.isArray(changes) || !changes.length) throw new Error('commitFiles: không có thay đổi nào');
+
+    let known = null;
+    if (changes.some((c) => c.remove)) {
+        const t = await getRepoTree({ force: true });
+        if (!t.truncated) known = t.files;
+    }
+    const entries = [];
+    for (const c of changes) {
+        if (!c || !c.path) throw new Error('commitFiles: thiếu path');
+        if (c.remove) {
+            if (known && !known.has(c.path)) continue;
+            entries.push({ path: c.path, mode: '100644', type: 'blob', sha: null });
+        } else if (c.sha) {
+            entries.push({ path: c.path, mode: '100644', type: 'blob', sha: c.sha });
+        } else {
+            if (!Buffer.isBuffer(c.content)) throw new Error('commitFiles: content phải là Buffer');
+            entries.push({ path: c.path, mode: '100644', type: 'blob', sha: await createBlob(c.content) });
+        }
+    }
+    if (!entries.length) return { commitSha: null, skipped: true };
+
+    const who = { name: 'MNHA Code Bot', email: 'bot@repository-mnha.local' };
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+            const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${branch}` });
+            const headSha = ref.data.object.sha;
+            const head = await octokit.git.getCommit({ owner, repo, commit_sha: headSha });
+            const tree = await octokit.git.createTree({ owner, repo, base_tree: head.data.tree.sha, tree: entries });
+            const commit = await octokit.git.createCommit({
+                owner, repo, message: commitMessage, tree: tree.data.sha, parents: [headSha], author: who, committer: who
+            });
+            await octokit.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: commit.data.sha, force: false });
+            invalidateTree();
+            return { commitSha: commit.data.sha };
+        } catch (e) {
+            lastErr = e;
+            const status = e.status || e.response?.status;
+            const retriable = status === 409 || status === 422 || (status >= 500 && status < 600);
+            console.warn(`⚠️ [commitFiles] lần ${attempt} lỗi: ${e.message} (status=${status})`);
+            if (!retriable || attempt === 5) throw e;
+            await sleep(BASE_DELAY * Math.pow(2, attempt - 1));
+        }
+    }
+    throw lastErr;
 }
 
 /**
@@ -544,6 +603,7 @@ module.exports = {
     createBlob,
     getBlobBuffer,
     writeBinaryFileBig,
+    commitFiles,
     deleteFile,
     fileExists,
     getFileSha,

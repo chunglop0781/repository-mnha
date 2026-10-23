@@ -9,14 +9,24 @@ block content
             i(data-lucide="arrow-left", class="w-4 h-4")
             | Quay lại codes/#{lang.key}
         h1(class="mt-3 text-2xl font-bold text-gray-900") Xem code trên mạng
-        p(class="mt-1 text-sm text-gray-600") Dán link file code (#{lang.name}) trên GitHub hoặc GitLab. Bạn chỉ XEM được code, không sửa được — nhưng bấm chạy để xem màn hình kết quả; mỗi lần chạy được lưu vào lịch sử (kèm link nguồn).
+        p(class="mt-1 text-sm text-gray-600") Chỉ XEM được code, không sửa được — nhưng bấm chạy để xem màn hình kết quả; mỗi lần chạy được lưu vào lịch sử (kèm link nguồn).
 
+        //- 1) xem tệp code (như cũ)
         form(method="get", action=base + "/online", class="mt-5 bg-white rounded-2xl border border-gray-200 p-5")
-            label(for="srcUrl", class="block text-sm font-medium text-gray-800") Link file trên github.com hoặc gitlab.com
+            label(for="srcUrl", class="block text-sm font-medium text-gray-800") Xem tệp code — link FILE #{lang.name} trên github.com hoặc gitlab.com
             div(class="mt-2 flex flex-col sm:flex-row gap-2")
                 input(id="srcUrl", name="url", type="url", required, value=url, autocomplete="off", spellcheck="false", placeholder="https://github.com/ten-ban/ten-repo/blob/main/bai1." + ext, class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300")
                 button(type="submit", class="px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700") Xem code
-            if error
+            if error && errorFor !== "folder"
+                div(class="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2")= error
+
+        //- 2) đọc thư mục (chỉ hiện file liên quan tới dạng code này)
+        form(method="get", action=base + "/online/folder", class="mt-5 bg-white rounded-2xl border border-gray-200 p-5")
+            label(for="folderUrl", class="block text-sm font-medium text-gray-800") Đọc thư mục — link THƯ MỤC (hoặc cả repo); chỉ hiện file #{extList}
+            div(class="mt-2 flex flex-col sm:flex-row gap-2")
+                input(id="folderUrl", name="url", type="url", required, value=folderUrl, autocomplete="off", spellcheck="false", placeholder="https://github.com/ten-ban/ten-repo/tree/main/thu-muc", class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300")
+                button(type="submit", class="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") Đọc thư mục
+            if error && errorFor === "folder"
                 div(class="mt-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2")= error
 
         div(class="mt-5 bg-white rounded-2xl border border-gray-200 p-5 text-sm text-gray-700")
@@ -41,7 +51,8 @@ block content
                     p(class="mt-2 text-xs text-gray-500") Dạng:
                     code(class="block text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 break-all") https://gitlab.com/&lt;nhóm&gt;/&lt;dự-án&gt;/-/blob/&lt;nhánh&gt;/bai1.#{ext}
             ul(class="mt-4 list-disc pl-5 space-y-1 text-xs text-gray-500")
-                li Link phải trỏ tới 1 <b>file</b> (không phải thư mục) và repo phải <b>công khai (public)</b>.
+                li "Xem tệp code": link phải trỏ tới 1 <b>file</b>; "Đọc thư mục": link trỏ tới <b>thư mục</b> (hoặc gốc repo) — repo phải <b>công khai (public)</b>.
+                li Đọc thư mục dùng API công khai của GitHub/GitLab nên có thể bị giới hạn số lần/giờ — khi đó hãy thử lại sau hoặc dán link từng file.
                 li Link <code>/raw/</code> (GitHub: raw.githubusercontent.com, GitLab: <code>/-/raw/</code>) cũng dùng được.
                 li Chỉ nhận file #{extList}, tối đa 200KB.
                 li Nếu chương trình ghi file (vd <code>output.txt</code>), file đó tự được tạo trong <code>codes/#{lang.key}/tren-mang/</code> của bạn.
