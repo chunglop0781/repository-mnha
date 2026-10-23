@@ -386,17 +386,28 @@
     }
     function prefix(tr, extra) { var p = new Float64Array(tr.n + 1); for (var i = 0; i < tr.n; i++) p[i + 1] = p[i] + tr.sizes[i] + (extra || 0); return p; }
 
-    /** Video (+ tiếng): chia theo GOP — đoạn nào cũng bắt đầu ở keyframe, dài ≈ segSec và không vượt segBytes. */
+    /** Video (+ tiếng): chia theo GOP — đoạn bắt đầu ở keyframe, dài ≈ segSec và không vượt segBytes; GOP nặng hơn 1 đoạn thì tự chia tiếp ở ranh giới khung hình. */
     function planVideo(v, a, opts, fmp4) {
         var n = v.n, ts = v.timescale, cap = Math.floor(opts.segBytes * 0.9);
         var vp = prefix(v, 0), ap = a ? prefix(a, !fmp4 && a.audio && a.audio.codec === 'aac' ? 7 : 0) : null;
         var tAt = function (i) { return i >= n ? (v.dts[n - 1] + (v.lastDelta || 0)) / ts : v.dts[i] / ts; };
+        var est = function (x, y) { var t0 = tAt(x), t1 = tAt(y), ab = a ? ap[lowerBound(a, t1)] - ap[lowerBound(a, t0)] : 0; return vp[y] - vp[x] + ab + Math.ceil((vp[y] - vp[x]) * 0.02); };
         var gops = []; for (var i = 0; i < n; i++) if (v.sync[i] || i === 0) gops.push(i);
         var plan = [], cur = null;
         for (var g = 0; g < gops.length; g++) {
             var gs = gops[g], ge = g + 1 < gops.length ? gops[g + 1] : n, t0 = tAt(gs), t1 = tAt(ge);
             var ab = a ? ap[lowerBound(a, t1)] - ap[lowerBound(a, t0)] : 0, gb = vp[ge] - vp[gs] + ab + Math.ceil((vp[ge] - vp[gs]) * 0.02);
-            if (gb > cap) throw fail('Một nhóm khung hình (GOP) dài ' + (t1 - t0).toFixed(1) + ' giây nặng ~' + (gb / 1048576).toFixed(1) + 'MB, vượt giới hạn mỗi đoạn ' + (opts.segBytes / 1048576).toFixed(1) + 'MB. Hãy nén lại video (bitrate thấp hơn hoặc keyframe dày hơn, vd mỗi 2 giây).');
+            if (gb > cap) {          // GOP nặng hơn 1 đoạn → tự chia nhỏ ở ranh giới khung hình (không bắt người dùng nén lại)
+                if (cur) { plan.push(cur); cur = null; }
+                for (var s0 = gs; s0 < ge;) {
+                    var s1 = s0 + 1;
+                    if (est(s0, s1) > cap) throw fail('Một khung hình đơn lẻ nặng ~' + (est(s0, s1) / 1048576).toFixed(1) + 'MB, vượt giới hạn mỗi đoạn ' + (opts.segBytes / 1048576).toFixed(1) + 'MB. Hãy nén lại video với bitrate thấp hơn.');
+                    while (s1 < ge && est(s0, s1 + 1) <= cap && tAt(s1) - tAt(s0) < opts.segSec) s1++;
+                    plan.push({ vs: s0, ve: s1, t0: tAt(s0), t1: tAt(s1), bytes: est(s0, s1) });
+                    s0 = s1;
+                }
+                continue;
+            }
             if (cur && (cur.t1 - cur.t0 >= opts.segSec || cur.bytes + gb > cap)) { plan.push(cur); cur = null; }
             if (!cur) cur = { vs: gs, ve: ge, t0: t0, t1: t1, bytes: 0 };
             cur.ve = ge; cur.t1 = t1; cur.bytes += gb;
@@ -518,7 +529,7 @@
             for (var k = skip || 0; k < plan.length; k++) {
                 var s = plan[k], vs = await readSamples(reader, v, s.vs, s.ve), i;
                 var vt = { id: 1, base: v.dts[s.vs], dur: [], size: [], flags: [], cto: [] }, tracks = [vt], datas = vs.slice();
-                for (i = s.vs; i < s.ve; i++) { vt.dur.push(sampleDur(v, i)); vt.size.push(vs[i - s.vs].length); vt.flags.push(v.sync[i] || i === s.vs ? 0x02000000 : 0x01010000); vt.cto.push(v.cto[i]); }
+                for (i = s.vs; i < s.ve; i++) { vt.dur.push(sampleDur(v, i)); vt.size.push(vs[i - s.vs].length); vt.flags.push(v.sync[i] || i === 0 ? 0x02000000 : 0x01010000); vt.cto.push(v.cto[i]); }
                 if (a) {
                     var a0 = k === 0 ? 0 : lowerBound(a, s.t0), a1 = k === plan.length - 1 ? a.n : lowerBound(a, s.t1);
                     if (a1 > a0) {

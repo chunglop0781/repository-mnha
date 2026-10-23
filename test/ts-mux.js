@@ -111,9 +111,15 @@ const frames = (f) => Number(JSON.parse(execFileSync('ffprobe', ['-v', 'error', 
   assert(Math.max(...r.segs.map((s) => s.dur)) < 6.5);
   console.log('✔ video bitrate cao: ' + r.segs.length + ' đoạn, mỗi đoạn ≤ ' + (SEG / 1048576).toFixed(1) + 'MB (dài nhất ' + Math.max(...r.segs.map((s) => s.bytes.length)) + ' byte)');
 
-  // GOP quá lớn → báo lỗi rõ ràng ngay lúc mở (trước khi tải lên)
-  await assert.rejects(TsMux.open(reader(P('h.mp4')), 'mp4', { segSec: 6, segBytes: 100 * 1024 }), /GOP/);
-  console.log('✔ GOP quá lớn → báo lỗi sớm, nói cách sửa');
+  // GOP nặng hơn 1 đoạn → TỰ CHIA NHỎ (không báo lỗi): đoạn nào cũng ≤ giới hạn, đủ khung hình, ffmpeg giải mã sạch
+  LIMIT = 600 * 1024;
+  r = await cut(P('h.mp4'), 'mp4', { segSec: 6, segBytes: 600 * 1024 });
+  const cs = check('video-split', r.segs, { dur: 30, codecs: 'h264' });
+  assert.strictEqual(frames(cs.out), frames(P('h.mp4')), 'chia GOP: số khung hình phải bằng bản gốc');
+  LIMIT = SEG;
+  console.log('✔ GOP ~750KB, giới hạn đoạn 600KB → tự chia ' + r.segs.length + ' đoạn, khung hình khớp ' + frames(cs.out));
+  await assert.rejects(TsMux.open(reader(P('h.mp4')), 'mp4', { segSec: 6, segBytes: 20 * 1024 }), /khung hình đơn lẻ/);
+  console.log('✔ chỉ báo lỗi khi 1 khung hình đơn lẻ đã vượt giới hạn');
 
   // ---------------- video codec THẾ HỆ MỚI → fMP4 (init + moof/mdat), không chuyển mã
   const fm = async (name, vArgs, aArgs, expectCodecs, expectCodecString) => {
@@ -145,6 +151,14 @@ const frames = (f) => Number(JSON.parse(execFileSync('ffprobe', ['-v', 'error', 
   await fm('hevc', ['-c:v', 'libx265', '-preset', 'ultrafast', '-x265-params', 'keyint=50:min-keyint=50:bframes=2:log-level=error', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p'], ['-c:a', 'aac'], 'aac,hevc', /^hvc1\.1\.6\.L\d+\.[0-9A-F.]+,mp4a\.40\.2$/);
   await fm('vp9', ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-g', '50'], ['-c:a', 'libopus'], 'opus,vp9', /^vp09\.00\.\d\d\.08,opus$/);
   await fm('h264opus', ['-c:v', 'libx264', '-preset', 'veryfast', '-g', '50', '-bf', '2', '-pix_fmt', 'yuv420p'], ['-c:a', 'libopus'], 'h264,opus', /^avc1\.[0-9A-F]{6},opus$/);
+  // fMP4 với GOP lớn (keyframe thưa, bitrate cao) → tự chia, vẫn đủ khung hình
+  ff('-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=25:duration=30', '-c:v', 'libsvtav1', '-preset', '10', '-g', '250', '-pix_fmt', 'yuv420p', '-b:v', '5000k', P('bigav1.mp4'));
+  { const f = await TsMux.open(reader(P('bigav1.mp4')), 'mp4', { segSec: 6, segBytes: 500 * 1024 });
+    const sg = []; for await (const x of f.segments(0)) sg.push(x);
+    sg.forEach((x) => assert(x.bytes.length <= 500 * 1024, 'đoạn fMP4 vượt giới hạn ' + x.bytes.length));
+    const o = P('bigav1-cut.mp4'); fs.writeFileSync(o, Buffer.concat([Buffer.from(f.init), ...sg.map((x) => Buffer.from(x.bytes))]));
+    const d = spawnSync('ffmpeg', ['-v', 'error', '-i', o, '-f', 'null', '-'], { encoding: 'utf8' }); assert.strictEqual(d.stderr.trim(), '', d.stderr.slice(0, 400));
+    assert.strictEqual(frames(o), frames(P('bigav1.mp4'))); console.log('✔ fMP4 AV1 GOP lớn (keyframe mỗi 10s) → tự chia ' + sg.length + ' đoạn ≤ 500KB, khung hình khớp'); }
   // H.264 + AAC vẫn đi đường MPEG-TS như cũ
   assert.strictEqual((await TsMux.open(reader(P('v.mp4')), 'mp4')).fmt, 'ts');
 
