@@ -33,7 +33,11 @@
                     if (!window.Hls || !Hls.isSupported()) { showErr(box, 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).'); return; }
                     if (hls) { hls.destroy(); hls = null; }
                     hls = new Hls({ maxBufferLength: 30 });
-                    hls.on(Hls.Events.ERROR, function (ev, d) { if (d && d.fatal) showErr(box, 'Lỗi phát m3u8: ' + (d.details || d.type)); });
+                    hls.on(Hls.Events.ERROR, function (ev, d) {
+                        if (!d || !d.fatal) return;
+                        var codecErr = /Codec|codec|bufferAddCodec|manifestIncompatible/.test(d.details || '') || (d.type === Hls.ErrorTypes.MEDIA_ERROR && /codec|MIME|type/i.test((d.error && d.error.message) || ''));
+                        showErr(box, codecErr ? 'Trình duyệt/thiết bị này không giải mã được codec video của file (H.265/AV1/VP9 cần trình duyệt hoặc phần cứng hỗ trợ). Hãy thử Chrome/Edge/Safari mới, hoặc tải về để mở bằng phần mềm khác.' : 'Lỗi phát m3u8: ' + (d.details || d.type));
+                    });
                     hls.loadSource(it.url); hls.attachMedia(el);
                     el.play && el.play().catch(function () { });
                 });

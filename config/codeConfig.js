@@ -71,7 +71,7 @@ const MEDIA = {
     PREVIEW_TTL_MS: 12 * 60 * 60 * 1000,
     HLSJS_URL: process.env.HLSJS_URL || 'https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js',
     HLS_AUDIO_EXTS: ['mp3', 'aac', 'm4a'],     // âm thanh > DIRECT_MAX cắt được
-    HLS_VIDEO_EXTS: ['mp4', 'm4v', 'mov']      // video > DIRECT_MAX cắt được (H.264 + AAC/MP3, mp4 thường — không phân mảnh sẵn)
+    HLS_VIDEO_EXTS: ['mp4', 'm4v', 'mov']      // video > DIRECT_MAX cắt được (H.264 → TS; H.265/AV1/VP9 → fMP4; âm thanh AAC/MP3/Opus/FLAC; mp4 thường — không phân mảnh sẵn)
 };
 const mediaKind = (name) => {
     const e = String(name || '').split('.').pop().toLowerCase();

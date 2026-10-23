@@ -5,10 +5,15 @@
 //
 //   Hỗ trợ:  .mp3 · .aac (ADTS) · .m4a  → đoạn TS chỉ có âm thanh
 //            .mp4 / .m4v / .mov (H.264 + AAC hoặc MP3, KHÔNG phân mảnh) → đoạn TS có hình + tiếng, cắt ở khung hình khoá (keyframe)
-//   Ra:      mỗi đoạn là 1 file .ts độc lập (PAT+PMT ở đầu, PTS liên tục giữa các đoạn) — ghép các đoạn lại = 1 luồng MPEG-TS hợp lệ.
+//            .mp4 / .m4v / .mov codec THẾ HỆ MỚI: H.265/HEVC (hvc1/hev1) · AV1 (av01) · VP9 (vp09)  (+ AAC / MP3 / Opus / FLAC)
+//                → đoạn fMP4 (CMAF: init.mp4 + moof/mdat), KHÔNG chuyển mã — chép nguyên mẫu nén, chỉ bọc lại; cắt ở keyframe.
+//                  (HLS chỉ cho phép AV1 trong fMP4, không có trong MPEG-TS.)  H.264 + âm thanh lạ (vd Opus) cũng đi đường fMP4.
+//   Ra:      TS  : mỗi đoạn là 1 file .ts độc lập (PAT+PMT ở đầu, PTS liên tục giữa các đoạn) — ghép các đoạn lại = 1 luồng MPEG-TS hợp lệ.
+//            fMP4: f.init (ftyp+moov, dùng chung) + mỗi đoạn là 1 cặp moof+mdat — init + các đoạn ghép lại = 1 file mp4 phân mảnh hợp lệ.
 //
 //   API:  const f = await TsMux.open(reader, 'mp4', { segSec: 6, segBytes: 3.5*1024*1024 });
-//         for await (const seg of f.segments(skip)) { seg.i, seg.bytes (Uint8Array TS), seg.dur (giây), seg.progress (0..1) }
+//         f.fmt = 'ts' | 'fmp4' ; f.init (chỉ fmp4) ; f.codecString (vd 'av01.0.08M.08,mp4a.40.2')
+//         for await (const seg of f.segments(skip)) { seg.i, seg.bytes (Uint8Array TS hoặc moof+mdat), seg.dur (giây), seg.progress (0..1) }
 //   reader = { size, read(start, end) → Promise<Uint8Array> }     (TsMux.fileReader(File) dùng cho trình duyệt)
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -20,6 +25,7 @@
     var PTS_OFFSET = 90000;                  // mốc thời gian bắt đầu 1 giây (tránh PTS âm)
     var START4 = [0, 0, 0, 1], AUD = new Uint8Array([0, 0, 0, 1, 0x09, 0xF0]);
     var ST_H264 = 0x1B, ST_AAC = 0x0F, ST_MP1 = 0x03, ST_MP2 = 0x04;
+    var FMP4_VIDEO = ['avc1', 'avc3', 'hvc1', 'hev1', 'av01', 'vp09'], FMP4_AUDIO = ['mp4a', 'Opus', 'fLaC'];
 
     function fail(msg) { return new Error(msg); }
     function concat(list, total) {
@@ -253,8 +259,7 @@
         if (sf === 15 || sf > 12 || ch < 1) throw fail('Thông số AAC chưa hỗ trợ (tần số/số kênh).');
         return { codec: 'aac', obj: obj, sf: sf, ch: ch };
     }
-    function parseVideoEntry(b, entry, fourcc) {
-        if (fourcc !== 'avc1' && fourcc !== 'avc3') throw fail('Video dùng codec "' + fourcc.trim() + '" — chỉ cắt (m3u8) được H.264 (avc1) + AAC. Hãy chuyển video sang mp4 H.264/AAC.');
+    function parseVideoEntry(b, entry) {
         var avcC = child(b, { body: entry.body + 78, end: entry.end }, 'avcC');
         if (!avcC) throw fail('Không đọc được cấu hình H.264 (avcC).');
         var p = avcC.body + 4, lengthSize = (b[p] & 3) + 1, nSps = b[p + 1] & 31, sps = [], pps = [];
@@ -276,10 +281,19 @@
         if (!stsd || !stts || !stsz || !stsc || !(stco || co64)) throw fail('Bảng mẫu (sample table) của file mp4 không đầy đủ' + (child(b, stbl, 'stz2') ? ' (stz2 chưa hỗ trợ)' : '') + '.');
         var entry = children(b, stsd.body + 8, stsd.end)[0]; if (!entry) throw fail('Thiếu mô tả mẫu (stsd).');
         var fourcc = str4(b, entry.start + 4), tr = { type: handler === 'vide' ? 'video' : 'audio', timescale: timescale, fourcc: fourcc };
-        if (tr.type === 'video') tr.avc = parseVideoEntry(b, entry, fourcc);
-        else {
-            if (fourcc !== 'mp4a') throw fail('Âm thanh trong file dùng codec "' + fourcc.trim() + '" — chỉ cắt được AAC (mp4a) hoặc MP3.');
-            tr.audio = parseAudioEntry(b, entry);
+        tr.entryBytes = b.slice(entry.start, entry.end);          // nguyên mô tả mẫu (avc1/av01/hvc1/mp4a/Opus…) — chép vào init.mp4 khi đóng gói fMP4
+        if (tr.type === 'video') {
+            if (fourcc === 'avc1' || fourcc === 'avc3') tr.avc = parseVideoEntry(b, entry);
+            else if (FMP4_VIDEO.indexOf(fourcc) < 0) throw fail('Video dùng codec "' + fourcc.trim() + '" — chỉ cắt (m3u8) được H.264 (avc1), H.265/HEVC (hvc1, hev1), AV1 (av01) và VP9 (vp09). Hãy chuyển video sang mp4 một trong các codec này (H.264/AAC là chuẩn nhất, phát được ở mọi trình duyệt).');
+            tr.width = u16(b, entry.body + 24); tr.height = u16(b, entry.body + 26);
+        } else {
+            if (fourcc === 'mp4a') {
+                try { tr.audio = parseAudioEntry(b, entry); tr.fmp4Ok = true; } catch (e) { tr.audioErr = e; tr.fmp4Ok = false; }
+            } else if (FMP4_AUDIO.indexOf(fourcc) >= 0) {
+                tr.fmp4Ok = true; tr.audioErr = fail('Âm thanh "' + fourcc.trim() + '" chỉ đóng gói được vào fMP4 (không vào MPEG-TS).');
+            } else {
+                tr.fmp4Ok = false; tr.audioErr = fail('Âm thanh trong file dùng codec "' + fourcc.trim() + '" — chỉ cắt được AAC (mp4a), MP3, Opus hoặc FLAC.');
+            }
         }
         // kích thước mẫu
         var cs = u32(b, stsz.body + 4), n = u32(b, stsz.body + 8), sizes = new Uint32Array(n);
@@ -373,9 +387,9 @@
     function prefix(tr, extra) { var p = new Float64Array(tr.n + 1); for (var i = 0; i < tr.n; i++) p[i + 1] = p[i] + tr.sizes[i] + (extra || 0); return p; }
 
     /** Video (+ tiếng): chia theo GOP — đoạn nào cũng bắt đầu ở keyframe, dài ≈ segSec và không vượt segBytes. */
-    function planVideo(v, a, opts) {
+    function planVideo(v, a, opts, fmp4) {
         var n = v.n, ts = v.timescale, cap = Math.floor(opts.segBytes * 0.9);
-        var vp = prefix(v, 0), ap = a ? prefix(a, a.audio.codec === 'aac' ? 7 : 0) : null;
+        var vp = prefix(v, 0), ap = a ? prefix(a, !fmp4 && a.audio && a.audio.codec === 'aac' ? 7 : 0) : null;
         var tAt = function (i) { return i >= n ? (v.dts[n - 1] + (v.lastDelta || 0)) / ts : v.dts[i] / ts; };
         var gops = []; for (var i = 0; i < n; i++) if (v.sync[i] || i === 0) gops.push(i);
         var plan = [], cur = null;
@@ -422,6 +436,103 @@
         };
         return { total: plan.length, gen: gen };
     }
+    // ------------------------------------------------------------------ fMP4 (CMAF) — cho H.265 / AV1 / VP9 (và H.264 + âm thanh lạ)
+    //   Không chuyển mã: chép nguyên mẫu nén từ mp4 gốc, chỉ dựng init (ftyp+moov rỗng bảng mẫu) + moof/mdat cho từng đoạn.
+    function be32(n) { n = n >>> 0; return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]; }
+    function be64(n) { return be32(Math.floor(n / 4294967296)).concat(be32(n % 4294967296)); }
+    function ascii(t) { return [t.charCodeAt(0), t.charCodeAt(1), t.charCodeAt(2), t.charCodeAt(3)]; }
+    function mkBox(type, parts) {
+        var arr = [], total = 8, i;
+        for (i = 0; i < parts.length; i++) { var x = parts[i] instanceof Uint8Array ? parts[i] : Uint8Array.from(parts[i]); arr.push(x); total += x.length; }
+        var out = new Uint8Array(total), p = 8;
+        out.set(be32(total), 0); out.set(ascii(type), 4);
+        for (i = 0; i < arr.length; i++) { out.set(arr[i], p); p += arr[i].length; }
+        return out;
+    }
+    function fullBox(type, ver, flags, parts) { return mkBox(type, [[ver, (flags >> 16) & 255, (flags >> 8) & 255, flags & 255]].concat(parts)); }
+    var MATRIX = [].concat(be32(0x10000), be32(0), be32(0), be32(0), be32(0x10000), be32(0), be32(0), be32(0), be32(0x40000000));
+
+    function trakBox(tr, id) {
+        var isV = tr.type === 'video';
+        var tkhd = fullBox('tkhd', 0, 7, [be32(0), be32(0), be32(id), be32(0), be32(0), [0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0], isV ? [0, 0, 0, 0] : [1, 0, 0, 0],
+            MATRIX, be32(isV ? tr.width * 65536 : 0), be32(isV ? tr.height * 65536 : 0)]);
+        var mdhd = fullBox('mdhd', 0, 0, [be32(0), be32(0), be32(tr.timescale), be32(0), [0x55, 0xC4, 0, 0]]);
+        var hdlr = fullBox('hdlr', 0, 0, [be32(0), ascii(isV ? 'vide' : 'soun'), be32(0), be32(0), be32(0), Array.prototype.map.call(isV ? 'VideoHandler\0' : 'SoundHandler\0', function (c) { return c.charCodeAt(0); })]);
+        var dinf = mkBox('dinf', [fullBox('dref', 0, 0, [be32(1), fullBox('url ', 0, 1, [])])]);
+        var stbl = mkBox('stbl', [fullBox('stsd', 0, 0, [be32(1), tr.entryBytes]), fullBox('stts', 0, 0, [be32(0)]), fullBox('stsc', 0, 0, [be32(0)]), fullBox('stsz', 0, 0, [be32(0), be32(0)]), fullBox('stco', 0, 0, [be32(0)])]);
+        var minf = mkBox('minf', [isV ? fullBox('vmhd', 0, 1, [[0, 0, 0, 0, 0, 0, 0, 0]]) : fullBox('smhd', 0, 0, [[0, 0, 0, 0]]), dinf, stbl]);
+        return mkBox('trak', [tkhd, mkBox('mdia', [mdhd, hdlr, minf])]);
+    }
+    /** init segment: ftyp + moov (track 1 = video, track 2 = âm thanh nếu có). */
+    function buildInit(v, a) {
+        var ids = a ? 2 : 1;
+        var mvhd = fullBox('mvhd', 0, 0, [be32(0), be32(0), be32(1000), be32(0), be32(0x10000), [1, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], MATRIX, new Uint8Array(24), be32(ids + 1)]);
+        var traks = [trakBox(v, 1)], trex = [fullBox('trex', 0, 0, [be32(1), be32(1), be32(0), be32(0), be32(0)])];
+        if (a) { traks.push(trakBox(a, 2)); trex.push(fullBox('trex', 0, 0, [be32(2), be32(1), be32(0), be32(0), be32(0x02000000)])); }
+        var ftyp = mkBox('ftyp', [ascii('iso6'), be32(1), ascii('iso6'), ascii('isom'), ascii('mp41')]);
+        return concat([ftyp, mkBox('moov', [mvhd].concat(traks, [mkBox('mvex', trex)]))]);
+    }
+    /** 1 đoạn = moof + mdat. tracks: [{id, base, dur[], size[], flags[]|null, cto[]|null}], datas: mẫu theo thứ tự track. */
+    function buildFragment(seq, tracks, datas) {
+        function moof(offs) {
+            var trafs = tracks.map(function (t, k) {
+                var hasF = !!t.flags, hasC = !!t.cto, fl = 0x1 | 0x100 | 0x200 | (hasF ? 0x400 : 0) | (hasC ? 0x800 : 0), body = [be32(t.dur.length), be32(offs[k])];
+                for (var i = 0; i < t.dur.length; i++) { body.push(be32(t.dur[i]), be32(t.size[i])); if (hasF) body.push(be32(t.flags[i])); if (hasC) body.push(be32(t.cto[i])); }
+                return mkBox('traf', [fullBox('tfhd', 0, 0x020000, [be32(t.id)]), fullBox('tfdt', 1, 0, [be64(t.base)]), fullBox('trun', hasC ? 1 : 0, fl, body)]);
+            });
+            return mkBox('moof', [fullBox('mfhd', 0, 0, [be32(seq)])].concat(trafs));
+        }
+        var zero = tracks.map(function () { return 0; }), len = moof(zero).length, offs = [], acc = len + 8, k;
+        for (k = 0; k < tracks.length; k++) { offs.push(acc); for (var i = 0; i < tracks[k].size.length; i++) acc += tracks[k].size[i]; }
+        var mdatHead = new Uint8Array(8); mdatHead.set(be32(acc - len), 0); mdatHead.set(ascii('mdat'), 4);
+        return concat([moof(offs), mdatHead].concat(datas));
+    }
+    function sampleDur(tr, i) { return i + 1 < tr.n ? tr.dts[i + 1] - tr.dts[i] : tr.lastDelta; }
+
+    /** Chuỗi codec (RFC 6381) cho video / âm thanh — để báo/ghi lại; trình phát tự đọc lại từ init. */
+    function codecOf(tr) {
+        var e = tr.entryBytes, hdr = 86, kids = children(e, hdr, e.length), cfg = function (t) { for (var i = 0; i < kids.length; i++) if (kids[i].type === t) return kids[i]; return null; };
+        var h2 = function (n) { return (n < 16 ? '0' : '') + n.toString(16).toUpperCase(); }, d2 = function (n) { return (n < 10 ? '0' : '') + n; }, c;
+        if (tr.type === 'audio') {
+            if (tr.fourcc === 'Opus') return 'opus'; if (tr.fourcc === 'fLaC') return 'flac';
+            return tr.audio ? (tr.audio.codec === 'aac' ? 'mp4a.40.2' : 'mp4a.6B') : 'mp4a.40.2';
+        }
+        if (tr.fourcc === 'av01' && (c = cfg('av1C'))) { var b1 = e[c.body + 1], b2 = e[c.body + 2]; return 'av01.' + (b1 >> 5) + '.' + d2(b1 & 31) + ((b2 & 128) ? 'H' : 'M') + '.' + d2((b2 & 32) ? 12 : (b2 & 64) ? 10 : 8); }
+        if ((tr.fourcc === 'hvc1' || tr.fourcc === 'hev1') && (c = cfg('hvcC'))) {
+            var o = c.body, comp = 0, x, sp = e[o + 1] >> 6, rev = 0;
+            for (x = 0; x < 32; x++) { var bit = (u32(e, o + 2) >>> x) & 1; rev = ((rev << 1) | bit) >>> 0; }
+            comp = rev.toString(16).toUpperCase();
+            var cons = []; for (x = 0; x < 6; x++) cons.push(h2(e[o + 6 + x])); while (cons.length > 1 && cons[cons.length - 1] === '00') cons.pop();
+            return tr.fourcc + '.' + ['', 'A', 'B', 'C'][sp] + (e[o + 1] & 31) + '.' + comp + '.' + ((e[o + 1] & 32) ? 'H' : 'L') + e[o + 12] + '.' + cons.join('.');
+        }
+        if (tr.fourcc === 'vp09' && (c = cfg('vpcC'))) return 'vp09.' + d2(e[c.body + 4]) + '.' + d2(e[c.body + 5]) + '.' + d2(e[c.body + 6] >> 4);
+        if ((tr.fourcc === 'avc1' || tr.fourcc === 'avc3') && (c = cfg('avcC'))) return tr.fourcc + '.' + h2(e[c.body + 1]) + h2(e[c.body + 2]) + h2(e[c.body + 3]);
+        return tr.fourcc;
+    }
+
+    function fmp4Segments(reader, mp4, opts, skip) {
+        var v = mp4.video, a = mp4.audio, plan = planVideo(v, a, opts, true);
+        var shift = (v.dts[0] + v.cto[0]) / v.timescale;       // mp4 gốc dùng edit list để khung hình đầu rơi vào t=0; ta không có edit list → dời tiếng cùng lượng để hình–tiếng giữ nguyên lệch
+        var init = buildInit(v, a);
+        var gen = async function* () {
+            for (var k = skip || 0; k < plan.length; k++) {
+                var s = plan[k], vs = await readSamples(reader, v, s.vs, s.ve), i;
+                var vt = { id: 1, base: v.dts[s.vs], dur: [], size: [], flags: [], cto: [] }, tracks = [vt], datas = vs.slice();
+                for (i = s.vs; i < s.ve; i++) { vt.dur.push(sampleDur(v, i)); vt.size.push(vs[i - s.vs].length); vt.flags.push(v.sync[i] || i === s.vs ? 0x02000000 : 0x01010000); vt.cto.push(v.cto[i]); }
+                if (a) {
+                    var a0 = k === 0 ? 0 : lowerBound(a, s.t0), a1 = k === plan.length - 1 ? a.n : lowerBound(a, s.t1);
+                    if (a1 > a0) {
+                        var as = await readSamples(reader, a, a0, a1), at = { id: 2, base: Math.round(a.dts[a0] + shift * a.timescale), dur: [], size: [], flags: null, cto: null };
+                        for (var j = a0; j < a1; j++) { at.dur.push(sampleDur(a, j)); at.size.push(as[j - a0].length); datas.push(as[j - a0]); }
+                        tracks.push(at);
+                    }
+                }
+                yield { i: k, bytes: buildFragment(k + 1, tracks, datas), dur: Math.round((s.t1 - s.t0) * 1000) / 1000, progress: (k + 1) / plan.length };
+            }
+        };
+        return { total: plan.length, gen: gen, init: init };
+    }
+
     function mp4AudioFrames(reader, a) {
         return (async function* () {
             var BATCH = 400, size = reader.size, i = 0;
@@ -443,18 +554,29 @@
         ext = String(ext || '').toLowerCase();
         if (ext === 'mp3' || ext === 'aac') {
             var parse = ext === 'mp3' ? mp3Header : adtsHeader;
-            return { kind: 'audio', total: null, codecs: { audio: ext }, segments: function (skip) { return audioSegments(scanFrames(reader, parse), opts, reader.size, skip || 0); } };
+            return { kind: 'audio', fmt: 'ts', total: null, codecs: { audio: ext }, segments: function (skip) { return audioSegments(scanFrames(reader, parse), opts, reader.size, skip || 0); } };
         }
         if (ext === 'mp4' || ext === 'm4v' || ext === 'mov' || ext === 'm4a') {
             var mp4 = await parseMp4(reader);
             if (ext === 'm4a') {
                 if (!mp4.audio) throw fail('File m4a không có luồng âm thanh.');
-                return { kind: 'audio', total: null, codecs: { audio: mp4.audio.audio.codec }, segments: function (skip) { return audioSegments(mp4AudioFrames(reader, mp4.audio), opts, reader.size, skip || 0); } };
+                if (!mp4.audio.audio) throw mp4.audio.audioErr || fail('Âm thanh m4a dùng codec không hỗ trợ (chỉ AAC hoặc MP3).');
+                return { kind: 'audio', fmt: 'ts', total: null, codecs: { audio: mp4.audio.audio.codec }, segments: function (skip) { return audioSegments(mp4AudioFrames(reader, mp4.audio), opts, reader.size, skip || 0); } };
             }
             if (!mp4.video) throw fail('File không có luồng video.');
             if (mp4.video.n < 1) throw fail('File video không có khung hình nào.');
-            var vs = videoSegments(reader, mp4, opts, 0);
-            return { kind: 'video', total: vs.total, codecs: { video: 'h264', audio: mp4.audio ? mp4.audio.audio.codec : null }, segments: function (skip) { return videoSegments(reader, mp4, opts, skip || 0).gen(); } };
+            var a = mp4.audio && mp4.audio.n > 0 ? mp4.audio : null;
+            if (mp4.video.avc && (!a || a.audio)) {                      // H.264 + AAC/MP3 → MPEG-TS (như trước)
+                var tsIn = { video: mp4.video, audio: a }, vs = videoSegments(reader, tsIn, opts, 0);
+                return { kind: 'video', fmt: 'ts', total: vs.total, codecs: { video: 'h264', audio: a ? a.audio.codec : null }, segments: function (skip) { return videoSegments(reader, tsIn, opts, skip || 0).gen(); } };
+            }
+            if (a && !a.fmp4Ok) throw a.audioErr;                         // codec hình mới (hoặc âm thanh lạ) → fMP4, nhưng âm thanh phải đóng gói được
+            var fm = fmp4Segments(reader, { video: mp4.video, audio: a }, opts, 0), vc = codecOf(mp4.video), ac = a ? codecOf(a) : null;
+            return {
+                kind: 'video', fmt: 'fmp4', total: fm.total, init: fm.init, codecString: ac ? vc + ',' + ac : vc,
+                codecs: { video: mp4.video.fourcc.trim(), audio: a ? a.fourcc.trim() : null },
+                segments: function (skip) { return fmp4Segments(reader, { video: mp4.video, audio: a }, opts, skip || 0).gen(); }
+            };
         }
         throw fail('Đuôi .' + ext + ' chưa hỗ trợ cắt thành m3u8 (hỗ trợ: mp3, aac, m4a, mp4, m4v, mov).');
     }

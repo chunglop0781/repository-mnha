@@ -1,6 +1,6 @@
 // public/js/mediaUpload.js — tải ảnh / âm thanh / video lên (xem services/code/mediaService.js). Cần public/js/tsMux.js.
 //   ≤ ngưỡng (23MB)  : chia phần ≤ 3.5MB → server mã hoá → ghép lại thành 1 file cùng tên (đuôi gốc).
-//   > ngưỡng         : ĐỌC TỪNG LÁT file gốc, cắt đoạn MPEG-TS (m3u8), gửi từng đoạn để mã hoá, cứ vài đoạn ghi 1 lô + đánh dấu tiến độ
+//   > ngưỡng         : ĐỌC TỪNG LÁT file gốc, cắt đoạn MPEG-TS (m3u8) — video H.265/AV1/VP9 thì cắt đoạn fMP4 + init.mp4 —, gửi từng đoạn để mã hoá, cứ vài đoạn ghi 1 lô + đánh dấu tiến độ
 //                      vào mnha-media.json → đứt mạng/đóng trang thì mở lại, chọn đúng file đó là làm tiếp từ chỗ đã đánh dấu.
 //   MnhaUpload.upload(file, { dir, encrypt, onProgress(text, fraction), confirmOverwrite(name) }) → Promise<{ name, plan }>
 (function () {
@@ -9,6 +9,7 @@
 
     function extOf(n) { var i = String(n).lastIndexOf('.'); return i > 0 ? String(n).slice(i + 1).toLowerCase() : ''; }
     function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function b64(u8) { var s = '', i; for (i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192)); return btoa(s); }
     function qs(o) { return Object.keys(o).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(o[k]); }).join('&'); }
 
     function request(method, url, body, isBin) {
@@ -60,7 +61,7 @@
         if (!window.TsMux) throw new Error('Thiếu bộ cắt (tsMux.js) — tải lại trang.');
         var ext = extOf(init.name);
         var f = await TsMux.open(TsMux.fileReader(file), ext, { segSec: init.segSec, segBytes: init.segBytes });
-        var skip = init.resume ? init.resume.done : 0;
+        var fm = f.fmt === 'fmp4', skip = init.resume ? init.resume.done : 0;
         var base = { dir: opt.dir, name: init.name, uploadId: init.uploadId };
         var done = {}, committed = skip, active = new Set(), fail = null, chain = Promise.resolve();
 
@@ -71,10 +72,11 @@
             recs.forEach(function (r) { delete done[r.i]; });
             committed += recs.length;
             var body = { dir: opt.dir, name: init.name, uploadId: init.uploadId, srcName: file.name, src: { size: file.size, lastModified: file.lastModified }, segs: recs, final: !!final };
+            if (fm) { body.fmt = 'fmp4'; body.init = b64(f.init); body.codecs = f.codecString; }
             chain = chain.then(function () { return retry(function () { return request('POST', '/code/html/upload/commit', body); }, final ? 'hoàn tất' : 'ghi lô đoạn'); }).catch(function (e) { fail = fail || e; });
         }
         function sendSeg(seg) {
-            var q = qs({ dir: base.dir, name: base.name, uploadId: base.uploadId, i: seg.i });
+            var q = qs(fm ? { dir: base.dir, name: base.name, uploadId: base.uploadId, i: seg.i, fmt: 'fmp4' } : { dir: base.dir, name: base.name, uploadId: base.uploadId, i: seg.i });
             return retry(function () { return request('PUT', '/code/html/upload/seg?' + q, seg.bytes, true); }, 'đoạn ' + (seg.i + 1))
                 .then(function (r) { done[seg.i] = { i: seg.i, dur: seg.dur, plainSize: r.plainSize, sha: r.sha, size: r.size, receipt: r.receipt }; });
         }
@@ -85,7 +87,7 @@
             if (fail) break;
             const p = sendSeg(seg).catch(function (e) { fail = fail || e; }).then(function () { active.delete(p); commit(false); });
             active.add(p);
-            opt.onProgress('Đã cắt & mã hoá ' + (seg.i + 1) + (f.total ? '/' + f.total : '') + ' đoạn (m3u8)', Math.min(0.98, seg.progress));
+            opt.onProgress('Đã cắt & mã hoá ' + (seg.i + 1) + (f.total ? '/' + f.total : '') + ' đoạn (m3u8' + (fm ? ' · fMP4 ' + (f.codecs.video || '') : '') + ')', Math.min(0.98, seg.progress));
         }
         await Promise.all(Array.from(active));
         if (!fail) { commit(true); }

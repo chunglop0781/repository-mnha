@@ -6,6 +6,7 @@
 //                              POST commit từng lô: ghi đoạn + m3u8 + ĐÁNH DẤU TIẾN ĐỘ vào mnha-media.json (1 commit/lô) → có thể làm tiếp nếu đứt.
 //        âm thanh: đoạn .ts mã hoá 2 chiều trực tiếp (MNHAENC1)       — Node giải mã từng đoạn khi trình phát xin (previewServer)
 //        video   : đoạn .ts mã hoá AES-128 chuẩn HLS (DRM), khoá ghi trong json (đã mã hoá 2 chiều) — hls.js giải mã khi phát, key.bin do Node trả
+//                  codec thế hệ mới (H.265 / AV1 / VP9): đoạn fMP4 .m4s (moof+mdat) cùng AES-128; init.mp4 (chỉ cấu hình codec, không mã hoá) lưu base64 trong json
 //   mnha-media.json (cùng thư mục file gốc) khai báo "song.mp3" → playlist _media/song_mp3/index.m3u8 (đuôi gốc được khai báo là m3u8).
 //   Biên nhận HMAC ngăn client nhét sha blob bất kỳ (của người khác) vào commit.
 'use strict';
@@ -69,7 +70,7 @@ async function init(uid, b) {
         const ok = c.kind === 'audio' ? MEDIA.HLS_AUDIO_EXTS : MEDIA.HLS_VIDEO_EXTS;
         if (!ok.includes(c.ext)) {
             throw bad(`File ${c.kind === 'audio' ? 'âm thanh' : 'video'} trên ${Math.round(MEDIA.DIRECT_MAX / 1048576)}MB chỉ cắt (m3u8) được với đuôi: ${ok.map((e) => '.' + e).join(', ')}` +
-                `${c.kind === 'video' ? ' (H.264 + AAC, mp4 thường — không phải mp4 phân mảnh)' : ''}. Định dạng ${'.' + c.ext} chỉ tải được khi ≤ ${Math.round(MEDIA.DIRECT_MAX / 1048576)}MB — hãy chuyển sang ${c.kind === 'audio' ? 'mp3' : 'mp4 (H.264/AAC)'}.`);
+                `${c.kind === 'video' ? ' (H.264 / H.265 / AV1 / VP9 + AAC, mp4 thường — không phải mp4 phân mảnh)' : ''}. Định dạng ${'.' + c.ext} chỉ tải được khi ≤ ${Math.round(MEDIA.DIRECT_MAX / 1048576)}MB — hãy chuyển sang ${c.kind === 'audio' ? 'mp3' : 'mp4 (H.264/AAC)'}.`);
         }
     }
     const m = await readManifest(uid, c.dirSegs);
@@ -145,6 +146,14 @@ async function finish(uid, b) {
 
 // ---------------------------------------------------------------- hls (> 23MB): đoạn + commit
 const segRel = (id, file) => `${MEDIA.HIDDEN_DIR}/${id}/${file}`;
+const isFmp4 = (f) => f === 'fmp4';
+/** init.mp4 do client gửi (base64): phải là ftyp + moov, nhỏ (chỉ cấu hình codec, không có mẫu nén). */
+function checkInit(b64) {
+    if (typeof b64 !== 'string' || !b64 || b64.length > 180000) throw bad('Thiếu hoặc quá lớn init segment (fMP4).');
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length < 32 || buf.length > 131072 || buf.toString('latin1', 4, 8) !== 'ftyp' || buf.indexOf('moov', 8, 'latin1') < 0) throw bad('Init segment (fMP4) không hợp lệ.');
+    return buf.toString('base64');
+}
 async function putSeg(uid, q, body) {
     const c = ctxOf(uid, q);
     const uploadId = checkUploadId(q.uploadId);
@@ -152,10 +161,14 @@ async function putSeg(uid, q, body) {
     if (body.length > MEDIA.SEG_MAX_BYTES) throw bad('Đoạn quá lớn (tối đa ' + (MEDIA.SEG_MAX_BYTES / 1048576).toFixed(1) + 'MB).', 413);
     if (c.kind !== 'audio' && c.kind !== 'video') throw bad('Chỉ âm thanh/video mới cắt đoạn.');
     if (!MEDIA.HLS_AUDIO_EXTS.concat(MEDIA.HLS_VIDEO_EXTS).includes(c.ext)) throw bad('File này không cắt được.');
-    if (body.length % 188 !== 0 || body[0] !== 0x47) throw bad('Đoạn không phải MPEG-TS hợp lệ (độ dài phải chia hết 188 và bắt đầu bằng 0x47).');
+    const fm = isFmp4(q.fmt);
+    if (fm) {
+        if (c.kind !== 'video') throw bad('Chỉ video mới có đoạn fMP4.');
+        if (body.length < 16 || body.toString('latin1', 4, 8) !== 'moof') throw bad('Đoạn không phải fMP4 hợp lệ (phải bắt đầu bằng hộp moof).');
+    } else if (body.length % 188 !== 0 || body[0] !== 0x47) throw bad('Đoạn không phải MPEG-TS hợp lệ (độ dài phải chia hết 188 và bắt đầu bằng 0x47).');
     const i = Number(q.i);
     if (!Number.isInteger(i) || i < 0 || i > 200000) throw bad('Số thứ tự đoạn không hợp lệ.');
-    const id = mediaId(c.name), file = hls.segName(i);
+    const id = mediaId(c.name), file = hls.segName(i, fm ? 'm4s' : 'ts');
     // âm thanh: mã hoá 2 chiều trực tiếp (Node giải mã khi phát) · video: AES-128 chuẩn HLS (khoá DRM trong json)
     const data = c.kind === 'audio' ? mc.encryptBuffer(body) : mc.encryptHlsSegment(body, mc.hlsKey(uid, uploadId), i);
     const sha = await gh.createBlob(data);
@@ -175,16 +188,23 @@ async function commit(uid, b) {
     if (segs.length > 400) throw bad('Lô quá lớn.');
     if (!MEDIA.HLS_AUDIO_EXTS.concat(MEDIA.HLS_VIDEO_EXTS).includes(c.ext)) throw bad('Đuôi file không cắt được.');
 
+    const fm = isFmp4(b.fmt), segExt = fm ? 'm4s' : 'ts';
+    if (fm && c.kind !== 'video') throw bad('Chỉ video mới có đoạn fMP4.');
     const m = await readManifest(uid, c.dirSegs);
     let e = m.files[c.name];
     const cont = e && e.uploadId === uploadId && e.state === 'uploading';
     const changes = [];
+    if (cont && (e.segExt || 'ts') !== segExt) throw bad('Kiểu đoạn không khớp với lần tải dở trước — hãy tải lại file từ đầu.');
     if (!cont) {            // lần commit đầu của lần tải này: bỏ bản cũ cùng tên (đoạn thừa, file trực tiếp)
         if (Number(segs[0] && segs[0].i) !== 0 && segs.length) throw bad('Lô đầu tiên phải bắt đầu từ đoạn 0.');
-        const keep = new Set(segs.map((s) => join(base, segRel(id, hls.segName(Number(s.i))))));
+        const keep = new Set(segs.map((s) => join(base, segRel(id, hls.segName(Number(s.i), segExt)))));
         changes.push(...(await removalChanges(uid, c.dirSegs, c.name, { keepPrefixPaths: keep })).out);
-        e = { name: c.name, id, kind: c.kind, mode: c.kind === 'audio' ? 'hls-audio' : 'hls-video', mime: MIME_OF[c.ext] || 'application/octet-stream', segExt: 'ts', size: srcSize, durs: [], sizes: [], done: 0, createdAt: new Date().toISOString() };
+        e = { name: c.name, id, kind: c.kind, mode: c.kind === 'audio' ? 'hls-audio' : 'hls-video', mime: MIME_OF[c.ext] || 'application/octet-stream', segExt, size: srcSize, durs: [], sizes: [], done: 0, createdAt: new Date().toISOString() };
         if (c.kind === 'video') e.drm = { method: 'AES-128', key: mc.wrapKey(mc.hlsKey(uid, uploadId)) };
+    }
+    if (fm) {               // fMP4: init.mp4 lưu base64 trong json (gửi lại ở mọi lô — nhỏ, và là cùng 1 giá trị khi làm tiếp)
+        e.init = checkInit(b.init);
+        if (typeof b.codecs === 'string' && /^[A-Za-z0-9_.,+\- ]{1,120}$/.test(b.codecs)) e.codecs = b.codecs;
     }
     let expect = e.done || 0;
     for (const s of segs) {
@@ -192,7 +212,7 @@ async function commit(uid, b) {
         if (i !== expect) throw bad(`Các đoạn phải liên tục: cần đoạn ${expect}, nhận ${s.i}.`);
         const dur = Number(s.dur), plain = Number(s.plainSize);
         if (!(dur > 0 && dur < 600) || !(plain > 0)) throw bad('Thời lượng/kích thước đoạn không hợp lệ.');
-        const path = join(base, segRel(id, hls.segName(i)));
+        const path = join(base, segRel(id, hls.segName(i, segExt)));
         if (!mc.verifyReceipt(s.receipt, uid, uploadId, path, String(s.sha), Number(s.size))) throw bad(`Biên nhận đoạn ${i} không hợp lệ.`, 403);
         changes.push({ path, sha: String(s.sha) });
         e.durs[i] = Math.round(dur * 1000) / 1000; e.sizes[i] = plain; expect++;
@@ -204,7 +224,7 @@ async function commit(uid, b) {
     if (final) {
         if (!e.done) throw bad('Chưa có đoạn nào.');
         e.state = 'ready'; e.total = e.done; e.duration = Math.round(e.durs.reduce((a, x) => a + x, 0) * 1000) / 1000; e.playlist = segRel(id, 'index.m3u8');
-        changes.push({ path: join(base, e.playlist), content: Buffer.from(hls.build(e, { seg: (i) => hls.segName(i), key: 'key.bin' })) });
+        changes.push({ path: join(base, e.playlist), content: Buffer.from(hls.build(e, { seg: (i) => hls.segName(i, e.segExt), key: 'key.bin', init: 'init.mp4' })) });
         if ((await gh.getRepoTree()).files.has(c.filePath)) changes.push({ path: c.filePath, remove: true });      // "đọc trực tiếp" ưu tiên → bỏ file trực tiếp cũ cùng tên
     } else { e.state = 'uploading'; e.total = Number(b.total) > 0 ? Number(b.total) : undefined; }
     m.files[c.name] = e; m.v = 1;

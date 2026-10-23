@@ -115,16 +115,51 @@ const frames = (f) => Number(JSON.parse(execFileSync('ffprobe', ['-v', 'error', 
   await assert.rejects(TsMux.open(reader(P('h.mp4')), 'mp4', { segSec: 6, segBytes: 100 * 1024 }), /GOP/);
   console.log('✔ GOP quá lớn → báo lỗi sớm, nói cách sửa');
 
-  // codec không hỗ trợ → báo lỗi
-  ff('-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=3', '-c:v', 'libx265', '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1', P('x.mp4'));
-  await assert.rejects(TsMux.open(reader(P('x.mp4')), 'mp4'), /H\.264/);
+  // ---------------- video codec THẾ HỆ MỚI → fMP4 (init + moof/mdat), không chuyển mã
+  const fm = async (name, vArgs, aArgs, expectCodecs, expectCodecString) => {
+    const src = P(name + '.mp4');
+    ff('-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25:duration=30', '-f', 'lavfi', '-i', 'sine=frequency=700:duration=30', ...vArgs, ...aArgs, '-shortest', '-movflags', '+faststart', src);
+    const f = await TsMux.open(reader(src), 'mp4', { segSec: 6 });
+    assert.strictEqual(f.fmt, 'fmp4'); assert.strictEqual(f.kind, 'video');
+    assert(expectCodecString.test(f.codecString), name + ': codecString ' + f.codecString);
+    const segs = []; for await (const s of f.segments(0)) segs.push(s);
+    assert.strictEqual(segs.length, f.total);
+    segs.forEach((s) => { assert.strictEqual(Buffer.from(s.bytes).toString('latin1', 4, 8), 'moof'); assert(s.bytes.length <= SEG, name + ': đoạn vượt giới hạn'); });
+    const out = P(name + '-cut.mp4'); fs.writeFileSync(out, Buffer.concat([Buffer.from(f.init), ...segs.map((s) => Buffer.from(s.bytes))]));
+    const dec = spawnSync('ffmpeg', ['-v', 'error', '-i', out, '-f', 'null', '-'], { encoding: 'utf8' });
+    assert.strictEqual(dec.stderr.trim(), '', name + ': ffmpeg báo lỗi giải mã fMP4:\n' + dec.stderr.slice(0, 500));
+    assert.strictEqual(frames(out), frames(src), name + ': số khung hình phải bằng bản gốc');
+    const pr = probe(out); assert(Math.abs(Number(pr.format.duration) - 30) < 0.5, name + ': thời lượng ' + pr.format.duration);
+    assert.strictEqual(pr.streams.map((s) => s.codec_name).sort().join(','), expectCodecs, name + ': codec');
+    const t = pr.streams.map((s) => Number(s.start_time)); assert(Math.abs(t[0] - t[1]) < 0.02, name + ': hình–tiếng lệch ' + t.join('/'));
+    for (const s of segs) {                      // từng đoạn + init tự giải mã được
+      const g = P(name + '-s' + s.i + '.mp4'); fs.writeFileSync(g, Buffer.concat([Buffer.from(f.init), Buffer.from(s.bytes)]));
+      const d = spawnSync('ffmpeg', ['-v', 'error', '-i', g, '-f', 'null', '-'], { encoding: 'utf8' });
+      assert.strictEqual(d.stderr.trim(), '', name + ' đoạn ' + s.i + ': ' + d.stderr.slice(0, 300));
+    }
+    const part = []; for await (const s of f.segments(2)) part.push(s);
+    assert.strictEqual(part.length, segs.length - 2); assert(Buffer.from(part[0].bytes).equals(Buffer.from(segs[2].bytes)), name + ': skip phải cho đoạn giống hệt');
+    console.log('✔ fMP4 ' + name + ' → ' + segs.length + ' đoạn, ' + f.codecString + ', khung hình khớp ' + frames(out) + ', ffmpeg giải mã sạch');
+  };
+  await fm('av1', ['-c:v', 'libsvtav1', '-preset', '10', '-g', '50', '-pix_fmt', 'yuv420p'], ['-c:a', 'aac', '-b:a', '96k'], 'aac,av1', /^av01\.0\.\d\dM\.08,mp4a\.40\.2$/);
+  await fm('hevc', ['-c:v', 'libx265', '-preset', 'ultrafast', '-x265-params', 'keyint=50:min-keyint=50:bframes=2:log-level=error', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p'], ['-c:a', 'aac'], 'aac,hevc', /^hvc1\.1\.6\.L\d+\.[0-9A-F.]+,mp4a\.40\.2$/);
+  await fm('vp9', ['-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-g', '50'], ['-c:a', 'libopus'], 'opus,vp9', /^vp09\.00\.\d\d\.08,opus$/);
+  await fm('h264opus', ['-c:v', 'libx264', '-preset', 'veryfast', '-g', '50', '-bf', '2', '-pix_fmt', 'yuv420p'], ['-c:a', 'libopus'], 'h264,opus', /^avc1\.[0-9A-F]{6},opus$/);
+  // H.264 + AAC vẫn đi đường MPEG-TS như cũ
+  assert.strictEqual((await TsMux.open(reader(P('v.mp4')), 'mp4')).fmt, 'ts');
+
+  // codec không hỗ trợ (ProRes / âm thanh lạ) → báo lỗi, nói rõ codec nào được
+  ff('-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=3', '-c:v', 'prores_ks', '-pix_fmt', 'yuv422p10le', P('x.mov'));
+  await assert.rejects(TsMux.open(reader(P('x.mov')), 'mov'), /AV1.*VP9|H\.264.*AV1/);
+  ff('-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25:duration=3', '-f', 'lavfi', '-i', 'sine=duration=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'ac3', P('ac3.mp4'));
+  await assert.rejects(TsMux.open(reader(P('ac3.mp4')), 'mp4'), /AAC.*MP3.*Opus/);
   fs.writeFileSync(P('junk.mp4'), Buffer.alloc(2000, 7));
   await assert.rejects(TsMux.open(reader(P('junk.mp4')), 'mp4'), /moov/);
   await assert.rejects(TsMux.open(reader(P('a.mp3')), 'wav'), /chưa hỗ trợ/);
   // mp4 phân mảnh
   ff('-i', P('v.mp4'), '-c', 'copy', '-movflags', 'frag_keyframe+empty_moov', P('frag.mp4'));
   await assert.rejects(TsMux.open(reader(P('frag.mp4')), 'mp4'), /phân mảnh/);
-  console.log('✔ H.265 / file hỏng / đuôi lạ / mp4 phân mảnh → lỗi rõ ràng');
+  console.log('✔ ProRes / âm thanh AC-3 / file hỏng / đuôi lạ / mp4 phân mảnh → lỗi rõ ràng');
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('OK ts-mux');

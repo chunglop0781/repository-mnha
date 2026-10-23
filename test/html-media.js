@@ -54,7 +54,7 @@ const handler = preview.createHandler({ gh: fakeGh, mount: '/preview' });
 const server = http.createServer((req, res) => { req.url = req.url.replace(/^\/preview/, '') || '/'; handler(req, res); });
 let PORT;
 const get = (u, headers = {}, method = 'GET') => new Promise((ok, no) => {
-  const r = http.request({ host: '127.0.0.1', port: PORT, path: u, method, headers }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => ok({ status: res.statusCode, headers: res.headers, body: Buffer.concat(c) })); });
+  const r = http.request({ host: '127.0.0.1', port: PORT, path: u, method, headers, agent: false }, (res) => { const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => ok({ status: res.statusCode, headers: res.headers, body: Buffer.concat(c) })); });
   r.on('error', no); r.end();
 });
 const json = (r) => JSON.parse(r.body.toString());
@@ -85,11 +85,12 @@ async function uploadHls(dir, name, file, { batch = 3, stopAfter = null, uploadI
   const skip = init.resume ? init.resume.done : 0;
   let pending = [], sent = 0;
   const flush = async (final) => {
-    await ms.commit(UID, { dir, name, uploadId: init.uploadId, srcName: name, src: { size, lastModified }, segs: pending, final, total: f.total || undefined });
+    const fm = f.fmt === 'fmp4' ? { fmt: 'fmp4', init: Buffer.from(f.init).toString('base64'), codecs: f.codecString } : {};
+    await ms.commit(UID, { dir, name, uploadId: init.uploadId, srcName: name, src: { size, lastModified }, segs: pending, final, total: f.total || undefined, ...fm });
     pending = [];
   };
   for await (const seg of f.segments(skip)) {
-    const r = await ms.putSeg(UID, { dir, name, uploadId: init.uploadId, i: seg.i }, Buffer.from(seg.bytes));
+    const r = await ms.putSeg(UID, { dir, name, uploadId: init.uploadId, i: seg.i, ...(f.fmt === 'fmp4' ? { fmt: 'fmp4' } : {}) }, Buffer.from(seg.bytes));
     pending.push({ i: seg.i, dur: seg.dur, plainSize: r.plainSize, sha: r.sha, size: r.size, receipt: r.receipt });
     sent++;
     if (stopAfter && sent >= stopAfter) { await flush(false); return { init, stopped: true }; }
@@ -218,6 +219,47 @@ async function uploadHls(dir, name, file, { batch = 3, stopAfter = null, uploadI
   dec = spawnSync('ffmpeg', ['-v', 'error', '-i', path.join(tmp, 'v.ts'), '-f', 'null', '-'], { encoding: 'utf8' }); assert.strictEqual(dec.stderr.trim(), '');
   assert(r.body[0] === 0x47);
   console.log('✔ ?dl=1 video → giải mã AES từng đoạn rồi ghép thành mpegts hợp lệ, tên giữ đuôi .mp4');
+
+  // ============ 5b) video codec THẾ HỆ MỚI (AV1 / HEVC) → đoạn fMP4 .m4s + init.mp4, vẫn AES-128; ffmpeg giải mã HLS bằng playlist + key + init do máy chủ trả
+  for (const [cname, vArgs, want] of [
+    ['av1', ['-c:v', 'libsvtav1', '-preset', '10', '-g', '50', '-pix_fmt', 'yuv420p', '-b:v', '900k'], /^av01\./],
+    ['hevc', ['-c:v', 'libx265', '-preset', 'ultrafast', '-x265-params', 'keyint=50:min-keyint=50:log-level=error', '-tag:v', 'hvc1', '-pix_fmt', 'yuv420p', '-b:v', '900k'], /^hvc1\./]]) {
+    const src = path.join(tmp, cname + '.mp4');
+    ff('-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25:duration=30', '-f', 'lavfi', '-i', 'sine=frequency=500:duration=30', ...vArgs, '-c:a', 'aac', '-shortest', '-movflags', '+faststart', src);
+    await uploadHls('web', cname + '.mp4', src, { batch: 2 });
+    const man = JSON.parse(blobs.get(files.get(`${UID}/codes/html/web/mnha-media.json`))), e5 = man.files[cname + '.mp4'];
+    assert(e5.state === 'ready' && e5.mode === 'hls-video' && e5.segExt === 'm4s' && e5.drm.method === 'AES-128', cname + ': json');
+    assert(want.test(e5.codecs), cname + ': codecs ' + e5.codecs);
+    assert(files.has(`${UID}/codes/html/web/_media/${cname}_mp4/seg00000.m4s`) && !files.has(`${UID}/codes/html/web/_media/${cname}_mp4/seg00000.ts`), cname + ': đoạn lưu dạng .m4s');
+    const raw0 = blobs.get(files.get(`${UID}/codes/html/web/_media/${cname}_mp4/seg00000.m4s`));
+    assert(raw0.toString('latin1', 4, 8) !== 'moof' && raw0.length % 16 === 0, cname + ': đoạn fMP4 trên GitHub là AES-CBC, không lộ moof');
+    const pl5 = (await get(U('web/' + cname + '.mp4'))).body.toString();
+    assert(/#EXT-X-VERSION:7/.test(pl5) && /#EXT-X-MAP:URI="[^"]*\/_media\/[a-z0-9]+_mp4\/init\.mp4"/.test(pl5), cname + ': playlist có EXT-X-MAP');
+    assert(pl5.indexOf('#EXT-X-MAP') < pl5.indexOf('#EXT-X-KEY'), cname + ': MAP đặt trước KEY → init không bị mã hoá');
+    const ir = await get(pl5.match(/#EXT-X-MAP:URI="([^"]+)"/)[1]); assert(ir.status === 200 && ir.headers['content-type'] === 'video/mp4' && ir.body.toString('latin1', 4, 8) === 'ftyp', cname + ': init.mp4');
+    const key5 = (await get(pl5.match(/#EXT-X-KEY:METHOD=AES-128,URI="([^"]+)"/)[1])).body;
+    const hd5 = path.join(tmp, 'hls-' + cname); fs.mkdirSync(hd5);
+    fs.writeFileSync(path.join(hd5, 'key.bin'), key5); fs.writeFileSync(path.join(hd5, 'init.mp4'), ir.body);
+    let loc = pl5.replace(/URI="[^"]*key\.bin"/, 'URI="key.bin"').replace(/#EXT-X-MAP:URI="[^"]+"/, '#EXT-X-MAP:URI="init.mp4"');
+    const segs5 = pl5.split('\n').filter((l) => l && !l.startsWith('#'));
+    assert(segs5.every((l) => /seg\d{5}\.m4s$/.test(l)), cname + ': URL đoạn .m4s');
+    for (let i = 0; i < segs5.length; i++) { const x = await get(segs5[i]); assert.strictEqual(x.status, 200); fs.writeFileSync(path.join(hd5, `s${i}.m4s`), x.body); loc = loc.replace(segs5[i], `s${i}.m4s`); }
+    fs.writeFileSync(path.join(hd5, 'index.m3u8'), loc);
+    const wl = ['-allowed_extensions', 'ALL', '-protocol_whitelist', 'file,crypto,data'];
+    const d5 = spawnSync('ffmpeg', ['-v', 'error', ...wl, '-i', path.join(hd5, 'index.m3u8'), '-f', 'null', '-'], { encoding: 'utf8' });
+    assert.strictEqual(d5.stderr.trim(), '', cname + ': ffmpeg giải mã HLS fMP4 AES-128: ' + d5.stderr.slice(0, 400));
+    const du5 = Number(execFileSync('ffprobe', ['-v', 'error', ...wl, '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(hd5, 'index.m3u8')]).toString());
+    assert(Math.abs(du5 - 30) < 0.6, cname + ': thời lượng HLS ' + du5);
+    const dl5 = await get(U('web/' + cname + '.mp4?dl=1'));
+    assert(dl5.headers['content-type'] === 'video/mp4' && /filename="/.test(dl5.headers['content-disposition']) && dl5.body.toString('latin1', 4, 8) === 'ftyp', cname + ': tải về = fMP4');
+    fs.writeFileSync(path.join(tmp, cname + '-dl.mp4'), dl5.body);
+    const dd5 = spawnSync('ffmpeg', ['-v', 'error', '-i', path.join(tmp, cname + '-dl.mp4'), '-f', 'null', '-'], { encoding: 'utf8' }); assert.strictEqual(dd5.stderr.trim(), '', cname + ': file tải về giải mã được');
+    console.log('✔ ' + cname.toUpperCase() + ' lớn → ' + segs5.length + ' đoạn .m4s AES-128 + init.mp4 (không mã hoá); ffmpeg phát đủ ' + du5.toFixed(1) + 's bằng playlist/key/init do máy chủ trả; ?dl=1 = mp4 phân mảnh hợp lệ');
+  }
+  // bảo mật fMP4: đoạn không phải moof / init giả bị chặn; không trộn kiểu đoạn
+  await assert.rejects(ms.putSeg(UID, { dir: '', name: 'x.mp4', uploadId: 'a'.repeat(32), i: 0, fmt: 'fmp4' }, Buffer.alloc(188, 0x47)), /fMP4/);
+  await assert.rejects(ms.commit(UID, { dir: '', name: 'x.mp4', uploadId: 'c'.repeat(32), fmt: 'fmp4', init: Buffer.from('không phải init').toString('base64'), src: { size: MEDIA.DIRECT_MAX + 1 }, segs: [], final: false }), /Init segment|init segment/i);
+  console.log('✔ fMP4: chặn đoạn không phải moof và init giả');
 
   // ============ 6) đứt giữa chừng → làm tiếp từ chỗ đã đánh dấu trong json
   const mp3b = path.join(tmp, 'dai.mp3');

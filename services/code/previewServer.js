@@ -6,6 +6,7 @@
 //   • Tên gốc không còn dạng file trực tiếp (media lớn đã cắt m3u8) → tra mnha-media.json cùng thư mục và trả PLAYLIST m3u8 (khai báo m3u8 là đuôi gốc):
 //       âm thanh  → các đoạn .ts đã mã hoá 2 chiều; Node giải mã từng đoạn khi trình phát xin (…/_media/<id>/segNNNNN.ts)
 //       video     → các đoạn .ts mã hoá AES-128 (DRM chuẩn HLS); khoá lấy từ json (giải mã 2 chiều) và trả ở …/_media/<id>/key.bin
+//                   codec thế hệ mới (H.265/AV1/VP9) → đoạn fMP4 .m4s (cùng AES-128) + …/_media/<id>/init.mp4 (lấy từ json, không mã hoá)
 //     <audio>/<video> trong trang khai báo đuôi gốc (mp3, mp4...) mà nhận m3u8 → previewShim tự gắn hls.js (Safari phát thẳng).
 //   • ?dl=1 → tải về: giữ ĐUÔI NHƯ LÚC TẢI LÊN; ảnh/âm thanh/video nhỏ được giải mã về đúng file gốc; media đã cắt thì giải mã các đoạn
 //     rồi ghép lại thành luồng MPEG-TS (mpegts) mang đuôi gốc.
@@ -128,7 +129,9 @@ async function readManifest(source, dirSegs) {
     if (!buf) return null;
     try { const j = JSON.parse(buf.toString('utf8')); return j && typeof j === 'object' ? j : null; } catch (_) { return null; }
 }
-const segPath = (dirSegs, entry, i) => [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, hls.segName(i)];
+const segPath = (dirSegs, entry, i) => [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, hls.segName(i, entry.segExt)];
+const isFmp4 = (entry) => entry.segExt === 'm4s';
+const initBuf = (entry) => { const b = isFmp4(entry) && entry.init ? Buffer.from(String(entry.init), 'base64') : null; if (!b || !b.length) throw new HttpError(404, `Thiếu init segment của "${entry.name}".`, 'MISSING_SEGMENT'); return b; };
 async function readSegment(source, dirSegs, entry, i, key) {
     const buf = await source.read(segPath(dirSegs, entry, i));
     if (!buf) throw new HttpError(404, `Thiếu đoạn ${i + 1}/${entry.durs.length} của "${entry.name}" (file media chưa tải lên đủ hoặc đã bị xoá).`, 'MISSING_SEGMENT');
@@ -165,14 +168,16 @@ function sendBuffer(req, res, body, type, opts) {
 const drain = (res) => (res.write('') === false || res.writableNeedDrain) ? new Promise((ok) => res.once('drain', ok)) : null;
 
 // ---------------- phục vụ ----------------
-// Tải về media đã cắt: giải mã từng đoạn rồi ghép = luồng MPEG-TS, đặt tên theo đuôi gốc (chunked, không biết trước tổng kích thước)
+// Tải về media đã cắt: giải mã từng đoạn rồi ghép = luồng MPEG-TS (hoặc fMP4 = init + các đoạn: file mp4 phân mảnh phát được), đặt tên theo đuôi gốc (chunked, không biết trước tổng kích thước)
 async function serveHlsDownload(ctx, entry, name) {
     const { req, res, source, dirSegs } = ctx;
     needReady(entry, name);
     const key = entryKey(entry);
     const first = await readSegment(source, dirSegs, entry, 0, key);        // lỗi (thiếu/không giải mã được) → báo JSON TRƯỚC khi gửi header
-    res.writeHead(200, { ...baseHeaders(ctx), 'Content-Type': 'video/mp2t', 'Content-Disposition': dispo(name), 'X-Content-Note': 'MPEG-TS' });
+    const fm = isFmp4(entry), head = fm ? initBuf(entry) : null;
+    res.writeHead(200, { ...baseHeaders(ctx), 'Content-Type': fm ? 'video/mp4' : 'video/mp2t', 'Content-Disposition': dispo(name), 'X-Content-Note': fm ? 'fragmented MP4' : 'MPEG-TS' });
     if (req.method === 'HEAD') return res.end();
+    if (head) res.write(head);
     for (let i = 0; i < entry.durs.length; i++) {
         res.write(i === 0 ? first : await readSegment(source, dirSegs, entry, i, key));
         const d = drain(res); if (d) await d;
@@ -212,6 +217,14 @@ async function serve(ctx) {
         return sendBuffer(req, res, entryKey(entry), 'application/octet-stream', { ...ctx, noRange: true });
     }
 
+    if (hidden >= 0 && name === 'init.mp4' && segs.length === hidden + 3) {         // init segment fMP4 (cấu hình codec, lấy từ json)
+        const dirSegs = segs.slice(0, hidden);
+        const m = await readManifest(source, dirSegs);
+        const entry = m && m.files && Object.values(m.files).find((x) => x && x.id === segs[hidden + 1] && x.mode === 'hls-video' && isFmp4(x));
+        if (!entry) throw new HttpError(404, 'Không có init segment cho media này.');
+        return sendBuffer(req, res, initBuf(entry), 'video/mp4', { ...ctx, noRange: true });
+    }
+
     const buf = await source.read(segs);
     if (buf) {
         let body = buf;
@@ -232,7 +245,7 @@ async function serve(ctx) {
             if (ctx.download) return serveHlsDownload(c, entry, name);
             needReady(entry, name);
             const dirUrl = ctx.base + dirSegs.map(encodeURIComponent).join('/') + (dirSegs.length ? '/' : '') + MEDIA.HIDDEN_DIR + '/' + entry.id + '/';
-            const text = hls.build(entry, { seg: (i) => dirUrl + hls.segName(i), key: dirUrl + 'key.bin' });
+            const text = hls.build(entry, { seg: (i) => dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
             return sendBuffer(req, res, Buffer.from(text), MIME.m3u8, { ...ctx, noRange: true });
         }
     }

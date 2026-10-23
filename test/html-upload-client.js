@@ -114,6 +114,20 @@ const manifest = (dir = '') => { const s = files.get(`${UID}/codes/html/${dir ? 
   e = manifest()['v.mp4']; assert(e.mode === 'hls-video' && e.state === 'ready' && e.drm.method === 'AES-128' && Math.abs(e.duration - 40) < 0.5);
   console.log('✔ mp4 40s → ' + e.done + ' đoạn AES-128, ' + e.duration + 's');
 
+  // ---- video codec thế hệ mới (AV1) → fMP4: client gửi fmt=fmp4 + init, server lưu .m4s + init trong json; đứt mạng rồi tải lại vẫn ra kết quả đúng
+  ff('-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25:duration=40', '-f', 'lavfi', '-i', 'sine=frequency=500:duration=40', '-c:v', 'libsvtav1', '-preset', '10', '-g', '50', '-pix_fmt', 'yuv420p', '-b:v', '900k', '-c:a', 'aac', '-shortest', '-movflags', '+faststart', path.join(tmp, 'av1.mp4'));
+  failSegFrom = 3; segCalls = 0;
+  await assert.rejects(MnhaUpload.upload(await fileOf(path.join(tmp, 'av1.mp4')), { dir: 'n' }), /đoạn/);
+  failSegFrom = null; segCalls = 0;
+  const fmsgs = [];
+  r = await MnhaUpload.upload(await fileOf(path.join(tmp, 'av1.mp4')), { dir: 'n', onProgress: (t) => fmsgs.push(t) });
+  e = manifest('n')['av1.mp4'];
+  assert(e.mode === 'hls-video' && e.state === 'ready' && e.segExt === 'm4s' && e.drm.method === 'AES-128' && Math.abs(e.duration - 40) < 0.5, 'fMP4 json: ' + JSON.stringify({ s: e.state, x: e.segExt, d: e.duration }));
+  assert(/^av01\./.test(e.codecs) && Buffer.from(e.init, 'base64').toString('latin1', 4, 8) === 'ftyp', 'json có codecs + init');
+  assert(files.has(`${UID}/codes/html/n/_media/av1_mp4/seg00000.m4s`) && ![...files.keys()].some((k) => k.includes('_media/av1_mp4/') && k.endsWith('.ts')), 'chỉ có đoạn .m4s');
+  assert(fmsgs.some((t) => /fMP4/.test(t)), 'báo tiến độ có ghi fMP4');
+  console.log('✔ AV1 40s → ' + e.done + ' đoạn .m4s AES-128 (đứt mạng rồi tải lại), json giữ codecs ' + e.codecs + ' + init.mp4');
+
   // ---- lỗi: định dạng không cắt được
   fs.writeFileSync(path.join(tmp, 'big.wav'), Buffer.alloc(300 * 1024, 1));
   await assert.rejects(MnhaUpload.upload(await fileOf(path.join(tmp, 'big.wav')), { dir: '' }), /chỉ cắt \(m3u8\) được/);
