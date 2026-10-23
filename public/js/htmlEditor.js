@@ -6,7 +6,8 @@
     var app = $('hxApp'), ed = $('hxEditor'), gut = $('hxGutter'), dirty = $('hxDirty'), status = $('hxStatus');
     var tabCode = $('tabCode'), tabView = $('tabView'), frame = $('hxFrame'), stage = $('hxStage'), tools = $('viewTools');
     var errBox = $('hxErrors'), errList = $('hxErrList');
-    var saved = P.content, mode = 'code', errs = {};
+    var saved = P.content || '', mode = 'code', errs = {};
+    var loading = !!P.contentUrl;      // file lớn: nội dung không nhúng trong trang, tải riêng (xem bên dưới)
 
     function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
     function say(html) { status.innerHTML = html || ''; }
@@ -16,9 +17,16 @@
     }
 
     // ---- soạn code
-    ed.value = P.content;
+    ed.value = loading ? 'Đang tải file lớn…' : saved;
     function lines() { var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gut.textContent = s; }
     lines();
+    if (loading) {
+        ed.disabled = true; say('Đang tải file lớn…');
+        fetch(P.contentUrl, { headers: { Accept: 'text/plain' } })
+            .then(function (r) { if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('Lỗi ' + r.status)); }, function () { throw new Error('Lỗi ' + r.status); }); return r.text(); })
+            .then(function (t) { saved = t; ed.value = t; ed.disabled = false; loading = false; lines(); say(''); })
+            .catch(function (e) { say('<span class="bad">Không tải được file: ' + esc(e.message) + ' — tải lại trang để thử lại.</span>'); });
+    }
     ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', ed.value === saved); });
     ed.addEventListener('scroll', function () { gut.scrollTop = ed.scrollTop; });
     // Tab/Shift+Tab, tự đóng ngoặc/thẻ, Enter giữ độ thụt, Ctrl+/ chú thích — dùng chung mọi ngôn ngữ (public/js/editorKit.js)
@@ -32,13 +40,33 @@
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!P.readOnly) save().catch(function () { }); }
     });
     document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !P.readOnly) { e.preventDefault(); save().catch(function () { }); } });
-    window.addEventListener('beforeunload', function (e) { if (!P.readOnly && ed.value !== saved) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('beforeunload', function (e) { if (!P.readOnly && !loading && ed.value !== saved) { e.preventDefault(); e.returnValue = ''; } });
 
+    // file lớn: cắt thành các phần ≤ ~1 triệu ký tự (≤ 3MB) gửi lần lượt (Vercel chặn request > 4.5MB), rồi gộp lại ở máy chủ
+    var CHUNK = 1000000;
+    function hex32() { var a = new Uint8Array(16); crypto.getRandomValues(a); return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join(''); }
+    function saveBig(text) {
+        var parts = [], pos = 0;
+        while (pos < text.length) {
+            var end = Math.min(text.length, pos + CHUNK);
+            if (end < text.length) { var c = text.charCodeAt(end - 1); if (c >= 0xD800 && c <= 0xDBFF) end--; }      // không cắt đôi ký tự emoji (cặp surrogate)
+            parts.push(text.slice(pos, end)); pos = end;
+        }
+        var id = hex32(), done = [], q = 'dir=' + encodeURIComponent(P.dir) + '&file=' + encodeURIComponent(P.file) + '&uploadId=' + id + '&n=' + parts.length;
+        function next(i) {
+            if (i >= parts.length) return api('POST', '/code/html/save/finish', { dir: P.dir, file: P.file, uploadId: id, parts: done });
+            say('Đang lưu phần ' + (i + 1) + '/' + parts.length + '…');
+            return fetch('/code/html/save/part?' + q + '&i=' + i, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8', Accept: 'application/json' }, body: parts[i] })
+                .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Lỗi ' + r.status); return j; }); })
+                .then(function (j) { done.push({ i: i, sha: j.sha, size: j.size, receipt: j.receipt }); return next(i + 1); });
+        }
+        return next(0);
+    }
     function save() {
-        if (P.readOnly || ed.value === saved) return Promise.resolve();
+        if (P.readOnly || loading || ed.value === saved) return Promise.resolve();
         say('Đang lưu…');
         var text = ed.value;
-        return api('POST', '/code/html/save', { dir: P.dir, file: P.file, content: text })
+        return (text.length > CHUNK ? saveBig(text) : api('POST', '/code/html/save', { dir: P.dir, file: P.file, content: text }))
             .then(function () { saved = text; dirty.classList.toggle('hidden', ed.value === saved); say('<span class="ok">Đã lưu lên GitHub.</span>'); })
             .catch(function (e) { say('<span class="bad">Lưu lỗi: ' + esc(e.message) + '</span>'); throw e; });
     }

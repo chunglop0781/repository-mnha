@@ -163,6 +163,9 @@ function sendBuffer(req, res, body, type, opts) {
         return res.end(req.method === 'HEAD' ? undefined : body.subarray(r.start, r.end + 1));
     }
     res.writeHead(200, { ...h, 'Content-Length': body.length });
+    if (req.method !== 'HEAD' && body.length > 2 * 1024 * 1024) {          // trang/file lớn: ghi từng khúc (response một cục > 4.5MB bị Vercel chặn)
+        return (async () => { for (let o = 0; o < body.length; o += 256 * 1024) { res.write(body.subarray(o, o + 256 * 1024)); const d = drain(res); if (d) await d; } res.end(); })();
+    }
     res.end(req.method === 'HEAD' ? undefined : body);
 }
 const drain = (res) => (res.write('') === false || res.writableNeedDrain) ? new Promise((ok) => res.once('drain', ok)) : null;

@@ -28,6 +28,10 @@ router.put('/html/upload/part', raw, html.uploadPart);
 router.post('/html/upload/finish', html.uploadFinish);
 router.put('/html/upload/seg', raw, html.uploadSeg);
 router.post('/html/upload/commit', html.uploadCommit);
+router.put('/html/save/part', raw, html.savePart);
+router.post('/html/save/finish', html.saveFinish);
+router.get('/html/raw', html.raw);
+router.get('/html/online/raw', html.onlineRaw);
 router.post('/html/media/delete', html.mediaDelete);
 router.post('/html/media/visibility', html.mediaVisibility);
 

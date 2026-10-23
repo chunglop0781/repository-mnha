@@ -10,6 +10,8 @@
 //   GET  /code/html/online[?url=]            xem code trên mạng (link file GitHub/GitLab) + xem trang (kèm css/js/ảnh cùng thư mục)
 //   GET  /code/html/online/folder?url=       xem thư mục trên mạng
 //   GET  /code/html/online/player?url=&file= trình phát cho thư mục trên mạng
+//   PUT  /code/html/save/part, POST /code/html/save/finish   lưu file chữ LỚN theo từng phần ≤ 3.5MB (Vercel chặn request > 4.5MB)
+//   GET  /code/html/raw?dir=&file= , GET /code/html/online/raw?url=   tải nội dung file chữ lớn (ghi từng khúc, không nhúng vào trang)
 // Việc đọc file khi xem trang nằm ở services/code/previewServer.js (/preview/<token>/...).
 'use strict';
 const store = require('../services/code/codeStore');
@@ -24,6 +26,7 @@ const enc = (segs) => segs.map(encodeURIComponent).join('/');
 const extOf = (n) => { const i = String(n).lastIndexOf('.'); return i > 0 ? String(n).slice(i + 1).toLowerCase() : ''; };
 const isPage = (n) => LANG.runExts.includes(extOf(n));
 const json = (o) => JSON.stringify(o).replace(/</g, '\\u003c');
+const BIG_INLINE = 1.5 * 1024 * 1024;     // file chữ > 1.5MB không nhúng vào HTML của trang soạn
 const httpErr = (msg, status = 400) => Object.assign(new Error(msg), { status });
 
 const wrap = (fn) => async (req, res) => {
@@ -86,7 +89,7 @@ function renderEditor(req, res, o) {
     const canView = isPage(o.file);
     const payload = {
         dir: o.dir, file: o.file, content: o.content, canView, readOnly: !!o.online, online: o.online || null,
-        previewUrl: o.previewUrl, tokenAt: Date.now(), startView: canView && o.startView, hlsjs: MEDIA.HLSJS_URL, mode: extOf(o.file)
+        contentUrl: o.contentUrl || null, previewUrl: o.previewUrl, tokenAt: Date.now(), startView: canView && o.startView, hlsjs: MEDIA.HLSJS_URL, mode: extOf(o.file)
     };
     res.render('code/html-editor', {
         title: o.file, user: req.user, lang: LANG, dir: o.dir, file: o.file, canView, online: o.online || null,
@@ -103,11 +106,35 @@ exports.edit = wrap(async (req, res) => {
     let content = await store.readFile(uid, 'html', dir, file);
     if (content === null) throw httpErr('Không tìm thấy file', 404);
     content = store.displayText(file, content);      // .txt trắng → hiện dòng gợi ý
+    const big = Buffer.byteLength(content) > BIG_INLINE;      // file lớn: không nhúng vào trang (Vercel chặn response > 4.5MB) → trình soạn tải riêng qua /code/html/raw
     renderEditor(req, res, {
-        dir, file, content, previewUrl: previewUrl(ownToken(uid), [...dirSegs, file]), startView: req.query.view === '1',
+        dir, file, content: big ? '' : content, contentUrl: big ? '/code/html/raw?dir=' + encodeURIComponent(dir) + '&file=' + encodeURIComponent(file) : null, previewUrl: previewUrl(ownToken(uid), [...dirSegs, file]), startView: req.query.view === '1',
         githubUrl: store.githubUrl(uid, 'html', dir, file), playerUrl: '/code/html/player?dir=' + encodeURIComponent(dir)
     });
 });
+
+// gửi chuỗi lớn theo từng khúc (không phải 1 response khổng lồ)
+async function sendTextChunked(res, text) {
+    const buf = Buffer.from(text, 'utf8');
+    res.status(200).set({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': String(buf.length) });
+    for (let o = 0; o < buf.length; o += 256 * 1024) {
+        if (res.write(buf.subarray(o, o + 256 * 1024)) === false) await new Promise((ok) => res.once('drain', ok));
+    }
+    res.end();
+}
+exports.raw = wrap(async (req, res) => {
+    const dirSegs = store.cleanDir(req.query.dir || '');
+    const file = store.cleanFileName('html', req.query.file);
+    const content = await store.readFile(uidOf(req), 'html', dirSegs.join('/'), file);
+    if (content === null) throw httpErr('Không tìm thấy file', 404);
+    await sendTextChunked(res, store.displayText(file, content));
+});
+exports.onlineRaw = wrap(async (req, res) => {
+    const parsed = remoteSource.parseSourceUrl(String(req.query.url || '').trim());
+    await sendTextChunked(res, await remoteSource.fetchText(parsed, { maxBytes: LANG.maxFileBytes }));
+});
+exports.savePart = wrap(async (req, res) => res.json(await store.putTextPart(uidOf(req), 'html', req.query, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0))));
+exports.saveFinish = wrap(async (req, res) => res.json(await store.finishText(uidOf(req), 'html', req.body || {})));
 
 exports.previewToken = wrap(async (req, res) => {
     let tok;
@@ -170,12 +197,13 @@ exports.online = wrap(async (req, res) => {
         parsed = remoteSource.parseSourceUrl(url);
         const last = String(parsed.last || '');
         if (!LANG.exts.includes(extOf(last))) throw httpErr(`Chỉ xem được file ${LANG.exts.map((e) => '.' + e).join(', ')} (link của bạn là "${last.slice(0, 60)}"). Muốn xem ảnh/âm thanh/video: dùng "Xem thư mục".`);
-        content = await remoteSource.fetchText(parsed);
+        content = await remoteSource.fetchText(parsed, { maxBytes: LANG.maxFileBytes });
     } catch (e) { if (isUserErr(e)) return onlineForm(req, res, { url, error: e.message, errorFor: 'file', status: e.status === 404 ? 404 : 400 }); throw e; }
     const dirSegs = parsed.pathSegs.slice(0, -1);
     const folderUrl = '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(parsed, dirSegs));
+    const big = Buffer.byteLength(content) > BIG_INLINE;
     renderEditor(req, res, {
-        dir: '', file: parsed.last, content, online: parsed.web, previewUrl: previewUrl(webToken(parsed), parsed.pathSegs),
+        dir: '', file: parsed.last, content: big ? '' : content, contentUrl: big ? '/code/html/online/raw?url=' + encodeURIComponent(url) : null, online: parsed.web, previewUrl: previewUrl(webToken(parsed), parsed.pathSegs),
         githubUrl: parsed.web, shareLabel: parsed.host === 'gitlab' ? 'Nguồn (GitLab):' : 'Nguồn (GitHub):', folderUrl
     });
 });

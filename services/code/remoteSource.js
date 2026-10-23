@@ -134,8 +134,10 @@ async function fetchText(parsed, opts) {
         const buf = await readLimited(res, maxBytes);
         if (buf.includes(0)) throw bad('Đây không phải file văn bản (code).');
         const text = buf.toString('utf8').replace(/^\uFEFF/, '');
-        if (cache.size > 50) cache.delete(cache.keys().next().value);
-        cache.set(parsed.raw, { at: Date.now(), text });
+        if (text.length < 1024 * 1024) {            // file lớn không giữ trong bộ nhớ đệm
+            if (cache.size > 50) cache.delete(cache.keys().next().value);
+            cache.set(parsed.raw, { at: Date.now(), text });
+        }
         return text;
     }
     throw bad('Link bị chuyển hướng quá nhiều lần.');

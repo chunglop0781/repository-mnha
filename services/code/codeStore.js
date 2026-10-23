@@ -5,6 +5,7 @@
 const gh = require('../githubService');
 const ghCfg = require('../../config/github');
 const { LANGS, LIMITS, NAME_RE, FILE_STEM_RE, MEDIA, EMPTY_TXT_PLACEHOLDER } = require('../../config/codeConfig');
+const mc = require('./mediaCrypto');
 
 const KEEP = '.keep';
 const bad = (m) => Object.assign(new Error(m), { status: 400 });
@@ -84,20 +85,56 @@ async function mkdir(uid, lang, dir, name) {
 
 async function readFile(uid, lang, dir, name) {
     const p = filePath(uid, lang, dir, name);
-    const buf = await gh.readBinaryFile(p);
+    const buf = await (gh.readBinaryFileLarge || gh.readBinaryFile)(p);      // Contents API chỉ trả nội dung file ≤ 1MB; lớn hơn đọc qua Blob API
     return buf === null ? null : buf.toString('utf8');
 }
 // .txt trắng → hiện/ghi tạm EMPTY_TXT_PLACEHOLDER (chỉ cho .txt)
 const isTxt = (name) => /\.txt$/i.test(String(name || ''));
 const displayText = (name, content) => (isTxt(name) && !String(content == null ? '' : content).trim() ? EMPTY_TXT_PLACEHOLDER : String(content == null ? '' : content));
 // opt.placeholder === false: giữ nguyên nội dung trắng (file chương trình ghi ra như output.txt)
+const maxBytesOf = (lang) => (LANGS[lang] && LANGS[lang].maxFileBytes) || LIMITS.MAX_FILE_BYTES;
 async function writeFile(uid, lang, dir, name, content, opt = {}) {
     let text = String(content == null ? '' : content);
     const p = filePath(uid, lang, dir, name);
     if (opt.placeholder !== false) text = displayText(p, text);
-    if (Buffer.byteLength(text) > LIMITS.MAX_FILE_BYTES) throw bad('File quá lớn (tối đa 200KB)');
-    await gh.writeBinaryFile(p, Buffer.from(text, 'utf8'), `code: save ${p.split('/').slice(1).join('/')}`);
+    const max = maxBytesOf(lang), size = Buffer.byteLength(text);
+    if (size > max) throw bad('File quá lớn (tối đa ' + (max >= 1048576 ? (max / 1048576) + 'MB' : Math.round(max / 1024) + 'KB') + ')');
+    const write = size > 512 * 1024 && gh.writeBinaryFileBig ? gh.writeBinaryFileBig : gh.writeBinaryFile;      // file lớn: timeout dài hơn
+    await write(p, Buffer.from(text, 'utf8'), `code: save ${p.split('/').slice(1).join('/')}`);
     return p;
+}
+// ---- lưu file chữ LỚN theo từng phần (mỗi request ≤ 3.5MB vì Vercel chặn > 4.5MB): PUT part → blob + biên nhận HMAC, rồi finish ghép lại thành 1 file
+const TEXT_PART_MAX = 3.5 * 1024 * 1024, TEXT_PARTS_MAX = 64;
+const upId = (id) => { if (!/^[a-f0-9]{32}$/.test(String(id || ''))) throw bad('Mã lưu không hợp lệ.'); return String(id); };
+async function putTextPart(uid, lang, q, body) {
+    assertLang(lang);
+    const p = filePath(uid, lang, q.dir, q.file), id = upId(q.uploadId);
+    const i = Number(q.i), n = Number(q.n);
+    if (!Buffer.isBuffer(body) || !body.length) throw bad('Phần dữ liệu rỗng.');
+    if (body.length > TEXT_PART_MAX) throw bad('Phần dữ liệu quá lớn.', 413);
+    if (!Number.isInteger(i) || !Number.isInteger(n) || n < 1 || n > TEXT_PARTS_MAX || i < 0 || i >= n) throw bad('Số thứ tự phần không hợp lệ.');
+    const sha = await gh.createBlob(body);
+    return { ok: true, sha, size: body.length, receipt: mc.receipt(uid, id, `${p}#${i}`, sha, body.length) };
+}
+async function finishText(uid, lang, b) {
+    assertLang(lang);
+    const p = filePath(uid, lang, b.dir, b.file), id = upId(b.uploadId);
+    const parts = Array.isArray(b.parts) ? b.parts : [];
+    if (!parts.length || parts.length > TEXT_PARTS_MAX) throw bad('Số phần không hợp lệ.');
+    const max = maxBytesOf(lang);
+    let total = 0; const bufs = [];
+    for (let i = 0; i < parts.length; i++) {
+        const x = parts[i] || {};
+        if (Number(x.i) !== i) throw bad('Các phần phải đủ và đúng thứ tự.');
+        if (!mc.verifyReceipt(x.receipt, uid, id, `${p}#${i}`, String(x.sha), Number(x.size))) throw bad('Biên nhận phần ' + (i + 1) + ' không hợp lệ.', 403);
+        total += Number(x.size);
+        if (total > max) throw bad('File quá lớn (tối đa ' + Math.round(max / 1048576) + 'MB)');
+        const buf = await gh.getBlobBuffer(String(x.sha));
+        if (!buf || buf.length !== Number(x.size)) throw bad('Không đọc lại được phần ' + (i + 1) + ' trên GitHub — hãy lưu lại.');
+        bufs.push(buf);
+    }
+    await writeFile(uid, lang, b.dir || '', b.file, Buffer.concat(bufs).toString('utf8'));
+    return { ok: true, size: total };
 }
 async function removeFile(uid, lang, dir, name) {
     return gh.deleteFile(filePath(uid, lang, dir, name, true), 'code: delete file');
@@ -222,4 +259,5 @@ async function readResult(uid, lang, ts) {
     return gh.readJsonFile(`${uid}/result/${lang}/${ts}.json`);
 }
 
-module.exports = { githubUrl, githubFolderUrl, displayText, renameFolder, renameFile, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName };
+module.exports = {
+    putTextPart, finishText, githubUrl, githubFolderUrl, displayText, renameFolder, renameFile, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName };
