@@ -28,9 +28,14 @@
         fetch(it.url, { headers: { Range: 'bytes=0-0' } }).then(function (r) {
             var ct = r.headers.get('content-type') || '';
             if (r.ok && /mpegurl/i.test(ct)) {
-                if (el.canPlayType('application/vnd.apple.mpegurl')) { showErr(box, 'Trình duyệt không phát được m3u8 này.'); return; }
-                return loadHls().then(function () {
-                    if (!window.Hls || !Hls.isSupported()) { showErr(box, 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).'); return; }
+                // Ưu tiên hls.js (Chrome/Edge mới trả canPlayType = 'maybe' nhưng phát native m3u8 mã hoá AES-128 / fMP4 thì lỗi);
+                // chỉ dùng phát native khi hls.js không hỗ trợ (vd Safari iOS).
+                return loadHls().catch(function () { return null; }).then(function () {
+                    if (!window.Hls || !Hls.isSupported()) {
+                        if (el.canPlayType('application/vnd.apple.mpegurl')) { el.src = it.url; el.play && el.play().catch(function () { }); return; }
+                        showErr(box, window.Hls ? 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).' : 'Không tải được hls.js (kiểm tra mạng hoặc biến HLSJS_URL).');
+                        return;
+                    }
                     if (hls) { hls.destroy(); hls = null; }
                     hls = new Hls({ maxBufferLength: 30 });
                     hls.on(Hls.Events.ERROR, function (ev, d) {
