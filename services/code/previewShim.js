@@ -55,17 +55,40 @@ const SOURCE = function (BASE, HLS, DIRECT) {
         });
         return hlsLoad;
     }
+    // Safari/iOS: MSE của hls.js hay báo bufferAppendError → ưu tiên phát NATIVE (đoạn tải thẳng GitHub; nếu bị từ chối thì thử lại với đoạn qua máy chủ ?proxy=1), cuối cùng mới tới hls.js
+    var UA = navigator.userAgent || '';
+    var NATIVE_FIRST = (/iP(hone|ad|od)/.test(UA) || (/Safari/.test(UA) && !/Chrome|Chromium|CriOS|Android|Edg|FxiOS|OPR/.test(UA)));
+    function proxied(u) { return u + (u.indexOf('?') < 0 ? '?' : '&') + 'proxy=1'; }
+    function canNative(el) { return !!(el.canPlayType && el.canPlayType('application/vnd.apple.mpegurl')); }
+    function tryNative(el, urls, last) {          // thử lần lượt từng địa chỉ bằng phát native; hết thì gọi last()
+        if (!urls.length) return last();
+        var u = urls[0], done = false;
+        function bad() { if (done) return; done = true; el.removeEventListener('error', bad); tryNative(el, urls.slice(1), last); }
+        el.addEventListener('error', bad);
+        nativeSet(el, u);          // bộ ghi src GỐC (src của trang đã bị shim chặn để giải mã)
+        try { var p = el.play && el.play(); if (p && p.catch) p.catch(function () { }); } catch (e) { /* */ }
+    }
     function attachHls(el, url) {
         el.__mnhaSrc = url;
-        loadHls().then(function () {
-            if (el.__hls) { try { el.__hls.destroy(); } catch (e) { /* */ } el.__hls = null; }
-            if (window.Hls && window.Hls.isSupported()) {
-                var h = new window.Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 20, maxBufferSize: 60 * 1000 * 1000 });   // xem đến đâu xả bộ đệm cũ đến đó
-                h.on(window.Hls.Events.ERROR, function (ev, d) { if (d && d.fatal) problem(url, 'Không phát được (HLS): ' + (d.details || d.type)); });
-                h.loadSource(url); h.attachMedia(el); el.__hls = h;
-            } else if (el.canPlayType && el.canPlayType('application/vnd.apple.mpegurl')) { el.src = url; }
-            else problem(url, 'Trình duyệt này không phát được HLS (m3u8).');
-        }, function (e) { problem(url, e.message); });
+        function viaHls() {
+            loadHls().then(function () {
+                if (el.__hls) { try { el.__hls.destroy(); } catch (e) { /* */ } el.__hls = null; }
+                if (window.Hls && window.Hls.isSupported()) {
+                    var h = new window.Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 20, maxBufferSize: 60 * 1000 * 1000 });   // xem đến đâu xả bộ đệm cũ đến đó
+                    var retried = false;
+                    h.on(window.Hls.Events.ERROR, function (ev, d) {
+                        if (!d || !d.fatal) return;
+                        if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR && !retried) { retried = true; try { h.recoverMediaError(); return; } catch (e) { /* */ } }
+                        if (canNative(el) && !el.__mnhaNative) { el.__mnhaNative = 1; try { h.destroy(); } catch (e) { /* */ } el.__hls = null; return tryNative(el, [proxied(url)], function () { problem(url, 'Không phát được (HLS): ' + (d.details || d.type)); }); }
+                        problem(url, 'Không phát được (HLS): ' + (d.details || d.type));
+                    });
+                    h.loadSource(url); h.attachMedia(el); el.__hls = h;
+                } else if (canNative(el)) { tryNative(el, [url, proxied(url)], function () { problem(url, 'Không phát được HLS (m3u8) trên trình duyệt này.'); }); }
+                else problem(url, 'Trình duyệt này không phát được HLS (m3u8).');
+            }, function (e) { if (canNative(el)) tryNative(el, [url, proxied(url)], function () { problem(url, e.message); }); else problem(url, e.message); });
+        }
+        if (NATIVE_FIRST && canNative(el)) { el.__mnhaNative = 1; return tryNative(el, [url, proxied(url)], viaHls); }
+        viaHls();
     }
     function mediaError(el, url) {
         var u = url || el.currentSrc || el.src;

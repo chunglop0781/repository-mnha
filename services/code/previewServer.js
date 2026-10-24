@@ -279,7 +279,8 @@ async function serve(ctx) {
             if (ctx.download) return serveHlsDownload(c, entry, name);
             needReady(entry, name);
             const dirUrl = ctx.base + dirSegs.map(encodeURIComponent).join('/') + (dirSegs.length ? '/' : '') + MEDIA.HIDDEN_DIR + '/' + entry.id + '/';
-            const tgt = entry.drm && ctx.direct ? ks.resolveTarget(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'x'], ctx.gh) : null;     // đoạn AES-128: tải thẳng GitHub raw
+            const proxy = new URL(req.url, 'http://x').searchParams.get('proxy') === '1';          // ?proxy=1: đoạn qua máy chủ (Safari phát native: GitHub raw trả text/plain + nosniff nên có thể bị từ chối)
+            const tgt = entry.drm && ctx.direct && !proxy ?ks.resolveTarget(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'x'], ctx.gh) : null;     // đoạn AES-128: tải thẳng GitHub raw
             const rawSeg = tgt ? (i) => ks.rawUrl(ctx.gh, [...tgt.full.slice(0, -1), hls.segName(i, entry.segExt)], entry.uploadId) : null;
             const text = hls.build(entry, { seg: (i) => (rawSeg && rawSeg(i)) || dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
             return sendBuffer(req, res, Buffer.from(text), MIME.m3u8, { ...ctx, noRange: true });

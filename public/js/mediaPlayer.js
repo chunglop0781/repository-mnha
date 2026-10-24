@@ -27,23 +27,47 @@
         return hlsLoad;
     }
     function showErr(box, msg) { box.style.display = 'block'; box.textContent = '⚠ ' + msg; }
+    // Safari/iOS: MSE của hls.js hay báo bufferAppendError → ưu tiên phát NATIVE (đoạn tải thẳng GitHub; bị từ chối thì thử lại với đoạn qua máy chủ ?proxy=1),
+    // cuối cùng mới tới hls.js. Trình duyệt khác: hls.js trước (Chrome/Edge trả canPlayType 'maybe' nhưng phát native m3u8 AES-128 / fMP4 thì lỗi).
+    var UA = navigator.userAgent || '';
+    var NATIVE_FIRST = /iP(hone|ad|od)/.test(UA) || (/Safari/.test(UA) && !/Chrome|Chromium|CriOS|Android|Edg|FxiOS|OPR/.test(UA));
+    function proxied(u) { return u + (u.indexOf('?') < 0 ? '?' : '&') + 'proxy=1'; }
+    function canNative(el) { return !!(el.canPlayType && el.canPlayType('application/vnd.apple.mpegurl')); }
+    function tryNative(el, urls, last) {          // thử lần lượt từng địa chỉ bằng phát native; hết thì gọi last()
+        if (!urls.length) return last();
+        var done = false;
+        function bad() { if (done) return; done = true; el.removeEventListener('error', bad); tryNative(el, urls.slice(1), last); }
+        el.addEventListener('error', bad);
+        el.src = urls[0];
+        try { var p = el.play && el.play(); if (p && p.catch) p.catch(function () { }); } catch (e) { /* */ }
+    }
     function playHls(el, it, box) {
-        return loadHls().catch(function () { return null; }).then(function () {
-            if (!window.Hls || !Hls.isSupported()) {
-                if (el.canPlayType('application/vnd.apple.mpegurl')) { el.src = it.url; el.play && el.play().catch(function () { }); return; }
-                showErr(box, window.Hls ? 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).' : 'Không tải được hls.js (kiểm tra mạng hoặc biến HLSJS_URL).');
-                return;
-            }
-            if (hls) { hls.destroy(); hls = null; }
-            hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 20, maxBufferSize: 60 * 1000 * 1000 });     // xem đến đâu xả bộ đệm cũ đến đó (đỡ RAM)
-            hls.on(Hls.Events.ERROR, function (ev, d) {
-                if (!d || !d.fatal) return;
-                var codecErr = /Codec|codec|bufferAddCodec|manifestIncompatible/.test(d.details || '') || (d.type === Hls.ErrorTypes.MEDIA_ERROR && /codec|MIME|type/i.test((d.error && d.error.message) || ''));
-                showErr(box, codecErr ? 'Trình duyệt/thiết bị này không giải mã được codec video của file (H.265/AV1/VP9 cần trình duyệt hoặc phần cứng hỗ trợ). Hãy thử Chrome/Edge/Safari mới, hoặc tải về để mở bằng phần mềm khác.' : 'Lỗi phát m3u8: ' + (d.details || d.type));
+        function viaHls() {
+            return loadHls().catch(function () { return null; }).then(function () {
+                if (!window.Hls || !Hls.isSupported()) {
+                    if (canNative(el)) return tryNative(el, [it.url, proxied(it.url)], function () { showErr(box, 'Trình duyệt không phát được m3u8 của file này.'); });
+                    showErr(box, window.Hls ? 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).' : 'Không tải được hls.js (kiểm tra mạng hoặc biến HLSJS_URL).');
+                    return;
+                }
+                if (hls) { hls.destroy(); hls = null; }
+                var h = hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 20, maxBufferSize: 60 * 1000 * 1000 });     // xem đến đâu xả bộ đệm cũ đến đó (đỡ RAM)
+                var retried = false;
+                h.on(Hls.Events.ERROR, function (ev, d) {
+                    if (!d || !d.fatal) return;
+                    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && !retried) { retried = true; try { h.recoverMediaError(); return; } catch (e) { /* */ } }     // vd bufferAppendError: thử cứu 1 lần
+                    var codecErr = /Codec|codec|bufferAddCodec|manifestIncompatible/.test(d.details || '') || (d.type === Hls.ErrorTypes.MEDIA_ERROR && /codec|MIME|type/i.test((d.error && d.error.message) || ''));
+                    if (canNative(el) && !el.__nativeTried) {             // hls.js hỏng (Safari…) → phát native bằng đoạn qua máy chủ
+                        el.__nativeTried = true; h.destroy(); if (hls === h) hls = null;
+                        return tryNative(el, [proxied(it.url)], function () { showErr(box, 'Lỗi phát m3u8: ' + (d.details || d.type)); });
+                    }
+                    showErr(box, codecErr ? 'Trình duyệt/thiết bị này không giải mã được codec video của file (H.265/AV1/VP9 cần trình duyệt hoặc phần cứng hỗ trợ). Hãy thử Chrome/Edge/Safari mới, hoặc tải về để mở bằng phần mềm khác.' : 'Lỗi phát m3u8: ' + (d.details || d.type));
+                });
+                h.loadSource(it.url); h.attachMedia(el);
+                el.play && el.play().catch(function () { });
             });
-            hls.loadSource(it.url); hls.attachMedia(el);
-            el.play && el.play().catch(function () { });
-        });
+        }
+        if (NATIVE_FIRST && canNative(el)) { el.__nativeTried = true; return tryNative(el, [it.url, proxied(it.url)], viaHls); }
+        return viaHls();
     }
     // phần tử phát lỗi: hỏi máy chủ nguyên nhân; nếu là playlist m3u8 thì gắn hls.js, nếu là lỗi giải mã/không thấy thì báo rõ
     function diagnose(el, it, box) {

@@ -161,6 +161,9 @@ async function putEnc(uid, name, plain, parts = 1) {
     const enc = (await (await fetch(urls[i])).arrayBuffer()); const plain = await MM._t.hlsDecrypt(ck, new Uint8Array(enc), i);
     assert(Buffer.from(plain).equals(segPlain[i]), 'trình duyệt giải mã đoạn ' + i + ' (AES-128-CBC, IV = số thứ tự)');
   }
+  r = await get(`/preview/${OT}/song.mp3?proxy=1`); pl = r.body.toString();
+  assert(!pl.includes('raw.githubusercontent') && pl.includes(`/preview/${OT}/_media/song_mp3/seg00000.ts`) && pl.includes('EXT-X-KEY'), 'Safari native: ?proxy=1 → đoạn qua máy chủ (đúng Content-Type), vẫn AES-128');
+  r = await get(`/preview/${OT}/_media/song_mp3/seg00001.ts`); assert(r.status === 200 && /video\/mp2t/.test(r.headers['content-type']) && r.body.equals(blobs.get(files.get(`${dirp}/_media/song_mp3/seg00001.ts`))), 'đoạn qua máy chủ: video/mp2t, bản mã nguyên vẹn');
   r = await get(`/preview/${OT}/old.mp3`); pl = r.body.toString();
   assert(!pl.includes('raw.githubusercontent') && !pl.includes('EXT-X-KEY') && pl.includes(`/preview/${OT}/_media/old_mp3/seg00000.ts`), 'âm thanh cũ: không có khoá DRM → đoạn vẫn qua máy chủ');
   r = await get(`/preview/${OT}/_media/old_mp3/seg00001.ts`); assert(r.status === 200 && r.body.equals(segPlain[1]), 'âm thanh cũ: Node giải mã đoạn');
