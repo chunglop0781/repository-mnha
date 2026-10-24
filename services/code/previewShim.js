@@ -8,7 +8,7 @@
 // Không dùng cú pháp mới để chạy được trên trình duyệt cũ.
 'use strict';
 
-const SOURCE = function (BASE, HLS) {
+const SOURCE = function (BASE, HLS, DIRECT) {
     var seen = {};
     function post(m) { try { m.mnha = 1; parent.postMessage(m, '*'); } catch (e) { /* */ } }
     function ours(u) { try { return new URL(u, location.href).pathname.indexOf(BASE) === 0; } catch (e) { return false; } }
@@ -60,7 +60,7 @@ const SOURCE = function (BASE, HLS) {
         loadHls().then(function () {
             if (el.__hls) { try { el.__hls.destroy(); } catch (e) { /* */ } el.__hls = null; }
             if (window.Hls && window.Hls.isSupported()) {
-                var h = new window.Hls();
+                var h = new window.Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 20, maxBufferSize: 60 * 1000 * 1000 });   // xem đến đâu xả bộ đệm cũ đến đó
                 h.on(window.Hls.Events.ERROR, function (ev, d) { if (d && d.fatal) problem(url, 'Không phát được (HLS): ' + (d.details || d.type)); });
                 h.loadSource(url); h.attachMedia(el); el.__hls = h;
             } else if (el.canPlayType && el.canPlayType('application/vnd.apple.mpegurl')) { el.src = url; }
@@ -105,8 +105,8 @@ const SOURCE = function (BASE, HLS) {
     // ---- 4) nút Tải
     var dlBtn = null, dlHide = 0;
     function mediaSrc(el) {
-        var u = el.__mnhaSrc || el.getAttribute('src');
-        if (!u) { var s = el.querySelector && el.querySelector('source[src]'); u = s && s.getAttribute('src'); }
+        var u = el.__mnhaSrc || el.__mnhaOrig || el.getAttribute('src');
+        if (!u && el.querySelectorAll) { var ss = el.querySelectorAll('source'); for (var k = 0; k < ss.length && !u; k++) u = ss[k].__mnhaOrig || ss[k].getAttribute('src'); }
         if (!u) u = el.currentSrc;
         try { u = new URL(u, location.href).href; } catch (e) { return ''; }
         return ours(u) ? u : '';
@@ -141,6 +141,58 @@ const SOURCE = function (BASE, HLS) {
         if (!ours(a.href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
     }, true);
 
+    // ---- 6) TRÌNH DUYỆT TỰ GIẢI MÃ (mnhaMedia.js): src → hỏi khoá (nhỏ) → tải file mã hoá thẳng từ GitHub raw → giải mã → blob; lỗi thì trả lại src gốc (qua máy chủ)
+    var M = DIRECT && window.MnhaMedia && window.MnhaMedia.supported() ? window.MnhaMedia : null;
+    var MEDIA_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|ico|mp3|wav|ogg|oga|m4a|aac|flac|opus|mp4|m4v|mov|webm|ogv|mkv)$/i;
+    var origSrc = {};           // bộ ghi/đọc src GỐC của trình duyệt (lấy trước khi ghi đè)
+    try { origSrc.IMG = Object.getOwnPropertyDescriptor(window.HTMLImageElement.prototype, 'src'); origSrc.MEDIA = Object.getOwnPropertyDescriptor(window.HTMLMediaElement.prototype, 'src'); } catch (e) { /* */ }
+    function nativeSet(el, url) {
+        var d = el.tagName === 'IMG' ? origSrc.IMG : el.tagName === 'SOURCE' ? null : origSrc.MEDIA;
+        if (d && d.set) d.set.call(el, url); else el.setAttribute('src', url);
+    }
+    function restore(el, url) { el.__mnhaOrig = url; nativeSet(el, url); if (el.parentNode && el.parentNode.load && el.tagName === 'SOURCE') { try { el.parentNode.load(); } catch (e) { /* */ } } }
+    function resolveSrc(el, raw) {
+        var tok = el.__mnhaTok = (el.__mnhaTok || 0) + 1;
+        el.__mnhaOrig = raw;
+        var abs; try { abs = new URL(raw, location.href).href; } catch (e) { return restore(el, raw); }
+        if (!M || !ours(abs) || !MEDIA_EXT.test(new URL(abs).pathname)) return restore(el, raw);
+        M.open(abs, null, BASE).then(function (r) {
+            if (el.__mnhaTok !== tok) { if (r.type === 'blob') M.revoke(r.url); return; }
+            if (r.type === 'hls') { if (el.tagName === 'IMG') return restore(el, raw); var tgt = el.tagName === 'SOURCE' ? el.parentNode : el; return attachHls(tgt, abs); }
+            if (el.__mnhaBlob) M.revoke(el.__mnhaBlob);
+            el.__mnhaBlob = r.url; nativeSet(el, r.url);
+            if (el.tagName === 'SOURCE' && el.parentNode && el.parentNode.load) { try { el.parentNode.load(); } catch (e) { /* */ } }
+            schedule();
+        }, function (err) {
+            if (el.__mnhaTok !== tok) return;
+            if (err && (err.status === 403 || err.status === 429)) problem(abs, err.message, err.status);
+            restore(el, raw);                       // đường dự phòng: để trình duyệt xin file qua máy chủ như cũ
+        });
+    }
+    function scan(root) {
+        var list = [];
+        if (root.nodeType === 1 && root.hasAttribute && root.hasAttribute('data-mnha-src')) list.push(root);
+        if (root.querySelectorAll) { var q = root.querySelectorAll('[data-mnha-src]'); for (var i = 0; i < q.length; i++) list.push(q[i]); }
+        list.forEach(function (el) { var v = el.getAttribute('data-mnha-src'); if (v) { el.removeAttribute('data-mnha-src'); resolveSrc(el, v); } });
+    }
+    scan(document);
+    document.addEventListener('DOMContentLoaded', function () { scan(document); });
+    try { new MutationObserver(function (ms) { ms.forEach(function (m) { if (m.type === 'attributes') scan(m.target); else for (var i = 0; i < m.addedNodes.length; i++) if (m.addedNodes[i].nodeType === 1) scan(m.addedNodes[i]); }); }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-mnha-src'] }); } catch (e) { /* */ }
+    // JS của trang gán el.src = "anh.png" (new Image(), createElement…) → cũng đi đường trình duyệt tự giải mã
+    if (M) {
+        try {
+            ['IMG', 'MEDIA'].forEach(function (k) {
+                var d = origSrc[k], P = k === 'IMG' ? window.HTMLImageElement.prototype : window.HTMLMediaElement.prototype;
+                if (!d || !d.set) return;
+                Object.defineProperty(P, 'src', { configurable: true, enumerable: d.enumerable,
+                    get: function () { var o = this.__mnhaOrig; if (!o) return d.get.call(this); try { return new URL(o, location.href).href; } catch (e) { return o; } },
+                    set: function (v) { var x = String(v); if (/^(blob|data):/i.test(x)) return d.set.call(this, v); resolveSrc(this, x); } });
+            });
+        } catch (e) { /* */ }
+    }
+    // nút "Tải" (và mọi link ?dl=1 của trang): trình duyệt tự tải + giải mã từng đoạn, ghi bộ nhớ tạm rồi đổi về đuôi gốc
+    if (M) M.bindDownloads(document, { base: BASE });
+
     window.addEventListener('error', function (e) {
         if (e && e.target && e.target !== window) return;       // lỗi tài nguyên đã xử lý ở trên
         once('js|' + e.message + e.lineno, function () { post({ type: 'js', message: String(e.message || 'Lỗi JavaScript'), line: e.lineno || 0, col: e.colno || 0 }); });
@@ -151,7 +203,7 @@ const SOURCE = function (BASE, HLS) {
 };
 
 /** Chuỗi <script>…</script> đã nhúng BASE (đường dẫn gốc của token, vd "/preview/abc/") và địa chỉ hls.js. */
-function build(base, hlsUrl) {
-    return '<script>(' + SOURCE.toString() + ')(' + JSON.stringify(String(base)).replace(/</g, '\\u003c') + ',' + JSON.stringify(String(hlsUrl)).replace(/</g, '\\u003c') + ');</script>';
+function build(base, hlsUrl, opt) {
+    return '<script>(' + SOURCE.toString() + ')(' + JSON.stringify(String(base)).replace(/</g, '\\u003c') + ',' + JSON.stringify(String(hlsUrl)).replace(/</g, '\\u003c') + ',' + (opt && opt.direct ? 'true' : 'false') + ');</script>';
 }
 module.exports = { build };

@@ -1,6 +1,7 @@
 // test/html-media.js — tải lên ảnh/âm thanh/video (mã hoá, cắt m3u8) + máy chủ xem trước (giải mã ở Node) — GitHub giả, HTTP thật, ffmpeg thật.
 //   Chạy: node -r ./test/_stubs.js test/html-media.js
 process.env.SESSION_ENC_KEY = 'k'.repeat(40);
+process.env.MEDIA_DIRECT = 'off';      // file này kiểm ĐƯỜNG DỰ PHÒNG (máy chủ giải mã); đường trình duyệt tự giải mã: test/html-keys.js
 const R = require('path').join(__dirname, '..') + '/';
 const assert = require('assert');
 const crypto = require('crypto');
@@ -153,6 +154,7 @@ async function uploadHls(dir, name, file, { batch = 3, stopAfter = null, uploadI
   put(`${UID}/codes/html/site/style.css`, Buffer.from('body{color:red}'));
   r = await get(U('site/index.html')); assert.strictEqual(r.status, 200);
   const html = r.body.toString(); assert(html.includes('<head><script>(') && html.includes('href="style.css"'), 'chèn shim ngay sau <head>');
+  assert(html.includes('src="../Anh_nho.png"'), 'MEDIA_DIRECT=off: giữ nguyên src (máy chủ giải mã)');
   assert(/sandbox/.test(r.headers['content-security-policy']) && r.headers['access-control-allow-origin'] === '*');
   r = await get(U('site/style.css')); assert(r.body.toString() === 'body{color:red}' && /text\/css/.test(r.headers['content-type']));
   r = await get(U('site/khong-co.css')); assert.strictEqual(r.status, 404);
@@ -172,21 +174,23 @@ async function uploadHls(dir, name, file, { batch = 3, stopAfter = null, uploadI
   const man = JSON.parse(blobs.get(files.get(`${UID}/codes/html/mnha-media.json`)));
   const e = man.files['song.mp3'];
   assert(e && e.state === 'ready' && e.mode === 'hls-audio' && e.playlist === '_media/song_mp3/index.m3u8' && e.done === e.durs.length && e.segExt === 'ts');
+  assert(e.drm && e.drm.method === 'AES-128', 'âm thanh mới cũng AES-128 (khoá riêng bọc trong json) để hls.js tự giải mã');
   assert(!files.has(`${UID}/codes/html/song.mp3`), 'không có file trực tiếp song.mp3 — chỉ có m3u8 khai báo trong json');
   const stored = blobs.get(files.get(`${UID}/codes/html/_media/song_mp3/seg00000.ts`));
-  assert(mc.isEncrypted(stored), 'đoạn .ts âm thanh mã hoá 2 chiều (MNHAENC1)');
+  assert(!mc.isEncrypted(stored) && stored[0] !== 0x47 && stored.length % 16 === 0, 'đoạn .ts âm thanh trên GitHub là AES-128-CBC');
   assert(files.has(`${UID}/codes/html/_media/song_mp3/index.m3u8`));
   console.log('✔ mp3 > ngưỡng → ' + e.done + ' đoạn .ts mã hoá + index.m3u8 + json đánh dấu (state=ready), tên gốc song.mp3 khai báo là m3u8');
   r = await get(U('song.mp3')); assert.strictEqual(r.status, 200); assert(/mpegurl/.test(r.headers['content-type']));
-  let pl = r.body.toString(); assert(pl.startsWith('#EXTM3U') && !pl.includes('EXT-X-KEY') && pl.includes('#EXT-X-ENDLIST'));
+  let pl = r.body.toString(); assert(pl.startsWith('#EXTM3U') && /EXT-X-KEY:METHOD=AES-128/.test(pl) && pl.includes('#EXT-X-ENDLIST'));
+  const akey = (await get(pl.match(/URI="([^"]+)"/)[1])).body; assert.strictEqual(akey.length, 16);
   const segUrls = pl.split('\n').filter((l) => l && !l.startsWith('#')); assert.strictEqual(segUrls.length, e.done);
   assert(segUrls[0].startsWith(`/preview/${TOK}/_media/song_mp3/seg00000.ts`));
-  const tsParts = []; for (const su of segUrls) { const x = await get(su); assert.strictEqual(x.status, 200, su); assert(!mc.isEncrypted(x.body) && x.body[0] === 0x47, 'Node đã giải mã đoạn'); tsParts.push(x.body); }
+  const tsParts = []; for (let si = 0; si < segUrls.length; si++) { const x = await get(segUrls[si]); assert.strictEqual(x.status, 200, segUrls[si]); const plainSeg = mc.decryptHlsSegment(x.body, akey, si); assert(plainSeg[0] === 0x47, 'giải mã đoạn bằng key.bin'); tsParts.push(plainSeg); }
   fs.writeFileSync(path.join(tmp, 'a.ts'), Buffer.concat(tsParts));
   let dec = spawnSync('ffmpeg', ['-v', 'error', '-i', path.join(tmp, 'a.ts'), '-f', 'null', '-'], { encoding: 'utf8' }); assert.strictEqual(dec.stderr.trim(), '');
   console.log('✔ GET song.mp3 → playlist m3u8; từng đoạn được Node giải mã; ffmpeg giải mã sạch toàn bộ');
   r = await get(U('song.mp3?dl=1')); assert(/attachment; filename="song\.mp3"/.test(r.headers['content-disposition'])); assert(r.body[0] === 0x47 && r.body.length % 188 === 0);
-  assert(r.body.equals(Buffer.concat(tsParts)), 'tải về = ghép các đoạn đã giải mã (mpegts), đuôi gốc .mp3');
+  assert(r.body.equals(Buffer.concat(tsParts)), 'tải về (đường dự phòng) = ghép các đoạn đã giải mã (mpegts), đuôi gốc .mp3');
   console.log('✔ ?dl=1 → ghép đoạn đã giải mã thành mpegts, tên giữ đuôi .mp3');
 
   // ============ 5) video lớn → AES-128 DRM; khoá trong json mã hoá 2 chiều; ffmpeg tự giải mã HLS bằng key.bin

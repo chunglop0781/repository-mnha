@@ -86,18 +86,18 @@ const get = (u, headers = {}) => new Promise((ok, no) => { http.get({ host: '127
   let r = await get(U('site/index.html')); assert.strictEqual(r.status, 200); assert(r.body.toString().includes('<head><script>('), 'chèn shim');
   r = await get(U('site/style.css')); assert(r.status === 200 && r.body.toString() === 'body{background:#eee}');
   r = await get(U('site/plain.png')); assert(r.status === 200 && r.body.equals(png), 'ảnh bình thường: xem thẳng, không cần giải mã');
-  r = await get(U('site/enc.png')); assert(r.status === 200 && r.body.equals(png), 'ảnh mã hoá: Node giải mã');
-  r = await get(U('site/broken.png')); assert.strictEqual(r.status, 422); assert(/Không giải mã được/.test(JSON.parse(r.body).error));
-  r = await get(U('site/enc.png?dl=1')); assert(/attachment; filename="enc\.png"/.test(r.headers['content-disposition']) && r.body.equals(png));
+  // repo KHÔNG phải repo của app (o/r ≠ GITHUB_OWNER/REPO) → không có khoá chủ của app nào được mở: mọi giải mã đều bị từ chối (xem test/html-keys.js cho repo của app)
+  r = await get(U('site/enc.png')); assert.strictEqual(r.status, 403, 'ảnh mã hoá ở repo lạ: không giải mã'); assert(/quyền|phạm vi/.test(JSON.parse(r.body).error));
+  r = await get(U('site/enc.png?dl=1')); assert.strictEqual(r.status, 403);
   r = await get(U('site/khong-co.png')); assert.strictEqual(r.status, 404);
-  console.log('✔ GitHub: html+css; ảnh thường xem thẳng; ảnh mã hoá giải mã ở Node; hỏng → 422 "Không giải mã được"; tải về giữ đuôi');
+  console.log('✔ GitHub: html+css; ảnh thường xem thẳng; ảnh mã hoá ở repo lạ → 403 (không có khoá)');
 
   // ---- media m3u8 từ repo (đuôi gốc song.mp3 khai báo trong json)
   r = await get(U('site/song.mp3')); assert.strictEqual(r.status, 200); assert(/mpegurl/.test(r.headers['content-type']));
   const urls = r.body.toString().split('\n').filter((l) => l && !l.startsWith('#')); assert.strictEqual(urls.length, 3);
-  for (let i = 0; i < 3; i++) { const s = await get(urls[i]); assert(s.status === 200 && s.body.equals(segs[i]), 'đoạn ' + i + ' giải mã'); }
-  r = await get(U('site/song.mp3?dl=1')); assert(r.body.equals(Buffer.concat(segs)) && /filename="song\.mp3"/.test(r.headers['content-disposition']));
-  console.log('✔ GitHub: song.mp3 → m3u8 theo json, đoạn .ts được giải mã, tải về = mpegts ghép lại (đuôi .mp3)');
+  for (let i = 0; i < 3; i++) { const s = await get(urls[i]); assert.strictEqual(s.status, 403, 'đoạn ' + i + ': repo lạ không được giải mã'); }
+  r = await get(U('site/song.mp3?dl=1')); assert.strictEqual(r.status, 403);
+  console.log('✔ GitHub: song.mp3 → m3u8 theo json; đoạn mã hoá ở repo lạ → 403');
 
   // ---- chặn SSRF / đường dẫn lạ
   r = await get(U('site/%2e%2e%2f%2e%2e%2fetc/passwd')); assert([400, 403, 404].includes(r.status));

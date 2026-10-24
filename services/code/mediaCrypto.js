@@ -37,6 +37,16 @@ function isEncrypted(buf) {
     return Buffer.isBuffer(buf) && buf.length >= HEADER_LEN && buf.subarray(0, MAGIC.length).equals(MAGIC);
 }
 
+/** Khoá AES-256 RIÊNG của 1 file MNHAENC1 = HKDF(khoá chủ, salt trong header file). Salt là "mã khoá" công khai; khoá thật chỉ ra khỏi máy chủ qua keyService.release(). */
+function fileKey(salt) {
+    if (!Buffer.isBuffer(salt) || salt.length !== 16) throw new MediaCryptoError('salt phải là 16 byte', 'BAD_ARG');
+    return sub('media-gcm', salt);
+}
+/** Salt ở header file MNHAENC1 (hoặc null nếu không phải file mã hoá của hệ thống). */
+function saltOf(buf) {
+    return isEncrypted(buf) && buf[MAGIC.length] === VER ? Buffer.from(buf.subarray(MAGIC.length + 1, HEADER_LEN)) : null;
+}
+
 /** Salt dẫn xuất (không cần lưu trạng thái): các phần của CÙNG một lần tải lên dùng chung salt. */
 function deriveSalt(label) {
     return crypto.createHmac('sha256', sub('salt-derive')).update(String(label)).digest().subarray(0, 16);
@@ -129,6 +139,6 @@ function verifyReceipt(r, uid, uploadId, path, sha, size) {
 function signKey() { return sub('preview-token'); }
 
 module.exports = {
-    MediaCryptoError, MAGIC, HEADER_LEN, isEncrypted, deriveSalt, header, encryptRecord, encryptBuffer, assemble, decryptBuffer,
+    MediaCryptoError, MAGIC, HEADER_LEN, isEncrypted, fileKey, saltOf, deriveSalt, header, encryptRecord, encryptBuffer, assemble, decryptBuffer,
     hlsKey, hlsIv, encryptHlsSegment, decryptHlsSegment, wrapKey, unwrapKey, receipt, verifyReceipt, signKey, resetKeys
 };

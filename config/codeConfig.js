@@ -69,6 +69,7 @@ const MEDIA = {
     MAX_FILE_BYTES: (Number(process.env.MEDIA_MAX_BYTES) > 0 ? Number(process.env.MEDIA_MAX_BYTES) : 2 * 1024 * 1024 * 1024),
     MANIFEST: 'mnha-media.json',   // cùng thư mục với file gốc: { files: { "song.mp3": {...playlist, khoá DRM đã mã hoá...} } }
     HIDDEN_DIR: '_media',          // nơi chứa m3u8 + đoạn đã mã hoá (ẩn khỏi danh sách file)
+    DIRECT: process.env.MEDIA_DIRECT !== 'off',     // trình duyệt tải file mã hoá thẳng từ GitHub raw rồi tự giải mã (off = mọi thứ qua máy chủ như trước)
     PREVIEW_TTL_MS: 12 * 60 * 60 * 1000,
     HLSJS_URL: process.env.HLSJS_URL || 'https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js',
     HLS_AUDIO_EXTS: ['mp3', 'aac', 'm4a'],     // âm thanh > DIRECT_MAX cắt được

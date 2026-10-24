@@ -4,7 +4,10 @@
     'use strict';
     var P = JSON.parse(document.getElementById('payload').textContent);
     var items = P.items || [], stage = document.getElementById('plStage'), side = document.getElementById('plSide');
-    var cur = -1, hls = null, auto = true;
+    var cur = -1, hls = null, auto = true, curBlob = null;
+    // Trình duyệt TỰ giải mã (mnhaMedia.js): tải file mã hoá thẳng từ GitHub raw, chỉ xin khoá nhỏ ở máy chủ → không tốn băng thông Vercel. Không được thì quay về đường cũ.
+    var direct = !!(P.direct && window.MnhaMedia && MnhaMedia.supported());
+    if (direct) MnhaMedia.bindDownloads(document, {});
     function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
     var ICON = { image: '🖼️', audio: '🎵', video: '🎬' }, LABEL = { image: 'ảnh', audio: 'âm thanh', video: 'video' };
 
@@ -24,6 +27,24 @@
         return hlsLoad;
     }
     function showErr(box, msg) { box.style.display = 'block'; box.textContent = '⚠ ' + msg; }
+    function playHls(el, it, box) {
+        return loadHls().catch(function () { return null; }).then(function () {
+            if (!window.Hls || !Hls.isSupported()) {
+                if (el.canPlayType('application/vnd.apple.mpegurl')) { el.src = it.url; el.play && el.play().catch(function () { }); return; }
+                showErr(box, window.Hls ? 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).' : 'Không tải được hls.js (kiểm tra mạng hoặc biến HLSJS_URL).');
+                return;
+            }
+            if (hls) { hls.destroy(); hls = null; }
+            hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 20, maxBufferSize: 60 * 1000 * 1000 });     // xem đến đâu xả bộ đệm cũ đến đó (đỡ RAM)
+            hls.on(Hls.Events.ERROR, function (ev, d) {
+                if (!d || !d.fatal) return;
+                var codecErr = /Codec|codec|bufferAddCodec|manifestIncompatible/.test(d.details || '') || (d.type === Hls.ErrorTypes.MEDIA_ERROR && /codec|MIME|type/i.test((d.error && d.error.message) || ''));
+                showErr(box, codecErr ? 'Trình duyệt/thiết bị này không giải mã được codec video của file (H.265/AV1/VP9 cần trình duyệt hoặc phần cứng hỗ trợ). Hãy thử Chrome/Edge/Safari mới, hoặc tải về để mở bằng phần mềm khác.' : 'Lỗi phát m3u8: ' + (d.details || d.type));
+            });
+            hls.loadSource(it.url); hls.attachMedia(el);
+            el.play && el.play().catch(function () { });
+        });
+    }
     // phần tử phát lỗi: hỏi máy chủ nguyên nhân; nếu là playlist m3u8 thì gắn hls.js, nếu là lỗi giải mã/không thấy thì báo rõ
     function diagnose(el, it, box) {
         fetch(it.url, { headers: { Range: 'bytes=0-0' } }).then(function (r) {
@@ -31,22 +52,7 @@
             if (r.ok && /mpegurl/i.test(ct)) {
                 // Ưu tiên hls.js (Chrome/Edge mới trả canPlayType = 'maybe' nhưng phát native m3u8 mã hoá AES-128 / fMP4 thì lỗi);
                 // chỉ dùng phát native khi hls.js không hỗ trợ (vd Safari iOS).
-                return loadHls().catch(function () { return null; }).then(function () {
-                    if (!window.Hls || !Hls.isSupported()) {
-                        if (el.canPlayType('application/vnd.apple.mpegurl')) { el.src = it.url; el.play && el.play().catch(function () { }); return; }
-                        showErr(box, window.Hls ? 'Trình duyệt này không hỗ trợ phát m3u8 (MSE).' : 'Không tải được hls.js (kiểm tra mạng hoặc biến HLSJS_URL).');
-                        return;
-                    }
-                    if (hls) { hls.destroy(); hls = null; }
-                    hls = new Hls({ maxBufferLength: 30 });
-                    hls.on(Hls.Events.ERROR, function (ev, d) {
-                        if (!d || !d.fatal) return;
-                        var codecErr = /Codec|codec|bufferAddCodec|manifestIncompatible/.test(d.details || '') || (d.type === Hls.ErrorTypes.MEDIA_ERROR && /codec|MIME|type/i.test((d.error && d.error.message) || ''));
-                        showErr(box, codecErr ? 'Trình duyệt/thiết bị này không giải mã được codec video của file (H.265/AV1/VP9 cần trình duyệt hoặc phần cứng hỗ trợ). Hãy thử Chrome/Edge/Safari mới, hoặc tải về để mở bằng phần mềm khác.' : 'Lỗi phát m3u8: ' + (d.details || d.type));
-                    });
-                    hls.loadSource(it.url); hls.attachMedia(el);
-                    el.play && el.play().catch(function () { });
-                });
+                return playHls(el, it, box);
             }
             if (r.ok) { showErr(box, 'Trình duyệt không phát được định dạng này — hãy tải về để mở bằng phần mềm khác.'); return; }
             return r.json().then(function (j) { return j; }, function () { return {}; }).then(function (j) { showErr(box, (j && j.error) || ('Lỗi ' + r.status)); });
@@ -57,6 +63,7 @@
         if (i < 0 || i >= items.length) return;
         cur = i; var it = items[i];
         if (hls) { hls.destroy(); hls = null; }
+        if (curBlob) { MnhaMedia.revoke(curBlob); curBlob = null; }
         Array.prototype.forEach.call(side.querySelectorAll('.pl-item'), function (b) { b.classList.toggle('on', Number(b.dataset.i) === i); });
         var on = side.querySelector('.pl-item.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
         stage.innerHTML = '';
@@ -72,7 +79,20 @@
             } else { el = document.createElement('video'); el.controls = true; el.autoplay = true; el.playsInline = true; }
             el.addEventListener('error', function () { if (el.__diag === it.url) return; el.__diag = it.url; diagnose(el, it, box); });
             if (it.kind !== 'image') el.addEventListener('ended', function () { if (auto && cur < items.length - 1) select(cur + 1); });
-            el.src = it.url; stage.appendChild(el); stage.appendChild(box);
+            stage.appendChild(el); stage.appendChild(box);
+            if (!direct) el.src = it.url;
+            else {
+                var mine = i;
+                MnhaMedia.open(it.url, it.name).then(function (r) {
+                    if (cur !== mine) { if (r.type === 'blob') MnhaMedia.revoke(r.url); return; }
+                    if (r.type === 'blob') { curBlob = r.url; el.src = r.url; }
+                    else playHls(el, it, box);          // m3u8: hls.js tải đoạn thẳng từ GitHub, tự giải mã AES-128 bằng khoá lấy từ máy chủ
+                }, function (err) {
+                    if (cur !== mine) return;
+                    if (err && (err.status === 403 || err.status === 429)) return showErr(box, err.message);
+                    el.src = it.url;                    // đường dự phòng: máy chủ giải mã như trước
+                });
+            }
         }
         var ctl = document.createElement('div'); ctl.className = 'pl-ctl';
         ctl.innerHTML = '<button type="button" class="hx-btn" id="plPrev">⏮ Trước</button><button type="button" class="hx-btn" id="plNext">Sau ⏭</button>' +

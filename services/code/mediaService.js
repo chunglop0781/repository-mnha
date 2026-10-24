@@ -4,8 +4,8 @@
 //   ┌ file ≤ 23MB ("direct")  : PUT part (mã hoá từng phần → blob) … POST finish (ghép → 1 file cùng tên, đã mã hoá).  File ≤ 3.5MB: 1 request.
 //   └ âm thanh/video > 23MB   : TRÌNH DUYỆT cắt thành đoạn MPEG-TS (public/js/tsMux.js), PUT seg (mã hoá từng đoạn → blob),
 //                              POST commit từng lô: ghi đoạn + m3u8 + ĐÁNH DẤU TIẾN ĐỘ vào mnha-media.json (1 commit/lô) → có thể làm tiếp nếu đứt.
-//        âm thanh: đoạn .ts mã hoá 2 chiều trực tiếp (MNHAENC1)       — Node giải mã từng đoạn khi trình phát xin (previewServer)
-//        video   : đoạn .ts mã hoá AES-128 chuẩn HLS (DRM), khoá ghi trong json (đã mã hoá 2 chiều) — hls.js giải mã khi phát, key.bin do Node trả
+//        âm thanh + video: đoạn .ts mã hoá AES-128 chuẩn HLS (DRM), khoá RIÊNG ghi trong json (đã mã hoá 2 chiều) — hls.js trong TRÌNH DUYỆT giải mã khi phát
+//                  (đoạn tải thẳng từ GitHub raw; chỉ key.bin — 16 byte, đã kiểm quyền — đi qua máy chủ)
 //                  codec thế hệ mới (H.265 / AV1 / VP9): đoạn fMP4 .m4s (moof+mdat) cùng AES-128; init.mp4 (chỉ cấu hình codec, không mã hoá) lưu base64 trong json
 //   mnha-media.json (cùng thư mục file gốc) khai báo "song.mp3" → playlist _media/song_mp3/index.m3u8 (đuôi gốc được khai báo là m3u8).
 //   Biên nhận HMAC ngăn client nhét sha blob bất kỳ (của người khác) vào commit.
@@ -174,8 +174,9 @@ async function putSeg(uid, q, body) {
     const i = Number(q.i);
     if (!Number.isInteger(i) || i < 0 || i > 200000) throw bad('Số thứ tự đoạn không hợp lệ.');
     const id = mediaId(c.name), file = hls.segName(i, fm ? 'm4s' : 'ts');
-    // âm thanh: mã hoá 2 chiều trực tiếp (Node giải mã khi phát) · video: AES-128 chuẩn HLS (khoá DRM trong json)
-    const data = c.kind === 'audio' ? mc.encryptBuffer(body) : mc.encryptHlsSegment(body, mc.hlsKey(uid, uploadId), i);
+    // âm thanh & video: AES-128 chuẩn HLS, khoá RIÊNG của lần tải lên (bọc 2 chiều trong json) → hls.js trong trình duyệt tự giải mã đoạn tải thẳng từ GitHub raw.
+    // (Âm thanh m3u8 tải lên trước đây dùng MNHAENC1 từng đoạn — không có mục `drm` trong json — vẫn phát được qua máy chủ.)
+    const data = mc.encryptHlsSegment(body, mc.hlsKey(uid, uploadId), i);
     const sha = await gh.createBlob(data);
     const path = join(root(uid), dirRel(c.dirSegs), segRel(id, file));
     return { ok: true, sha, size: data.length, plainSize: body.length, receipt: mc.receipt(uid, uploadId, path, sha, data.length) };
@@ -205,7 +206,7 @@ async function commit(uid, b) {
         const keep = new Set(segs.map((s) => join(base, segRel(id, hls.segName(Number(s.i), segExt)))));
         changes.push(...(await removalChanges(uid, c.dirSegs, c.name, { keepPrefixPaths: keep })).out);
         e = { name: c.name, id, kind: c.kind, mode: c.kind === 'audio' ? 'hls-audio' : 'hls-video', mime: MIME_OF[c.ext] || 'application/octet-stream', segExt, size: srcSize, durs: [], sizes: [], done: 0, createdAt: new Date().toISOString() };
-        if (c.kind === 'video') e.drm = { method: 'AES-128', key: mc.wrapKey(mc.hlsKey(uid, uploadId)) };
+        e.drm = { method: 'AES-128', key: mc.wrapKey(mc.hlsKey(uid, uploadId)) };
     }
     if (fm) {               // fMP4: init.mp4 lưu base64 trong json (gửi lại ở mọi lô — nhỏ, và là cùng 1 giá trị khi làm tiếp)
         e.init = checkInit(b.init);

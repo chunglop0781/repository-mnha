@@ -1,7 +1,7 @@
 // services/code/previewToken.js — token ký (HMAC) cho link xem trước trang HTML: /preview/<token>/<đường-dẫn-file>
 // Iframe xem trước KHÔNG mang cookie đăng nhập (chạy trong sandbox, origin "null") nên quyền đọc nằm hết trong token:
 //   { k:'own', uid }                    → đọc file của chính người dùng đó:  {uid}/codes/html/...   (GitHub của app)
-//   { k:'web', host, base[], ref }      → đọc file trong 1 repo GitHub/GitLab công khai (xem code trên mạng)
+//   { k:'web', host, base[], ref, uid?, viewer? } → đọc file trong 1 repo GitHub/GitLab công khai (xem code trên mạng); uid = chủ thư mục, viewer = người xem
 // Token hết hạn sau MEDIA.PREVIEW_TTL_MS; chỉ được cấp cho người đã đăng nhập (controllers/html.controller.js).
 'use strict';
 const crypto = require('crypto');
@@ -30,7 +30,11 @@ function verify(tok) {
     if (!p || typeof p !== 'object' || !(p.e > Date.now())) return null;
     if (p.k === 'own' && /^[A-Za-z0-9_\-]{1,64}$/.test(String(p.uid || ''))) return { k: 'own', uid: String(p.uid) };
     if (p.k === 'web' && ['github', 'gitlab'].includes(p.host) && Array.isArray(p.base) && p.base.length && p.base.length <= 8
-        && p.base.every((x) => typeof x === 'string') && typeof p.ref === 'string') return { k: 'web', host: p.host, base: p.base, ref: p.ref };
+        && p.base.every((x) => typeof x === 'string') && typeof p.ref === 'string') {
+        // uid = chủ của thư mục đang xem (đoạn đầu đường dẫn trong repo của app), viewer = người đang xem — để keyService quyết định có mở khoá media không
+        const id = (v) => (/^[A-Za-z0-9_\-]{1,64}$/.test(String(v || '')) ? String(v) : undefined);
+        return { k: 'web', host: p.host, base: p.base, ref: p.ref, uid: id(p.uid), viewer: id(p.viewer) };
+    }
     return null;
 }
 module.exports = { sign, verify };

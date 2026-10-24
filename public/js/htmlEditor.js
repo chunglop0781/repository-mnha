@@ -98,6 +98,24 @@
             frame.src = u;
         }).catch(function (e) { say('<span class="bad">' + esc(e.message) + '</span>'); });
     }
+    // Nút "⬇ Tải" trong trang xem (iframe sandbox không ghi đĩa được) → trang này tải: trình duyệt tự giải mã từng đoạn, ghi bộ nhớ tạm (OPFS) rồi lưu; lỗi thì tải qua máy chủ như cũ
+    var dlBusy = false;
+    function startDownload(d) {
+        if (navigator.userActivation && !navigator.userActivation.isActive) return;      // chỉ khi người dùng vừa bấm (trang trong khung không tự tải được)
+        if (dlBusy) return;
+        var u; try { u = new URL(String(d.url), location.href); } catch (e) { return; }
+        if (u.origin !== location.origin || !/^\/preview\/[^/]+\/./.test(u.pathname)) return;
+        var plain = u.origin + u.pathname, name = String(d.name || '').slice(0, 200) || 'media';
+        function viaServer() {
+            var a = document.createElement('a'); a.href = plain + '?dl=1'; a.setAttribute('download', name); a.style.display = 'none';
+            document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); }, 1000);
+        }
+        if (!(window.MnhaMedia && MnhaMedia.supported())) return viaServer();
+        dlBusy = true;
+        MnhaMedia.download(plain, name, { onProgress: function (f, t) { say('⬇ ' + esc(name) + ' — ' + Math.round(f * 100) + '% (' + esc(t) + ')'); } })
+            .then(function () { say(''); }, function () { say(''); viaServer(); })
+            .then(function () { dlBusy = false; });
+    }
     if (frame) {
         frame.addEventListener('load', function () { if (mode === 'view' && !/Chưa lưu/.test(status.textContent)) say(''); });
         window.addEventListener('message', function (e) {
@@ -105,6 +123,7 @@
             var d = e.data; if (!d || !d.mnha) return;
             if (d.type === 'height') frame.style.height = Math.max(120, d.h) + 'px';
             else if (d.type === 'error') addErr(d);
+            else if (d.type === 'download') startDownload(d);
         });
         tools.querySelectorAll('[data-w]').forEach(function (b) {
             b.onclick = function () {

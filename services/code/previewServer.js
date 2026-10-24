@@ -11,6 +11,11 @@
 //   • ?dl=1 → tải về: giữ ĐUÔI NHƯ LÚC TẢI LÊN; ảnh/âm thanh/video nhỏ được giải mã về đúng file gốc; media đã cắt thì giải mã các đoạn
 //     rồi ghép lại thành luồng MPEG-TS (mpegts) mang đuôi gốc.
 //   • /…/__view/<tên> → trang trình phát (ảnh / audio / video) có nút Tải về.
+//   • TRÌNH DUYỆT TỰ GIẢI MÃ (tiết kiệm băng thông Vercel): file/đoạn mã hoá tải THẲNG từ GitHub raw; máy chủ chỉ trả khoá nhỏ đã kiểm quyền
+//       GET …/__key/<tên>   → {mode:'direct',key,raw,sha} | {mode:'plain',raw} | {mode:'hls',drm}   (keyService.release)
+//       GET …/key.bin       → khoá DRM 16 byte (keyService.releaseHlsKey)
+//     playlist m3u8 trỏ đoạn tới GitHub raw khi có thể. Giải mã ở Node (các nhánh bên dưới) chỉ còn là ĐƯỜNG DỰ PHÒNG (CSS url(), fetch() của trang, tắt MEDIA_DIRECT…)
+//     và luôn qua keyService.allowDecrypt().
 //   Bảo mật: mọi phản hồi gắn CSP sandbox (origin "null": script của trang không đụng được cookie/phiên của app), CORS * không kèm cookie.
 // Không phụ thuộc express: nhận (req, res) Node thuần, nên mount bằng app.use('/preview', handler) hoặc http.createServer đều được.
 'use strict';
@@ -19,6 +24,7 @@ const token = require('./previewToken');
 const shim = require('./previewShim');
 const hls = require('./hlsPlaylist');
 const remoteSource = require('./remoteSource');
+const ks = require('./keyService');
 const { MEDIA, ASSET_EXTS, mediaKind } = require('../../config/codeConfig');
 
 const MOUNT = '/preview';
@@ -114,6 +120,15 @@ function sendError(req, res, e) {
 }
 const dispo = (name) => `attachment; filename="${String(name).replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 
+// Đổi src="anh.png" (đường dẫn tương đối tới ảnh/âm thanh/video) thành data-mnha-src để previewShim giải mã trong trình duyệt rồi mới gắn src
+// (không đổi thì trình duyệt tự xin file qua máy chủ → tốn băng thông). Shim hỏng/không có WebCrypto → tự trả lại src gốc.
+const REL_MEDIA = (v) => { const u = String(v || '').trim(); return !!u && !/^([a-z][a-z0-9+.\-]*:|\/|#)/i.test(u) && !!mediaKind(u.split(/[?#]/)[0]); };
+function rewriteMedia(html) {
+    return html.replace(/<(img|audio|video|source)\b([^>]*)>/gi, (m, tag, attrs) => '<' + tag + attrs.replace(/(\s)src\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/i, (mm, sp, full, d, s1, u) => {
+        const v = d !== undefined ? d : s1 !== undefined ? s1 : u;
+        return REL_MEDIA(v) ? sp + 'data-mnha-src=' + full : mm;
+    }) + '>');
+}
 function injectShim(html, script) {
     let m = /<head[^>]*>/i.exec(html);
     if (!m) m = /<html[^>]*>/i.exec(html);
@@ -137,14 +152,14 @@ async function readSegment(source, dirSegs, entry, i, key) {
     if (!buf) throw new HttpError(404, `Thiếu đoạn ${i + 1}/${entry.durs.length} của "${entry.name}" (file media chưa tải lên đủ hoặc đã bị xoá).`, 'MISSING_SEGMENT');
     let plain = buf;
     try {
-        if (entry.mode === 'hls-video') plain = mc.decryptHlsSegment(buf, key, i);
+        if (entry.drm) plain = mc.decryptHlsSegment(buf, key, i);
         else if (mc.isEncrypted(buf)) plain = mc.decryptBuffer(buf);
     } catch (e) { throw new HttpError(422, `Không giải mã được đoạn ${i + 1} của "${entry.name}": ${e.message}`, 'DECRYPT'); }
-    if (entry.sizes && entry.sizes[i] != null && entry.mode === 'hls-audio' && plain.length !== entry.sizes[i]) throw new HttpError(422, `Đoạn ${i + 1} của "${entry.name}" sai kích thước.`, 'DECRYPT');
+    if (entry.sizes && entry.sizes[i] != null && plain.length !== entry.sizes[i]) throw new HttpError(422, `Đoạn ${i + 1} của "${entry.name}" sai kích thước.`, 'DECRYPT');
     return plain;
 }
 function entryKey(entry) {
-    if (entry.mode !== 'hls-video') return null;
+    if (!entry.drm) return null;
     try { return mc.unwrapKey(entry.drm && entry.drm.key); }
     catch (e) { throw new HttpError(422, `Không giải mã được khoá DRM của "${entry.name}": ${e.message}`, 'DECRYPT'); }
 }
@@ -175,6 +190,7 @@ const drain = (res) => (res.write('') === false || res.writableNeedDrain) ? new 
 async function serveHlsDownload(ctx, entry, name) {
     const { req, res, source, dirSegs } = ctx;
     needReady(entry, name);
+    await ks.allowDecrypt(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'seg00000.ts'], ctx.gh, { tokenId: ctx.tok });
     const key = entryKey(entry);
     const first = await readSegment(source, dirSegs, entry, 0, key);        // lỗi (thiếu/không giải mã được) → báo JSON TRƯỚC khi gửi header
     const fm = isFmp4(entry), head = fm ? initBuf(entry) : null;
@@ -187,10 +203,11 @@ async function serveHlsDownload(ctx, entry, name) {
     }
     res.end();
 }
-function playerPage(name, kind, downloadHref) {
-    const el = kind === 'image' ? `<img src="../${encodeURIComponent(name)}" alt="${escHtml(name)}">`
-        : kind === 'audio' ? `<audio controls autoplay src="../${encodeURIComponent(name)}"></audio>`
-            : `<video controls autoplay playsinline src="../${encodeURIComponent(name)}"></video>`;
+function playerPage(name, kind, downloadHref, direct) {
+    const a = direct ? 'data-mnha-src' : 'src';          // direct: shim giải mã trong trình duyệt rồi mới gắn src
+    const el = kind === 'image' ? `<img ${a}="../${encodeURIComponent(name)}" alt="${escHtml(name)}">`
+        : kind === 'audio' ? `<audio controls autoplay ${a}="../${encodeURIComponent(name)}"></audio>`
+            : `<video controls autoplay playsinline ${a}="../${encodeURIComponent(name)}"></video>`;
     return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(name)}</title>
 <style>*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0b1220;color:#e2e8f0;font:14px system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px}
 h1{margin:0;font-size:15px;font-weight:600;word-break:break-all;text-align:center}img,video{max-width:100%;max-height:78vh;background:#000;border-radius:8px}video{width:min(100%,1100px)}audio{width:min(100%,640px)}
@@ -208,16 +225,25 @@ async function serve(ctx) {
     if (segs.length >= 2 && segs[segs.length - 2] === '__view') {                  // trang trình phát
         const real = [...segs.slice(0, -2), name];
         if (!kind) throw new HttpError(404, 'Chỉ có trang trình phát cho ảnh, âm thanh, video.');
-        const html = injectShim(playerPage(name, kind, encodeURIComponent(name) === name ? '../' + name + '?dl=1' : '../' + encodeURIComponent(name) + '?dl=1'), ctx.shimScript);
+        const html = injectShim(playerPage(name, kind, encodeURIComponent(name) === name ? '../' + name + '?dl=1' : '../' + encodeURIComponent(name) + '?dl=1', ctx.direct), ctx.shimScript);
         return sendBuffer(req, res, Buffer.from(html), MIME.html, { ...ctx, noRange: true, real });
     }
+    if (segs.length >= 2 && segs[segs.length - 2] === '__key') {                   // cách mở file cho trình duyệt: khoá file (đã kiểm quyền) + địa chỉ GitHub raw
+        const real = [...segs.slice(0, -2), name];
+        const r = await ks.release(ctx.payload, real, ctx.gh, { tokenId: ctx.tok });
+        if (!r) throw new HttpError(404, `Không tìm thấy "${real.join('/')}".`, 'NOT_FOUND');
+        return sendBuffer(req, res, Buffer.from(JSON.stringify(r)), 'application/json; charset=utf-8', { ...ctx, noRange: true });
+    }
     const hidden = segs.indexOf(MEDIA.HIDDEN_DIR);
-    if (hidden >= 0 && name === 'key.bin' && segs.length === hidden + 3) {         // khoá DRM (giải mã 2 chiều từ json)
+    if (hidden >= 0 && name === 'key.bin' && segs.length === hidden + 3) {         // khoá DRM (giải mã 2 chiều từ json, sau khi kiểm quyền)
         const dirSegs = segs.slice(0, hidden);
         const m = await readManifest(source, dirSegs);
-        const entry = m && m.files && Object.values(m.files).find((x) => x && x.id === segs[hidden + 1] && x.mode === 'hls-video');
+        const entry = m && m.files && Object.values(m.files).find((x) => x && x.id === segs[hidden + 1] && x.drm);
         if (!entry) throw new HttpError(404, 'Không có khoá cho media này.');
-        return sendBuffer(req, res, entryKey(entry), 'application/octet-stream', { ...ctx, noRange: true });
+        let key;
+        try { key = await ks.releaseHlsKey(ctx.payload, segs, ctx.gh, entry, { tokenId: ctx.tok }); }
+        catch (e) { if (e instanceof mc.MediaCryptoError) throw new HttpError(422, `Không giải mã được khoá DRM của "${entry.name}": ${e.message}`, 'DECRYPT'); throw e; }
+        return sendBuffer(req, res, key, 'application/octet-stream', { ...ctx, noRange: true });
     }
 
     if (hidden >= 0 && name === 'init.mp4' && segs.length === hidden + 3) {         // init segment fMP4 (cấu hình codec, lấy từ json)
@@ -232,10 +258,15 @@ async function serve(ctx) {
     if (buf) {
         let body = buf;
         if (mc.isEncrypted(buf)) {
+            await ks.allowDecrypt(ctx.payload, segs, ctx.gh, { tokenId: ctx.tok });          // đường dự phòng: vẫn phải qua kiểm quyền
             try { body = mc.decryptBuffer(buf); }
             catch (e) { throw new HttpError(e.code === 'NO_KEY' ? 500 : 422, `Không giải mã được "${name}": ${e.message}`, e.code === 'NO_KEY' ? 'NO_KEY' : 'DECRYPT'); }
         }
-        if (/^(html?)$/.test(ext) && !ctx.download) body = Buffer.from(injectShim(body.toString('utf8'), ctx.shimScript));
+        if (/^(html?)$/.test(ext) && !ctx.download) {
+            let text = body.toString('utf8');
+            if (ctx.direct) text = rewriteMedia(text);
+            body = Buffer.from(injectShim(text, ctx.shimScript));
+        }
         return sendBuffer(req, res, body, mimeOf(name), { ...ctx, download: ctx.download ? name : null });
     }
 
@@ -248,7 +279,9 @@ async function serve(ctx) {
             if (ctx.download) return serveHlsDownload(c, entry, name);
             needReady(entry, name);
             const dirUrl = ctx.base + dirSegs.map(encodeURIComponent).join('/') + (dirSegs.length ? '/' : '') + MEDIA.HIDDEN_DIR + '/' + entry.id + '/';
-            const text = hls.build(entry, { seg: (i) => dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
+            const tgt = entry.drm && ctx.direct ? ks.resolveTarget(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'x'], ctx.gh) : null;     // đoạn AES-128: tải thẳng GitHub raw
+            const rawSeg = tgt ? (i) => ks.rawUrl(ctx.gh, [...tgt.full.slice(0, -1), hls.segName(i, entry.segExt)], entry.uploadId) : null;
+            const text = hls.build(entry, { seg: (i) => (rawSeg && rawSeg(i)) || dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
             return sendBuffer(req, res, Buffer.from(text), MIME.m3u8, { ...ctx, noRange: true });
         }
     }
@@ -287,9 +320,14 @@ function createHandler(opt = {}) {
             const source = payload.k === 'own' ? ownSource(payload.uid, gh) : webSource(payload);
             const base = `${mount}/${tok}/`;
             const download = new URL(req.url, 'http://x').searchParams.get('dl') === '1';
-            await serve({ req, res, source, segs, base, download, cache: source.kind === 'web' ? 'private, max-age=30' : 'no-store', shimScript: shim.build(base, MEDIA.HLSJS_URL) });
+            const direct = ks.canDirect(payload, gh);            // trình duyệt tự giải mã: file mã hoá tải thẳng từ GitHub raw
+            const libTag = direct ? `<script src="/js/mnhaMedia.js"></script>` : '';
+            await serve({
+                req, res, source, segs, base, download, payload, gh, tok, direct,
+                cache: source.kind === 'web' ? 'private, max-age=30' : 'no-store', shimScript: libTag + shim.build(base, MEDIA.HLSJS_URL, { direct })
+            });
         } catch (e) { sendError(req, res, e); }
     };
 }
 
-module.exports = { createHandler, MOUNT, MIME, mimeOf, injectShim, HttpError };
+module.exports = { createHandler, MOUNT, MIME, mimeOf, injectShim, rewriteMedia, HttpError };
