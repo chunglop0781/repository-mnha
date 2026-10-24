@@ -164,6 +164,12 @@ async function putEnc(uid, name, plain, parts = 1) {
   r = await get(`/preview/${OT}/song.mp3?proxy=1`); pl = r.body.toString();
   assert(!pl.includes('raw.githubusercontent') && pl.includes(`/preview/${OT}/_media/song_mp3/seg00000.ts`) && pl.includes('EXT-X-KEY'), 'Safari native: ?proxy=1 → đoạn qua máy chủ (đúng Content-Type), vẫn AES-128');
   r = await get(`/preview/${OT}/_media/song_mp3/seg00001.ts`); assert(r.status === 200 && /video\/mp2t/.test(r.headers['content-type']) && r.body.equals(blobs.get(files.get(`${dirp}/_media/song_mp3/seg00001.ts`))), 'đoạn qua máy chủ: video/mp2t, bản mã nguyên vẹn');
+  put(`${dirp}/av/mnha-media.json`, Buffer.from(JSON.stringify({ v: 1, files: { 'av.mp4': mk('av.mp4', 'av_mp4', { kind: 'video', mode: 'hls-video', codecs: 'av01.0.12M.08,mp4a.40.2', duration: 18, drm: { method: 'AES-128', key: mc.wrapKey(key16) } }) } })));
+  r = await get(`/preview/${OT}/av/av.mp4?master=1`); pl = r.body.toString();
+  assert(/#EXT-X-STREAM-INF:BANDWIDTH=\d+,CODECS="av01\.0\.12M\.08,mp4a\.40\.2"\nav\.mp4\n/.test(pl) && /mpegurl/.test(r.headers['content-type']), 'playlist master có CODECS cho Safari native: ' + pl);
+  r = await get(`/preview/${OT}/av/av.mp4`); assert(/#EXTINF/.test(r.body.toString()) && !/STREAM-INF/.test(r.body.toString()), 'không có ?master → playlist media như cũ');
+  r = await get(`/preview/${OT}/av/__key/av.mp4`); assert.strictEqual(json(r).codecs, 'av01.0.12M.08,mp4a.40.2', '__key trả codecs để trình phát báo sớm nếu thiết bị không giải mã được');
+  r = await get(`/preview/${OT}/song.mp3?master=1`); assert(/#EXTINF/.test(r.body.toString()), 'không có codecs (TS) → bỏ qua master');
   r = await get(`/preview/${OT}/old.mp3`); pl = r.body.toString();
   assert(!pl.includes('raw.githubusercontent') && !pl.includes('EXT-X-KEY') && pl.includes(`/preview/${OT}/_media/old_mp3/seg00000.ts`), 'âm thanh cũ: không có khoá DRM → đoạn vẫn qua máy chủ');
   r = await get(`/preview/${OT}/_media/old_mp3/seg00001.ts`); assert(r.status === 200 && r.body.equals(segPlain[1]), 'âm thanh cũ: Node giải mã đoạn');

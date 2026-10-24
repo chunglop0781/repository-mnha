@@ -84,4 +84,12 @@ const { EMPTY_TXT_PLACEHOLDER } = require('../config/codeConfig');
   assert.strictEqual((await store.renameFile(uid, 'cpp', 'bai_moi', 'b.cpp', 'b.cpp')).moved, 0);
   console.log('renameFile OK');
   console.log('renameFolder OK');
+  // --- thư mục lồng KHÔNG giới hạn cấp (trước đây tối đa 4)
+  const deep = Array.from({ length: 30 }, (_, i) => 'c' + i).join('/');
+  assert.strictEqual(await store.mkdir(uid, 'cpp', '', deep), deep);
+  assert(files.has(R + deep + '/.keep'));
+  assert.strictEqual(await store.mkdir(uid, 'cpp', deep, 'them'), deep + '/them');
+  assert.deepStrictEqual(store.cleanDir(deep + '/x').length, 31);
+  await assert.rejects(async () => store.cleanDir('a/../b'), /Tên thư mục/);
+  console.log('thư mục lồng sâu OK');
 })().catch((e) => { console.error(e); process.exit(1); });

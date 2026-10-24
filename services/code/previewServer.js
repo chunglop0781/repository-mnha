@@ -279,6 +279,12 @@ async function serve(ctx) {
             if (ctx.download) return serveHlsDownload(c, entry, name);
             needReady(entry, name);
             const dirUrl = ctx.base + dirSegs.map(encodeURIComponent).join('/') + (dirSegs.length ? '/' : '') + MEDIA.HIDDEN_DIR + '/' + entry.id + '/';
+            const q = new URL(req.url, 'http://x').searchParams;
+            if (q.get('master') === '1' && entry.codecs) {          // Safari phát native fMP4 H.265/AV1 cần playlist master có CODECS
+                const bw = Math.max(100000, Math.round(((entry.size || 0) * 8) / Math.max(1, entry.duration || (entry.durs || []).reduce((a, x) => a + x, 0) || 1)));
+                const mtxt = `#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=${bw},CODECS="${String(entry.codecs).replace(/"/g, '')}"\n${encodeURIComponent(name)}\n`;
+                return sendBuffer(req, res, Buffer.from(mtxt), MIME.m3u8, { ...ctx, noRange: true });
+            }
             const proxy = new URL(req.url, 'http://x').searchParams.get('proxy') === '1';          // ?proxy=1: đoạn qua máy chủ (Safari phát native: GitHub raw trả text/plain + nosniff nên có thể bị từ chối)
             const tgt = entry.drm && ctx.direct && !proxy ?ks.resolveTarget(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'x'], ctx.gh) : null;     // đoạn AES-128: tải thẳng GitHub raw
             const rawSeg = tgt ? (i) => ks.rawUrl(ctx.gh, [...tgt.full.slice(0, -1), hls.segName(i, entry.segExt)], entry.uploadId) : null;
@@ -302,7 +308,7 @@ function parsePath(url) {
         if (!s || s === '.' || s === '..' || s.length > 200 || /[\\\/\x00-\x1f]/.test(s)) throw new HttpError(400, 'Đường dẫn không hợp lệ.');
         segs.push(s);
     }
-    if (segs.length > 24) throw new HttpError(400, 'Đường dẫn quá sâu.');
+    if (segs.length > 160) throw new HttpError(400, 'Đường dẫn quá sâu.');
     return { tok, segs };
 }
 

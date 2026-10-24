@@ -16,7 +16,6 @@ function assertLang(lang) { if (!LANGS[lang]) throw bad('Dạng code không hợ
 // "a/b/c" → ['a','b','c'] (kiểm tra chặt: không .., không ký tự lạ)
 function cleanDir(dir) {
     const segs = String(dir || '').split('/').map((s) => s.trim()).filter(Boolean);
-    if (segs.length > LIMITS.MAX_DEPTH) throw bad(`Thư mục lồng tối đa ${LIMITS.MAX_DEPTH} cấp`);
     for (const s of segs) {
         if (!NAME_RE.test(s)) throw bad('Tên thư mục chỉ gồm chữ, số, "-", "_" và dấu ngoặc ( )');
         if (s === MEDIA.HIDDEN_DIR) throw bad('Tên thư mục "' + MEDIA.HIDDEN_DIR + '" dành riêng cho hệ thống (chứa media đã mã hoá).');
@@ -77,7 +76,6 @@ async function list(uid, lang, dir) {
 async function mkdir(uid, lang, dir, name) {
     assertLang(lang);
     const segs = [...cleanDir(dir), ...cleanDir(name)];
-    if (segs.length > LIMITS.MAX_DEPTH) throw bad(`Thư mục lồng tối đa ${LIMITS.MAX_DEPTH} cấp`);
     const p = [root(uid, lang), ...segs, KEEP].join('/');
     await gh.writeBinaryFile(p, Buffer.from(''), `code: mkdir ${segs.join('/')}`);
     return segs.join('/');

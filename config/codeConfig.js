@@ -35,7 +35,6 @@ const LANGS = {
 const EMPTY_TXT_PLACEHOLDER = '\nhap-du-lieu-input-vao-day';
 const LIMITS = {
     MAX_FILE_BYTES: 200 * 1024,
-    MAX_DEPTH: 4,
     MAX_FILES_PER_DIR_SYNC: 30,       // số file .txt cùng thư mục được nạp vào thư mục chạy
     MAX_OUT_FILE_BYTES: 512 * 1024,   // file .txt do chương trình ghi ra (output.txt...)
     RUN_WALL_MS: 60 * 1000,           // tổng thời gian chạy (không tính lúc chờ nhập)

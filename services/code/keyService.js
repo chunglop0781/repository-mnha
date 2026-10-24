@@ -149,7 +149,7 @@ async function release(payload, segs, gh, opt = {}) {
         return { mode: 'direct', key: mc.fileKey(Buffer.from(hex, 'hex')).toString('base64'), sha, raw: rawUrl(gh, t.full, sha) };
     }
     const e = t.loc.entry;
-    if (e && (e.mode === 'hls-audio' || e.mode === 'hls-video')) { await recordView(gh, t); return { mode: 'hls', kind: e.kind, drm: !!e.drm }; }
+    if (e && (e.mode === 'hls-audio' || e.mode === 'hls-video')) { await recordView(gh, t); return { mode: 'hls', kind: e.kind, drm: !!e.drm, codecs: e.codecs || null }; }
     return null;
 }
 

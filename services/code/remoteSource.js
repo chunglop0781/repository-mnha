@@ -158,7 +158,7 @@ function fromParts(parsedOrParts, segs) {
     const { host, base, ref } = parsedOrParts;
     if (!['github', 'gitlab'].includes(host) || !Array.isArray(base) || typeof ref !== 'string') throw bad('Nguồn không hợp lệ.');
     checkSegs([...base, ref], []);
-    if (!Array.isArray(segs) || !segs.length || segs.length > 24) throw bad('Đường dẫn file không hợp lệ.');
+    if (!Array.isArray(segs) || !segs.length || segs.length > 160) throw bad('Đường dẫn file không hợp lệ.');
     for (const sg of segs) if (!PATH_SEG.test(sg) || sg === '.' || sg === '..') throw bad('Đường dẫn file không hợp lệ.');
     return buildLinks(host, base, ref, segs);
 }

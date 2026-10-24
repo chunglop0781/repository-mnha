@@ -141,7 +141,7 @@
     async function open(previewUrl, name, base) {
         if (!supported()) throw fail('Trình duyệt không có WebCrypto.', 0, 'NO_CRYPTO');
         var inf = await info(previewUrl, base);
-        if (inf.mode === 'hls') return { type: 'hls', url: previewUrl };
+        if (inf.mode === 'hls') return { type: 'hls', url: previewUrl, codecs: inf.codecs || null };
         var type = MIME[extOf(name || previewUrl)] || 'application/octet-stream';
         var r = await getRaw(inf);
         if (inf.mode === 'plain') return { type: 'blob', url: URL.createObjectURL(new Blob([await r.arrayBuffer()], { type: type })) };
