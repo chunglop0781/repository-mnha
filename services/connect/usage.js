@@ -124,6 +124,30 @@ async function snapshot(id, { days = 30 } = {}) {
     return out;
 }
 
+/** Lịch sử từng ngày (mới → cũ) + tổng tuần này (thứ Hai → hôm nay) + tuần trước. Ngày tính theo UTC (khớp khoá trong usage.json). */
+async function history(id, { days = 14 } = {}) {
+    const d = normalize(await require('../githubService').readJsonFile(FILE()).catch(() => null));
+    const rows = d.nodes[id] && d.nodes[id].days ? d.nodes[id].days : {};
+    const DAY = 86400000;
+    const now = new Date();
+    const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+    const dow = (new Date(todayMs).getUTCDay() + 6) % 7;            // 0 = thứ Hai … 6 = Chủ nhật
+    const weekStart = todayMs - dow * DAY;
+    const list = [];
+    for (let i = 0; i < Math.max(days, dow + 8); i++) {
+        const k = iso(todayMs - i * DAY);
+        list.push(Object.assign({ date: k, dow: (new Date(todayMs - i * DAY).getUTCDay() + 6) % 7 }, empty(), rows[k] || {}));
+    }
+    const sum = (from, to) => list.filter((r) => r.date >= iso(from) && r.date <= iso(to)).reduce((a, r) => add(a, r), empty());
+    return {
+        days: list.slice(0, days),
+        week: Object.assign({ from: iso(weekStart), to: iso(todayMs) }, sum(weekStart, todayMs)),
+        lastWeek: Object.assign({ from: iso(weekStart - 7 * DAY), to: iso(weekStart - DAY) }, sum(weekStart - 7 * DAY, weekStart - DAY)),
+        keepDays: KEEP_DAYS
+    };
+}
+
 async function snapshotAll(ids) {
     const gh = require('../githubService');
     const d = normalize(await gh.readJsonFile(FILE()).catch(() => null));
@@ -169,4 +193,4 @@ function formatBytes(n) {
 }
 const bytesToGb = (n) => Math.round((Number(n) || 0) / (1024 ** 3) * 100) / 100;
 
-module.exports = { note, noteOrigin, schedule, flush, snapshot, snapshotAll, middleware, formatBytes, bytesToGb, nodeId, FILE, hasPending };
+module.exports = { note, noteOrigin, schedule, flush, snapshot, snapshotAll, history, middleware, formatBytes, bytesToGb, nodeId, FILE, hasPending };

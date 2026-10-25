@@ -58,6 +58,41 @@ block content
                 div(class="text-xs text-gray-600") Hôm nay #{fmt(today.originIn + today.originOut)} · 30 ngày #{fmt(month.originIn + month.originOut)}
                 div(class="mt-1 text-[11px] text-gray-500") #{today.req} request hôm nay · file: <code>#{usagePath}</code>
 
+        if hist
+            section(class="mt-6 bg-white rounded-2xl border border-gray-200 p-5")
+                h2(class="text-lg font-semibold text-gray-900") Lịch sử lưu lượng
+                p(class="mt-1 text-xs text-gray-500") Ngày tính theo UTC (0h UTC = 7h sáng giờ Việt Nam). Giữ tối đa #{hist.keepDays} ngày.
+                - var wk = hist.week, lw = hist.lastWeek
+                div(class="mt-3 grid gap-3 sm:grid-cols-2")
+                    div(class="rounded-xl bg-indigo-50 border border-indigo-100 p-3")
+                        div(class="text-sm font-semibold text-indigo-900") Tuần này (#{wk.from} → #{wk.to})
+                        div(class="mt-1 text-xs text-indigo-900") Trình duyệt ⇄ web: <b>#{fmt(wk.in + wk.out)}</b> (vào #{fmt(wk.in)} · ra #{fmt(wk.out)})
+                        div(class="text-xs text-indigo-900") Web ⇄ GitHub: <b>#{fmt(wk.originIn + wk.originOut)}</b> (đọc #{fmt(wk.originIn)} · ghi #{fmt(wk.originOut)})
+                        div(class="text-xs text-indigo-900") #{wk.req} request
+                    div(class="rounded-xl bg-gray-50 border border-gray-200 p-3")
+                        div(class="text-sm font-semibold text-gray-900") Tuần trước (#{lw.from} → #{lw.to})
+                        div(class="mt-1 text-xs text-gray-700") Trình duyệt ⇄ web: <b>#{fmt(lw.in + lw.out)}</b>
+                        div(class="text-xs text-gray-700") Web ⇄ GitHub: <b>#{fmt(lw.originIn + lw.originOut)}</b>
+                        div(class="text-xs text-gray-700") #{lw.req} request
+                div(class="mt-4 overflow-x-auto")
+                    table(class="min-w-full text-xs")
+                        thead
+                            tr(class="text-left text-gray-500 border-b border-gray-200")
+                                th(class="py-2 pr-3 font-medium") Ngày
+                                th(class="py-2 pr-3 font-medium text-right") Trình duyệt ⇄ web
+                                th(class="py-2 pr-3 font-medium text-right") Web ⇄ GitHub
+                                th(class="py-2 font-medium text-right") Request
+                        tbody
+                            - var names = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
+                            each r in hist.days
+                                tr(class="border-b border-gray-100" + (r.date >= wk.from ? ' bg-indigo-50/40' : ''))
+                                    td(class="py-1.5 pr-3 font-mono text-gray-800") #{r.date} 
+                                        span(class="text-gray-400") #{names[r.dow]}
+                                    td(class="py-1.5 pr-3 text-right text-gray-900") #{fmt(r.in + r.out)}
+                                    td(class="py-1.5 pr-3 text-right text-gray-900") #{fmt(r.originIn + r.originOut)}
+                                    td(class="py-1.5 text-right text-gray-900") #{r.req}
+                p(class="mt-2 text-[11px] text-gray-500") Hàng nền tím nhạt = các ngày thuộc tuần này.
+
         section(class="mt-6 bg-white rounded-2xl border border-gray-200 p-5")
             h2(class="text-lg font-semibold text-gray-900") Repo media
             if !media || !media.enabled

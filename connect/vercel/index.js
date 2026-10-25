@@ -260,12 +260,13 @@ function createRouter() {
             }
             await usage.flush().catch(() => { /* đã log */ });
             const use = await usage.snapshot(nodeId()).catch(() => null);
+            const hist = await usage.history(nodeId(), { days: 14 }).catch(() => null);
             const media = await mediaRepo.summary().catch(() => null);
             const template = envTemplate({ id: nodeId(), url: nodeUrl(req), name: nodeName(), dataNode: true });
             res.render('connect/node', {
                 title: 'Web dữ liệu — ' + nodeName(), user: req.user,
                 nodeId: nodeId(), nodeUrl: nodeUrl(req), nodeName: nodeName(), node,
-                setup, setupKey, error, use, media, template, registryPath: registry.PATH(), usagePath: usage.FILE(), fmt: usage.formatBytes
+                setup, setupKey, error, use, hist, media, template, registryPath: registry.PATH(), usagePath: usage.FILE(), fmt: usage.formatBytes
             });
         } catch (e) { next(e); }
     });
