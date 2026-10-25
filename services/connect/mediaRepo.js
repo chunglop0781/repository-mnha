@@ -18,8 +18,8 @@ const LIMIT = () => {
     const n = Number(process.env.MEDIA_REPO_LIMIT_BYTES);
     return n > 0 ? n : 500 * 1024 * 1024;
 };
-const enabled = () => String(process.env.MEDIA_REPO_POOL || '').toLowerCase() === 'on'
-    || (String(process.env.MEDIA_REPO_POOL || '').toLowerCase() !== 'off' && separateAccount());
+// Chỉ còn tải ảnh → luôn dùng 1 repo chính (không xoay vòng sang repo media khác).
+const enabled = () => false;
 const gh = () => require('../githubService');
 
 const TREE_TTL_MS = 15 * 1000;
