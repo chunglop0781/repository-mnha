@@ -124,10 +124,9 @@ async function snapshot(id, { days = 30 } = {}) {
     return out;
 }
 
-/** Lịch sử từng ngày (mới → cũ) + tổng tuần này (thứ Hai → hôm nay) + tuần trước. Ngày tính theo UTC (khớp khoá trong usage.json). */
-async function history(id, { days = 14 } = {}) {
-    const d = normalize(await require('../githubService').readJsonFile(FILE()).catch(() => null));
-    const rows = d.nodes[id] && d.nodes[id].days ? d.nodes[id].days : {};
+/** Dựng lịch sử từ các dòng ngày của 1 web: từng ngày (mới → cũ) + tuần này (thứ Hai → hôm nay) + tuần trước. Ngày theo UTC. */
+function buildHistory(rows, days) {
+    rows = rows || {};
     const DAY = 86400000;
     const now = new Date();
     const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -146,6 +145,20 @@ async function history(id, { days = 14 } = {}) {
         lastWeek: Object.assign({ from: iso(weekStart - 7 * DAY), to: iso(weekStart - DAY) }, sum(weekStart - 7 * DAY, weekStart - DAY)),
         keepDays: KEEP_DAYS
     };
+}
+
+/** Lịch sử của 1 web. */
+async function history(id, { days = 14 } = {}) {
+    const d = normalize(await require('../githubService').readJsonFile(FILE()).catch(() => null));
+    return buildHistory(d.nodes[id] && d.nodes[id].days, days);
+}
+
+/** Lịch sử của nhiều web (đọc usage.json 1 lần): { id → history }. */
+async function historyAll(ids, { days = 14 } = {}) {
+    const d = normalize(await require('../githubService').readJsonFile(FILE()).catch(() => null));
+    const res = {};
+    for (const id of ids) res[id] = buildHistory(d.nodes[id] && d.nodes[id].days, days);
+    return res;
 }
 
 async function snapshotAll(ids) {
@@ -193,4 +206,4 @@ function formatBytes(n) {
 }
 const bytesToGb = (n) => Math.round((Number(n) || 0) / (1024 ** 3) * 100) / 100;
 
-module.exports = { note, noteOrigin, schedule, flush, snapshot, snapshotAll, history, middleware, formatBytes, bytesToGb, nodeId, FILE, hasPending };
+module.exports = { note, noteOrigin, schedule, flush, snapshot, snapshotAll, history, historyAll, buildHistory, middleware, formatBytes, bytesToGb, nodeId, FILE, hasPending };
