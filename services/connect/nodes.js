@@ -8,6 +8,7 @@
 'use strict';
 const cc = require('./crypto');
 const registry = require('./registry');
+const uploadToken = require('./uploadToken');
 
 const PROBE_TIMEOUT_MS = Number(process.env.CONNECT_PROBE_TIMEOUT_MS) > 0 ? Number(process.env.CONNECT_PROBE_TIMEOUT_MS) : 4000;
 const HEALTH_TTL_MS = 60 * 1000;
@@ -75,6 +76,32 @@ async function status(node, { timeout = 8000 } = {}) {
     return data;
 }
 
+const keyCache = new Map();        // id → { at, ok, error }
+const KEY_TTL_MS = 60 * 1000;
+
+/**
+ * Kiểm tra KHOÁ KẾT NỐI: web chính ký yêu cầu bằng khoá lưu trong v-s/index.json,
+ * web dữ liệu đối chiếu với khoá của chính nó. Sai khoá → không cho tải lên web đó.
+ */
+async function verifyKey(node, { force = false } = {}) {
+    const hit = keyCache.get(node.id);
+    if (!force && hit && now() - hit.at < KEY_TTL_MS) return hit;
+    let out;
+    try {
+        const key = registry.nodeKey(node);
+        const path = '/api/node/ping';
+        const { res, data } = await fetchJson(String(node.url).replace(/\/+$/, '') + path, {
+            method: 'POST', headers: signatureHeaders(node, key, 'POST', path, null)
+        });
+        if (res.ok && data && data.ok === true) out = { at: now(), ok: true, error: null };
+        else out = { at: now(), ok: false, error: res.status === 403 ? 'sai khoá kết nối' : ((data && data.error) || ('HTTP ' + res.status)) };
+    } catch (e) {
+        out = { at: now(), ok: false, error: e.name === 'AbortError' ? 'quá thời gian chờ' : (e.message || 'không kiểm tra được khoá') };
+    }
+    keyCache.set(node.id, out);
+    return out;
+}
+
 /** Kiểm tra lần lượt toàn bộ web (cũ → mới), cập nhật trạng thái vào v-s/index.json. */
 async function checkAll({ force = true, withStatus = true } = {}) {
     const list = await registry.list();
@@ -94,7 +121,7 @@ async function checkAll({ force = true, withStatus = true } = {}) {
  * Kế hoạch tải lên: web đầu tiên hoạt động + danh sách dự phòng (đúng thứ tự thêm).
  * @returns {{primary:object|null, candidates:object[], error:string|null, checks:object[]}}
  */
-async function pickForUpload() {
+async function pickForUpload(info = null) {
     const list = await registry.list({ enabledOnly: true });
     if (!list.length) {
         return { primary: null, candidates: [], checks: [], error: 'Chưa có web kết nối nào. Hãy vào /connect thêm web dữ liệu trước khi tải ảnh / âm thanh / video lên.' };
@@ -106,14 +133,25 @@ async function pickForUpload() {
             continue;
         }
         const h = await probe(node);               // LẦN LƯỢT từng web
-        checks.push({ id: node.id, name: node.name, url: node.url, ok: h.ok, ms: h.ms, error: h.error });
-        if (h.ok) {
-            const rest = list.filter((x) => x.id !== node.id)
-                .map((x) => ({ id: x.id, name: x.name, url: x.url }));
+        let ok = h.ok, why = h.error;
+        if (ok) {                                  // web sống → kiểm tra thêm KHOÁ có đúng không
+            const k = await verifyKey(node);
+            if (!k.ok) { ok = false; why = k.error; }
+        }
+        checks.push({ id: node.id, name: node.name, url: node.url, ok, ms: h.ms, error: why });
+        if (ok) {
+            const rest = list.filter((x) => x.id !== node.id);
+            const cand = [node, ...rest];
+            // Mỗi web một phiếu tải lên, ký bằng khoá riêng của web đó (không có khoá → không có phiếu → bị bỏ qua).
+            const tokens = {};
+            if (info) for (const n of cand) {
+                try { tokens[n.id] = uploadToken.sign({ ...info, nid: n.id }, registry.nodeKey(n)); } catch (_) { /* web chưa có khoá */ }
+            }
+            const pub = (x) => ({ id: x.id, name: x.name, url: x.url });
             return {
-                primary: { id: node.id, name: node.name, url: node.url },
-                candidates: [{ id: node.id, name: node.name, url: node.url }, ...rest],
-                checks, error: null
+                primary: pub(node),
+                candidates: cand.filter((n) => !info || tokens[n.id]).map(pub),
+                tokens, checks, error: null
             };
         }
         cooldown.set(node.id, now() + COOLDOWN_MS);
@@ -130,4 +168,4 @@ function markFailed(id) { if (id) cooldown.set(String(id), now() + COOLDOWN_MS);
 function clearFailed(id) { if (id) cooldown.delete(String(id)); }
 function cooldownLeft(id) { return Math.max(0, (cooldown.get(String(id)) || 0) - now()); }
 
-module.exports = { probe, status, checkAll, pickForUpload, markFailed, clearFailed, cooldownLeft, signatureHeaders, fetchJson, COOLDOWN_MS };
+module.exports = { probe, verifyKey, status, checkAll, pickForUpload, markFailed, clearFailed, cooldownLeft, signatureHeaders, fetchJson, COOLDOWN_MS };

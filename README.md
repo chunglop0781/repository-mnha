@@ -50,6 +50,12 @@ Web chính có thể dùng **nhiều Vercel deployment** làm "web dữ liệu" 
 - **Tên repo media theo thời gian**: đặt `GITHUB_MEDIA_REPO_PREFIX=mnha-media-{ts}` → repo tạo ra dạng `mnha-media-20261025-091530`. Không có `{ts}` thì vẫn đánh số `-1`, `-2`.
 
 ## Deploy lên Vercel
-- `vercel.json` + `api/index.js`: mọi đường dẫn chạy qua một serverless function (Express xuất từ `server.js`, MongoDB nối lười ở request đầu; `/api/node/health` không cần MongoDB).
-- Nếu đẩy cả thư mục `repository-mnha/` lên GitHub (không phải nội dung bên trong) thì ở Vercel → Settings → General → **Root Directory** đặt `repository-mnha`.
-- Settings → Build and Deployment: Framework Preset = **Other**, để trống Build/Output/Install command.
+- Không dùng `api/` hay `vercel.json`: `server.js` xuất `app` (MongoDB nối lười ở request đầu; `/api/node/health` không cần MongoDB) nên Vercel tự chạy như Express.
+- Settings → Build and Deployment: **Framework Preset = Express**, để trống Build/Output/Install command (tắt Override Output Directory).
+- Nếu đẩy cả thư mục `repository-mnha/` lên GitHub thì Settings → General → **Root Directory** = `repository-mnha`.
+- Settings → Deployment Protection: tắt **Vercel Authentication** để web chính gọi được `/api/node/health`.
+
+## Trang khoá kết nối + kiểm tra khoá khi tải lên
+- Web dữ liệu có trang **`/connect/key`** (chỉ admin mặc định): xem khoá sau khi nhập lại mật khẩu (sai 5 lần khoá 10 phút), nút sao chép, và mục **Tự kiểm tra khoá** (giải mã được khoá trong `v-s/index.json`, ký/xác minh phiếu tải lên đúng cơ chế thật).
+- Mỗi lần tải lên, web chính kiểm tra lần lượt cũ → mới: web sống **và đúng khoá** (`POST /api/node/ping`, ký bằng khoá riêng) mới được chọn. Sai khoá → bỏ qua, ghi vào danh sách kiểm tra và chuyển web kế tiếp.
+- Mỗi web nhận một **phiếu tải lên riêng**, ký bằng khoá kết nối của web đó; web dữ liệu từ chối (401) mọi phần/đoạn file có phiếu sai khoá, trình duyệt tự chuyển sang web kế.

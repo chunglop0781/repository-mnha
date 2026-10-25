@@ -210,13 +210,13 @@ exports.uploadInit = wrap(async (req, res) => {
         return res.json({ ok: true, mode: 'local', ...(await media.init(uid, base)) });
     }
 
-    const plan = await nodes.pickForUpload().catch((e) => ({ primary: null, candidates: [], checks: [], error: e.message }));
+    const uploadId = crypto.randomBytes(16).toString('hex');
+    const plan = await nodes.pickForUpload({ uid, uploadId, name, dir }).catch((e) => ({ primary: null, candidates: [], checks: [], error: e.message }));
     if (plan.primary) {
-        const uploadId = crypto.randomBytes(16).toString('hex');
-        const tok = uploadToken.sign({ uid, uploadId, name, dir });
+        // Mỗi web có phiếu riêng (ký bằng khoá kết nối của web đó) — sai khoá thì web đó từ chối.
         return res.json({
             ok: true, mode: 'node', node: plan.primary, candidates: plan.candidates,
-            token: tok, uploadId, dir, name, ttl: uploadToken.TTL_MS, checks: plan.checks
+            token: plan.tokens[plan.primary.id], tokens: plan.tokens, uploadId, dir, name, ttl: uploadToken.TTL_MS, checks: plan.checks
         });
     }
     const error = plan.error || 'Không có web kết nối nào để tải lên.';

@@ -10,6 +10,7 @@ block content
                     a(href=nodeUrl, target="_blank", rel="noopener noreferrer", class="text-indigo-600 hover:underline break-all")= nodeUrl
                 p(class="text-xs text-gray-500 font-mono break-all") id: #{nodeId}
             div(class="flex flex-wrap gap-2")
+                a(href="/connect/key", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50") Xem khoá kết nối
                 form(method="post", action="/connect/register")
                     button(type="submit", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") Đăng ký / làm mới
                 form(method="post", action="/connect/rotate-key", onsubmit="return confirm('Tạo khoá kết nối MỚI? Khoá cũ ở web chính sẽ không còn dùng được.')")

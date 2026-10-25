@@ -64,11 +64,14 @@ function tokenOf(req) {
     return String((req.body && req.body.token) || (req.query && req.query.token) || '');
 }
 
-/** Xác thực phiếu tải lên cho các endpoint của web dữ liệu. */
-function nodeUploadAuth(req, res, next) {
+/** Xác thực phiếu tải lên: phiếu phải được ký bằng ĐÚNG khoá kết nối của web này (sai khoá → từ chối, không nhận file). */
+async function nodeUploadAuth(req, res, next) {
+    let key;
+    try { key = await require('../connect/vercel').ownKey(req); }
+    catch (e) { return res.status(409).json({ error: 'Web dữ liệu chưa có khoá kết nối: ' + e.message, code: 'NO_KEY' }); }
     const tok = tokenOf(req);
-    const p = uploadToken.verify(tok);
-    if (!p) return res.status(401).json({ error: 'Phiếu tải lên không hợp lệ hoặc đã hết hạn — hãy tải lại từ web chính.' });
+    const p = uploadToken.verify(tok, key);
+    if (!p) return res.status(401).json({ error: 'Sai khoá hoặc phiếu tải lên không hợp lệ/đã hết hạn — hãy tải lại từ web chính.', code: 'BAD_KEY' });
     const dir = req.body && req.body.dir != null ? req.body.dir : req.query.dir;
     const name = req.body && req.body.name != null ? req.body.name : req.query.name;
     const uploadId = req.body && req.body.uploadId != null ? req.body.uploadId : req.query.uploadId;

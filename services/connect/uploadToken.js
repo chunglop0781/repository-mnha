@@ -16,28 +16,35 @@ function secret() {
     if (String(raw).length < 32) throw new Error('Thiếu CONNECT_HMAC_KEY/CONNECT_ENC_KEY/MEDIA_ENC_KEY (≥ 32 ký tự) để ký phiếu tải lên.');
     return String(raw);
 }
-function mac(data) { return crypto.createHmac('sha256', secret()).update(data).digest('base64url'); }
+// nodeKey (khoá kết nối RIÊNG của web nhận) được trộn vào khoá ký: phiếu chỉ hợp lệ ở đúng web có đúng khoá.
+function macKey(nodeKey) {
+    const base = secret();
+    if (!nodeKey) return base;
+    return crypto.createHmac('sha256', base).update('upload-node|' + String(nodeKey)).digest();
+}
+function mac(data, nodeKey) { return crypto.createHmac('sha256', macKey(nodeKey)).update(data).digest('base64url'); }
 
 /** { uid, uploadId, name, dir } → chuỗi phiếu (payload.sig). */
-function sign(info = {}) {
+function sign(info = {}, nodeKey = null) {
     const p = {
         v: 1,
         uid: String(info.uid || ''),
         uploadId: String(info.uploadId || ''),
         name: String(info.name || ''),
         dir: String(info.dir || ''),
+        nid: String(info.nid || ''),
         exp: Number(info.exp) > 0 ? Number(info.exp) : Date.now() + TTL_MS
     };
     if (!p.uid || !p.uploadId) throw new Error('uploadToken: thiếu uid/uploadId');
     const body = Buffer.from(JSON.stringify(p), 'utf8').toString('base64url');
-    return body + '.' + mac(body);
+    return body + '.' + mac(body, nodeKey);
 }
 
 /** Phiếu hợp lệ → payload; sai/hết hạn → null. */
-function verify(tok) {
+function verify(tok, nodeKey = null) {
     const parts = String(tok || '').split('.');
     if (parts.length !== 2) return null;
-    if (!cc.safeEqual(mac(parts[0]), parts[1])) return null;
+    if (!cc.safeEqual(mac(parts[0], nodeKey), parts[1])) return null;
     let p;
     try { p = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')); } catch (_) { return null; }
     if (!p || p.v !== 1 || !p.uid || !p.uploadId) return null;

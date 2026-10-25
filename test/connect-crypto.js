@@ -30,6 +30,18 @@ const k2 = cc.newKey(), msg = 'n1\n1\nPOST\n/api/node/status\nx';
 assert.strictEqual(cc.hmacWithKey(key, msg), cc.hmacWithKey(key, msg));
 assert.notStrictEqual(cc.hmacWithKey(key, msg), cc.hmacWithKey(k2, msg));
 assert.notStrictEqual(cc.hmacWithKey(key, msg), cc.hmac(msg));
+// 5b) phiếu tải lên gắn khoá riêng của web nhận: đúng khoá mới qua, sai khoá/không khoá/hết hạn thì không
+process.env.CONNECT_HMAC_KEY = 'h8Jq3Zr0Xw2Lp5Vn9Bt4Yc7Md6Fg1JsAeQuRiT';
+const ut = require('../services/connect/uploadToken');
+const tk = ut.sign({ uid: 'u1', uploadId: 'up1', name: 'a.mp4', dir: 'd', nid: 'n1' }, key);
+assert.strictEqual(ut.verify(tk, key).uid, 'u1');
+assert.strictEqual(ut.verify(tk, k2), null, 'sai khoá kết nối → từ chối');
+assert.strictEqual(ut.verify(tk, null), null, 'không khoá → từ chối');
+assert.strictEqual(ut.verify(tk.slice(0, -2) + 'xx', key), null, 'phiếu bị sửa → từ chối');
+assert.strictEqual(ut.verify(ut.sign({ uid: 'u1', uploadId: 'up1', exp: Date.now() - 1000 }, key), key), null, 'hết hạn');
+assert(ut.matches(ut.verify(tk, key), { dir: 'd', name: 'a.mp4', uploadId: 'up1' }));
+assert(!ut.matches(ut.verify(tk, key), { dir: 'd', name: 'b.mp4', uploadId: 'up1' }), 'phiếu không dùng cho file khác');
+
 // 6) khoá chủ yếu bị từ chối
 cc.resetKeys(); process.env.CONNECT_ENC_KEY = 'a'.repeat(40);
 assert.throws(() => cc.encrypt('x'), /quá yếu/);

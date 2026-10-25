@@ -150,16 +150,16 @@
                 } else if (local) {
                     init = await retry(function () { return request('POST', '/code/html/upload/local/init', body); });
                 } else {
-                    var q = { token: plan.token, dir: plan.dir || opt.dir, name: plan.name || file.name, size: file.size, lastModified: file.lastModified, srcName: file.name, encrypt: body.encrypt };
+                    var q = { token: (plan.tokens && plan.tokens[node.id]) || plan.token, dir: plan.dir || opt.dir, name: plan.name || file.name, size: file.size, lastModified: file.lastModified, srcName: file.name, encrypt: body.encrypt };
                     init = await retry(function () { return request('POST', nodeUrls(node, false).init, q); }, label);
                 }
                 if (init.exists && opt.confirmOverwrite && !opt.confirmOverwrite(init.name)) { var c = new Error('Đã huỷ (giữ file cũ).'); c.cancelled = true; throw c; }
-                var tok = init.token || (local ? null : plan.token);
+                var tok = init.token || (local ? null : ((plan.tokens && plan.tokens[node.id]) || plan.token));
                 var urls = nodeUrls(node, local);
                 return init.plan === 'direct' ? direct(file, init, opt, urls, tok, node && label) : hls(file, init, opt, urls, tok, node && label);
             } catch (e) {
                 lastErr = e;
-                if (e.cancelled || isDataError(e)) throw e;
+                if (e.cancelled || (isDataError(e) && e.status !== 401 && e.status !== 403)) throw e;   // 401/403 từ web dữ liệu = sai khoá/phiếu → thử web kế
                 if (node) {
                     try { request('POST', '/code/html/upload/node-fail', { id: node.id }).catch(function () { }); } catch (_) { }
                     opt.onNotice('Web "' + label + '" không tải được (' + e.message + ') — đang chuyển sang web kế tiếp…');

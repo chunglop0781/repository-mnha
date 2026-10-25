@@ -111,7 +111,7 @@ async function ownKey(req) {
     return key;
 }
 
-async function verifyNodeSignature(req) {
+async function verifyNodeSignature(req, path = '/api/node/status') {
     const id = String(req.headers['x-mnha-node'] || '');
     const ts = String(req.headers['x-mnha-ts'] || '');
     const sig = String(req.headers['x-mnha-sig'] || '');
@@ -125,7 +125,7 @@ async function verifyNodeSignature(req) {
     // Ký bằng KHOÁ KẾT NỐI RIÊNG của web này — không đủ nếu chỉ biết CONNECT_ENC_KEY dùng chung.
     let key;
     try { key = await ownKey(req); } catch (e) { throw bad('Web này chưa có khoá kết nối: ' + e.message, 409); }
-    const expect = cc.hmacWithKey(key, [id, ts, 'POST', '/api/node/status', bodyHash].join('\n'));
+    const expect = cc.hmacWithKey(key, [id, ts, 'POST', path, bodyHash].join('\n'));
     if (!cc.safeEqual(expect, sig)) { _keyCache = null; throw bad('Chữ ký không hợp lệ.', 403); }
 }
 
@@ -156,6 +156,13 @@ function createRouter() {
             v: pkg.version, time: new Date().toISOString(),
             uptime: Math.round((Date.now() - startedAt) / 1000)
         });
+    });
+
+    // ---- ký bằng khoá kết nối: chỉ xác nhận "khoá đúng" (nhẹ, web chính gọi trước mỗi lần tải lên)
+    router.post('/api/node/ping', (req, res) => {
+        Promise.resolve().then(() => verifyNodeSignature(req, '/api/node/ping'))
+            .then(() => json(res, 200, { ok: true, id: nodeId(), time: new Date().toISOString() }))
+            .catch((e) => json(res, e.status || 401, { ok: false, error: e.message }));
     });
 
     // ---- ký HMAC: lưu lượng + tình trạng
@@ -200,8 +207,9 @@ function createRouter() {
                 uid,
                 uploadId: init.uploadId,
                 name: init.name,
-                dir: (req.body && req.body.dir) || ''
-            });
+                dir: (req.body && req.body.dir) || '',
+                nid: nodeId()
+            }, await ownKey(req));
             return { ...init, token, node: { id: nodeId(), name: nodeName(), url: nodeUrl(req) } };
         }, req, res));
     });
@@ -262,6 +270,49 @@ function createRouter() {
         } catch (e) { next(e); }
     });
 
+    // ---- trang KHOÁ KẾT NỐI: xem/sao chép khoá (hỏi lại mật khẩu), tự kiểm tra khoá có đúng không
+    const revealFails = new Map();            // userId → { n, until }
+    async function keyPage(req, res, o = {}) {
+        let node = null, selfCheck = null, error = o.error || null;
+        try {
+            const doc = await registry.load();
+            node = doc.nodes.find((n) => n && (n.id === nodeId() || n.url === nodeUrl(req))) || null;
+            if (node && node.keyEnc) {
+                try {
+                    const k = registry.nodeKey(node);
+                    // Tự kiểm tra: ký rồi xác minh lại bằng đúng cơ chế web chính dùng khi tải lên.
+                    const probe = uploadToken.sign({ uid: 'self', uploadId: 'self', nid: nodeId() }, k);
+                    selfCheck = { decrypt: true, upload: !!uploadToken.verify(probe, k) && !uploadToken.verify(probe, k + 'x') };
+                } catch (e) { selfCheck = { decrypt: false, error: e.message }; }
+            }
+        } catch (e) { error = error || e.message; }
+        res.status(o.status || 200).render('connect/key', {
+            title: 'Khoá kết nối — ' + nodeName(), user: req.user, nodeId: nodeId(), nodeUrl: nodeUrl(req), nodeName: nodeName(),
+            node, selfCheck, error, revealed: o.revealed || null, registryPath: registry.PATH()
+        });
+    }
+    router.get('/connect/key', requireDefaultAdmin, (req, res, next) => keyPage(req, res).catch(next));
+    router.post('/connect/key/reveal', requireDefaultAdmin, async (req, res, next) => {
+        try {
+            const uid = String(req.user._id), st = revealFails.get(uid) || { n: 0, until: 0 };
+            if (st.until > Date.now()) return keyPage(req, res, { status: 429, error: 'Nhập sai quá nhiều lần — thử lại sau ít phút.' });
+            const User = require('../../models/User');
+            const bcrypt = require('bcrypt');
+            const u = await User.findById(uid).select('+password');
+            const ok = u && await bcrypt.compare(String(req.body.password || ''), u.password);
+            if (!ok) {
+                st.n += 1; if (st.n >= 5) { st.until = Date.now() + 10 * 60 * 1000; st.n = 0; }
+                revealFails.set(uid, st);
+                return keyPage(req, res, { status: 403, error: 'Mật khẩu không đúng.' });
+            }
+            revealFails.delete(uid);
+            const doc = await registry.load();
+            const node = doc.nodes.find((n) => n && (n.id === nodeId() || n.url === nodeUrl(req)));
+            res.set('Cache-Control', 'no-store');
+            return keyPage(req, res, { revealed: registry.nodeKey(node) });
+        } catch (e) { next(e); }
+    });
+
     router.post('/connect/register', requireDefaultAdmin, async (req, res, next) => {
         try {
             await ensureRegistered({ req });
@@ -288,5 +339,5 @@ function mount(app) {
 
 module.exports = {
     createRouter, mount, isDataNode, onAdminLogin, ensureRegistered,
-    nodeId, nodeName, nodeUrl, verifyNodeSignature
+    nodeId, nodeName, nodeUrl, verifyNodeSignature, ownKey
 };
