@@ -18,6 +18,20 @@ const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) { console.error('❌ Thiếu MONGODB_URI (dùng cùng chuỗi với dự án Luyện thi để chung tài khoản)'); process.exit(1); }
 
+// Vercel (serverless): không app.listen — xuất app cho api/index.js; MongoDB nối lười ở request đầu rồi dùng lại.
+const ON_VERCEL = !!process.env.VERCEL;
+let dbReady = null;
+function connectDb() {
+    if (!dbReady) {
+        dbReady = mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000, maxPoolSize: 5 }).then(() => {
+            console.log('✅ MongoDB connected (database dùng chung)');
+            require('./models/OTP').ensureTTLIndex().catch((e) => console.error('[OTP] ensureTTLIndex:', e.message));
+        }).catch((e) => { dbReady = null; throw e; });
+    }
+    return dbReady;
+}
+if (ON_VERCEL) app.use((req, res, next) => (req.path === '/api/node/health' ? next() : connectDb().then(() => next(), next)));
+
 app.use(morgan('dev'));
 // Xem trước trang HTML (iframe sandbox, KHÔNG cookie): quyền đọc nằm trong token ký → gắn TRƯỚC cookie/session để khỏi chạm session store (GitHub)
 app.use('/preview', require('./services/code/previewServer').createHandler({ mount: '/preview' }));
@@ -93,8 +107,9 @@ app.use((err, req, res, next) => {            // eslint-disable-line no-unused-v
     res.status(err.status || 500).render('error', { title: 'Lỗi', message: process.env.NODE_ENV === 'production' ? 'Đã xảy ra lỗi.' : err.message, statusCode: err.status || 500, user: req.user });
 });
 
-mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000, maxPoolSize: 5 }).then(() => {
-    console.log('✅ MongoDB connected (database dùng chung)');
-    require('./models/OTP').ensureTTLIndex().catch((e) => console.error('[OTP] ensureTTLIndex:', e.message));
-    app.listen(PORT, () => console.log(`🚀 repository-mnha chạy ở http://localhost:${PORT}`));
-}).catch((e) => { console.error('❌ Không kết nối được MongoDB:', e.message); process.exit(1); });
+if (!ON_VERCEL) {
+    connectDb().then(() => {
+        app.listen(PORT, () => console.log(`🚀 repository-mnha chạy ở http://localhost:${PORT}`));
+    }).catch((e) => { console.error('❌ Không kết nối được MongoDB:', e.message); process.exit(1); });
+}
+module.exports = app;

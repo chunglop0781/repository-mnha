@@ -48,3 +48,8 @@ Web chính có thể dùng **nhiều Vercel deployment** làm "web dữ liệu" 
 - Đặt `MAIN_URL=https://repository-mnha.vercel.app` ở web dữ liệu để chỉ web chính được gọi `/api/node/*` từ trình duyệt (CORS).
 - Test: `node test/connect-crypto.js`.
 - **Tên repo media theo thời gian**: đặt `GITHUB_MEDIA_REPO_PREFIX=mnha-media-{ts}` → repo tạo ra dạng `mnha-media-20261025-091530`. Không có `{ts}` thì vẫn đánh số `-1`, `-2`.
+
+## Deploy lên Vercel
+- `vercel.json` + `api/index.js`: mọi đường dẫn chạy qua một serverless function (Express xuất từ `server.js`, MongoDB nối lười ở request đầu; `/api/node/health` không cần MongoDB).
+- Nếu đẩy cả thư mục `repository-mnha/` lên GitHub (không phải nội dung bên trong) thì ở Vercel → Settings → General → **Root Directory** đặt `repository-mnha`.
+- Settings → Build and Deployment: Framework Preset = **Other**, để trống Build/Output/Install command.
