@@ -19,7 +19,7 @@ const fakeGh = {
   async readJsonFile(p) { const s = files.get(p); return s ? JSON.parse(blobs.get(s).toString()) : null; },
   async deleteFile(p) { files.delete(p); }
 };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 
 const ms = require(R + 'services/code/mediaService');
@@ -55,3 +55,4 @@ const manifest = () => (files.has(MJ) ? JSON.parse(blobs.get(files.get(MJ)).toSt
   assert(!files.has(MJ), 'json rỗng (không files, không private) thì xoá hẳn');
   console.log('OK html-visibility');
 })().catch((e) => { console.error('✘', e); process.exit(1); });
+

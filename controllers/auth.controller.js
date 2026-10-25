@@ -16,20 +16,39 @@ const norm = (e) => String(e || '').trim().toLowerCase();
 const genOTP = () => String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 const saveSession = (req) => new Promise((ok) => (req.session ? req.session.save(() => ok()) : ok()));
 const sessionUser = (u) => ({ _id: String(u._id), name: u.name, email: u.email });
+const isDataNode = () => String(process.env.DATA_NODE || '').toLowerCase() === 'on';
+const isDefaultAdmin = (u) => !!u && u.role === 'admin' && !u.userKey;
+const dataNodeOnly = (req, res) => res.status(403).render('error', {
+    title: 'Web dữ liệu', message: 'Đây là web dữ liệu: chỉ quản trị viên mặc định (role=admin, userKey=null) được đăng nhập. Không đăng ký tài khoản mới ở web này.',
+    statusCode: 403, user: req.user || null
+});
 
 exports.showLogin = (req, res) => {
     if (req.session && req.session.user) return res.redirect('/');
-    res.render('auth/login', { title: 'Đăng nhập', error: null, email: req.query.email || '', info: req.query.registered ? 'Đăng ký thành công, hãy đăng nhập.' : null });
+    res.render('auth/login', {
+        title: 'Đăng nhập', error: null, email: req.query.email || '',
+        info: req.query.registered ? 'Đăng ký thành công, hãy đăng nhập.' : (isDataNode() ? 'Web dữ liệu: chỉ quản trị viên mặc định được đăng nhập.' : null),
+        dataNode: isDataNode()
+    });
 };
 exports.login = async (req, res) => {
     const email = norm(req.body.email), password = String(req.body.password || '');
-    const fail = (msg, code = 401) => res.status(code).render('auth/login', { title: 'Đăng nhập', error: msg, email, info: null });
+    const fail = (msg, code = 401) => res.status(code).render('auth/login', { title: 'Đăng nhập', error: msg, email, info: null, dataNode: isDataNode() });
     try {
         const user = email ? await User.findOne({ email }).select('+password') : null;
         const ok = user ? await bcrypt.compare(password, user.password) : false;
         if (!user || !ok) return fail('Email hoặc mật khẩu không đúng.');
         if (user.status === 'disabled') return fail('Tài khoản đã bị vô hiệu hoá.', 403);
+        // Web dữ liệu: CHỈ admin mặc định (role=admin, userKey=null). Admin tổ chức / student / client bị từ chối.
+        if (isDataNode() && !isDefaultAdmin(user)) {
+            return fail('Web dữ liệu chỉ cho phép quản trị viên mặc định đăng nhập (role=admin, userKey=null).', 403);
+        }
         req.session.user = sessionUser(user);
+        // Lần đăng nhập đầu của admin mặc định: tự tạo khoá kết nối + ghi v-s/index.json (mã hoá).
+        if (isDataNode() && isDefaultAdmin(user)) {
+            try { await require('../connect/vercel').onAdminLogin(req, user); }
+            catch (e) { console.warn('[login] không đăng ký web dữ liệu:', e.message); }
+        }
         const back = req.session.returnTo; delete req.session.returnTo;
         await saveSession(req);
         res.redirect(back && back.startsWith('/') ? back : '/');
@@ -37,8 +56,12 @@ exports.login = async (req, res) => {
 };
 exports.logout = (req, res) => { req.session.destroy(() => { res.clearCookie('mnha.sid'); res.redirect('/auth/login'); }); };
 
-exports.showRegister = (req, res) => res.render('auth/register', { title: 'Đăng ký', error: null, name: '', email: '' });
+exports.showRegister = (req, res) => {
+    if (isDataNode()) return dataNodeOnly(req, res);
+    res.render('auth/register', { title: 'Đăng ký', error: null, name: '', email: '' });
+};
 exports.register = async (req, res) => {
+    if (isDataNode()) return dataNodeOnly(req, res);
     const name = String(req.body.name || '').trim(), email = norm(req.body.email);
     const { password = '', confirmPassword = '' } = req.body;
     const fail = (msg, code = 400) => res.status(code).render('auth/register', { title: 'Đăng ký', error: msg, name, email });
@@ -61,12 +84,14 @@ exports.register = async (req, res) => {
 };
 
 exports.showVerify = async (req, res) => {
+    if (isDataNode()) return dataNodeOnly(req, res);
     const email = (req.session && req.session.pendingEmail) || norm(req.query.email);
     if (!email) return res.redirect('/auth/register');
     const o = IS_DEV ? await OTP.findOne({ email, type: 'register' }) : null;
     res.render('auth/verify-otp', { title: 'Xác minh OTP', email, error: null, debugOtp: o ? o.code : null });
 };
 exports.verify = async (req, res) => {
+    if (isDataNode()) return dataNodeOnly(req, res);
     const email = norm(req.body.email || (req.session && req.session.pendingEmail));
     const code = String(req.body.code || '').replace(/\D/g, '').slice(0, 6);
     const fail = (msg, c = 400) => res.status(c).render('auth/verify-otp', { title: 'Xác minh OTP', email, error: msg, debugOtp: null });

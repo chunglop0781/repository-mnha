@@ -11,7 +11,7 @@ const fakeGh = {
   async writeBinaryFile(p, b) { files.set(p, b); }, async writeBinaryFileBig(p, b) { big++; files.set(p, b); },
   async readBinaryFile(p) { return files.get(p) || null; }, async readBinaryFileLarge(p) { return files.get(p) || null; }
 };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 const store = require(R + 'services/code/codeStore');
 (async () => {
@@ -33,3 +33,4 @@ const store = require(R + 'services/code/codeStore');
   await assert.rejects(store.writeFile('u1', 'cpp', '', 'a.cpp', 'z'.repeat(200 * 1024 + 1)), /tối đa 200KB/);
   console.log('OK html-bigfile');
 })().catch((e) => { console.error('✘', e); process.exit(1); });
+

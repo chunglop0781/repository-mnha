@@ -34,7 +34,7 @@ const fakeGh = {
   async writeJsonFile(p, d) { put(p, Buffer.from(JSON.stringify(d))); },
   async deleteFile(p) { files.delete(p); }
 };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 
 const { MEDIA } = require(R + 'config/codeConfig');
@@ -311,3 +311,4 @@ async function uploadHls(dir, name, file, { batch = 3, stopAfter = null, uploadI
   server.close();
   console.log('OK html-media');
 })().catch((e) => { console.error('✘', e); process.exit(1); });
+

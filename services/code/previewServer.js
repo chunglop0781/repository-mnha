@@ -323,7 +323,7 @@ function createHandler(opt = {}) {
             const payload = token.verify(tok);
             if (!payload) throw new HttpError(403, 'Link xem trước hết hạn hoặc không hợp lệ — hãy mở lại trang để lấy link mới.', 'TOKEN');
             if (!segs.length) throw new HttpError(404, 'Thiếu đường dẫn file.');
-            const gh = opt.gh || require('../githubService');
+            const gh = opt.gh || require('../connect/mediaRepo').facade();
             const source = payload.k === 'own' ? ownSource(payload.uid, gh) : webSource(payload);
             const base = `${mount}/${tok}/`;
             const download = new URL(req.url, 'http://x').searchParams.get('dl') === '1';

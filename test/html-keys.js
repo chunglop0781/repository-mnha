@@ -25,7 +25,7 @@ const fakeGh = {
   async writeJsonFile(p, d) { put(p, Buffer.from(JSON.stringify(d))); },
   async deleteFile(p) { files.delete(p); }
 };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 
 const realFetch = global.fetch;
@@ -225,3 +225,4 @@ async function putEnc(uid, name, plain, parts = 1) {
   console.log('✔ giới hạn tần suất xin khoá theo token (429)');
   server.close(); console.log('OK html-keys');
 })().catch((e) => { console.error(e); process.exit(1); });
+

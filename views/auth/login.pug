@@ -14,5 +14,8 @@ block content
                 +field("Mật khẩu", "password", "password", "", "current-password")
                 button(type="submit", class="w-full py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700") Đăng nhập
             p(class="mt-4 text-sm text-gray-600") Chưa có tài khoản? 
-                a(href="/auth/register", class="text-indigo-600 hover:underline") Đăng ký
+                if dataNode
+                    span(class="text-gray-500") Web dữ liệu không mở đăng ký — hãy dùng tài khoản quản trị viên mặc định.
+                else
+                    a(href="/auth/register", class="text-indigo-600 hover:underline") Đăng ký
     +passwordToggleScript

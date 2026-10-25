@@ -20,7 +20,7 @@ const fakeGh = {
   async readJsonFile(p) { const s = files.get(p); return s ? JSON.parse(blobs.get(s).toString()) : null; },
   async writeJsonFile(p, d) { put(p, Buffer.from(JSON.stringify(d))); }, async deleteFile(p) { files.delete(p); }
 };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 const { MEDIA } = require(R + 'config/codeConfig');
 MEDIA.DIRECT_MAX = 200 * 1024; MEDIA.PART_BYTES = 64 * 1024;
@@ -137,3 +137,4 @@ const manifest = (dir = '') => { const s = files.get(`${UID}/codes/html/${dir ? 
   assert(!manifest()['bad.mp4'] && !manifest()['big.wav']);
 })().then(() => { fs.rmSync(tmp, { recursive: true, force: true }); console.log('OK html-upload-client'); process.exit(0); })
   .catch((e) => { console.error('✘', e); process.exit(1); });
+

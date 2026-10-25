@@ -6,6 +6,7 @@
 // path helpers (submissionPath, subjectPath, lessonPath).
 // ============================================================
 
+const { Octokit } = require('@octokit/rest');
 const {
     octokit,
     owner,
@@ -45,6 +46,13 @@ async function withRetry(fn, label = 'github') {
     throw lastErr;
 }
 
+// ---------------------------------------------------------------------------
+// FACTORY: một "client" GitHub = 1 cặp owner/repo/branch + Octokit riêng.
+// Client mặc định dùng config/github.js. Client phụ dùng cho repo media xoay vòng
+// (services/connect/mediaRepo.js) mà KHÔNG đụng tới client mặc định.
+// ---------------------------------------------------------------------------
+function buildClient({ octokit, owner, repo, branch, isConfigured }) {
+
 /**
  * Đảm bảo các env cần thiết đã cấu hình.
  */
@@ -69,6 +77,11 @@ async function decodeContent(data, path) {
     throw new Error(`Không đọc được nội dung file: ${path}`);
 }
 
+
+/** Ghi nhận lưu lượng web ⇄ GitHub (xấp xỉ) cho trang /connect. Lỗi thì bỏ qua. */
+function noteOrigin(spec) {
+    try { require('./connect/usage').noteOrigin(spec); } catch (_) { /* chưa bật connect */ }
+}
 
 // ============================================================
 // CÂY THƯ MỤC REPO (1 request lấy toàn bộ đường dẫn + SHA)
@@ -205,6 +218,7 @@ async function readJsonFile(path) {
             throw new Error(`Path không phải file: ${path}`);
         }
         const content = await decodeContent(res.data, path);
+        noteOrigin({ in: Buffer.byteLength(content) });
         return JSON.parse(content);
     } catch (e) {
         if (e.status === 404) return null;
@@ -228,7 +242,9 @@ async function readJsonFileWithSha(path) {
         if (Array.isArray(res.data)) {
             throw new Error(`Path không phải file: ${path}`);
         }
-        const data = JSON.parse(await decodeContent(res.data, path));
+        const text = await decodeContent(res.data, path);
+        noteOrigin({ in: Buffer.byteLength(text) });
+        const data = JSON.parse(text);
         return { data, sha: res.data.sha };
     } catch (e) {
         if (e.status === 404) return null;
@@ -364,6 +380,7 @@ async function writeBinaryFile(path, buffer, commitMessage = 'Update file') {
         });
 
         invalidateTree();
+        noteOrigin({ out: buffer.length });
         return {
             path,
             sha: res.data.content.sha,
@@ -390,7 +407,9 @@ async function readBinaryFile(path) {
             if (res.data.size === 0) return Buffer.alloc(0);      // file RỖNG hợp lệ (vd input.txt vừa tạo) — không phải "quá lớn"
             throw new Error(`File quá lớn để đọc qua Contents API: ${path}`);
         }
-        return Buffer.from(res.data.content, 'base64');
+        const buf = Buffer.from(res.data.content, 'base64');
+        noteOrigin({ in: buf.length });
+        return buf;
     } catch (e) {
         if (e.status === 404) return null;
         throw e;
@@ -412,11 +431,13 @@ async function readBinaryFileLarge(path) {
         if (Array.isArray(res.data)) {
             throw new Error(`Path không phải file: ${path}`);
         }
-        if (res.data.content) return Buffer.from(res.data.content, 'base64');
+        if (res.data.content) { const b = Buffer.from(res.data.content, 'base64'); noteOrigin({ in: b.length }); return b; }
         if (res.data.size === 0) return Buffer.alloc(0);
         if (!res.data.sha) throw new Error(`Không đọc được nội dung file: ${path}`);
         const blob = await octokit.git.getBlob({ owner, repo, file_sha: res.data.sha });
-        return Buffer.from(blob.data.content, 'base64');
+        const b = Buffer.from(blob.data.content, 'base64');
+        noteOrigin({ in: b.length });
+        return b;
     } catch (e) {
         if (e.status === 404) return null;
         throw e;
@@ -433,6 +454,7 @@ async function createBlob(buffer) {
     if (!Buffer.isBuffer(buffer)) throw new Error('createBlob: dữ liệu phải là Buffer');
     return withRetry(async () => {
         const res = await octokit.git.createBlob({ owner, repo, content: buffer.toString('base64'), encoding: 'base64' });
+        noteOrigin({ out: buffer.length });
         return res.data.sha;
     }, 'createBlob');
 }
@@ -442,7 +464,9 @@ async function getBlobBuffer(sha) {
     assertConfigured();
     try {
         const res = await octokit.git.getBlob({ owner, repo, file_sha: sha });
-        return Buffer.from(res.data.content, 'base64');
+        const b = Buffer.from(res.data.content, 'base64');
+        noteOrigin({ in: b.length });
+        return b;
     } catch (e) {
         if (e.status === 404) return null;
         throw e;
@@ -469,6 +493,7 @@ async function writeBinaryFileBig(path, buffer, commitMessage = 'Update file') {
             request: { timeout }
         });
         invalidateTree();
+        noteOrigin({ out: buffer.length });
         return { path, sha: res.data.content.sha, commitSha: res.data.commit.sha };
     }, `writeBinaryBig:${path}`);
 }
@@ -499,7 +524,7 @@ async function commitFiles(changes, commitMessage = 'Update files') {
             entries.push({ path: c.path, mode: '100644', type: 'blob', sha: c.sha });
         } else {
             if (!Buffer.isBuffer(c.content)) throw new Error('commitFiles: content phải là Buffer');
-            entries.push({ path: c.path, mode: '100644', type: 'blob', sha: await createBlob(c.content) });
+            entries.push({ path: c.path, mode: '100644', type: 'blob', sha: await createBlob(c.content), contentLen: c.content.length });
         }
     }
     if (!entries.length) return { commitSha: null, skipped: true };
@@ -517,6 +542,7 @@ async function commitFiles(changes, commitMessage = 'Update files') {
             });
             await octokit.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: commit.data.sha, force: false });
             invalidateTree();
+            noteOrigin({ out: entries.reduce((n, e) => n + (e.contentLen || 0), 0) });
             return { commitSha: commit.data.sha };
         } catch (e) {
             lastErr = e;
@@ -575,6 +601,49 @@ async function fileExists(path) {
  */
 function invalidate(_path) { /* no-op */ }
 
+return {
+    writeJsonFile, readJsonFile, readJsonFileWithSha, writeJsonFileIfSha, updateJsonFile,
+    writeBinaryFile, readBinaryFile, readBinaryFileLarge, createBlob, getBlobBuffer,
+    writeBinaryFileBig, commitFiles, deleteFile, fileExists, getFileSha, invalidate,
+    getRepoTree, invalidateTree, uniqueJsonPath,
+    isConfigured, owner, repo, branch, _octokit: octokit
+};
+} // buildClient
+
+// Client mặc định (repo chính của app) — giữ nguyên hành vi cũ.
+const client = buildClient({
+    octokit,
+    owner,
+    repo,
+    branch,
+    isConfigured: Boolean(isConfigured)
+});
+
+/**
+ * Tạo client cho repo KHÁC (repo media xoay vòng). Không đụng cache/client mặc định.
+ * @param {{token?:string, owner?:string, repo:string, branch?:string, timeout?:number}} opt
+ */
+function createClient(opt = {}) {
+    const tok = opt.token || process.env.GITHUB_MEDIA_TOKEN || process.env.GITHUB_TOKEN;
+    const o = opt.owner || process.env.GITHUB_OWNER;
+    const r = opt.repo;
+    const b = opt.branch || process.env.GITHUB_BRANCH || 'main';
+    if (!r) throw new Error('createClient: thiếu repo');
+    if (!tok || !o) throw new Error('createClient: thiếu token/owner để tạo client GitHub.');
+    const octo = new Octokit({
+        auth: tok,
+        userAgent: 'repository-mnha/1.0.0',
+        request: { timeout: Object.prototype.hasOwnProperty.call(opt, 'timeout') ? opt.timeout : (process.env.VERCEL ? 50000 : 120000) }
+    });
+    // Ghép vào cùng bộ theo dõi GitHub sập/bảo trì.
+    try {
+        const githubHealth = require('../utils/githubErrors');
+        octo.hook.error('request', async (error) => { githubHealth.noteFailure(error); throw error; });
+        octo.hook.after('request', () => githubHealth.noteSuccess());
+    } catch (_) { /* utils không có trong test tối giản */ }
+    return buildClient({ octokit: octo, owner: o, repo: r, branch: b, isConfigured: true });
+}
+
 // ============================================================
 // PATH HELPERS — alias cho code cũ
 // ============================================================
@@ -591,40 +660,14 @@ function lessonPath(subjectSlug, lessonSlug) {
 }
 
 module.exports = {
-    // Core
-    writeJsonFile,
-    readJsonFile,
-    readJsonFileWithSha,
-    writeJsonFileIfSha,
-    updateJsonFile,
-    writeBinaryFile,
-    readBinaryFile,
-    readBinaryFileLarge,
-    createBlob,
-    getBlobBuffer,
-    writeBinaryFileBig,
-    commitFiles,
-    deleteFile,
-    fileExists,
-    getFileSha,
-    invalidate,
-
-    // Cây thư mục + tên file ngẫu nhiên không trùng
-    getRepoTree,
-    invalidateTree,
-    uniqueJsonPath,
+    // Toàn bộ client mặc định (giữ tương thích code cũ)
+    ...client,
 
     // Path helpers
     submissionPath,
     subjectPath,
     lessonPath,
 
-    // Config
-    isConfigured,
-    owner,
-    repo,
-    branch,
-
-    // Debug
-    _octokit: octokit
+    // Tạo client cho repo khác (media xoay vòng)
+    createClient
 };

@@ -114,7 +114,15 @@ async function recordView(gh, t) {
 // ---- địa chỉ GitHub raw (trình duyệt tải thẳng file mã hoá) ----
 function rawUrl(gh, full, v) {
     if (process.env.MEDIA_DIRECT === 'off' || MEDIA.DIRECT === false) return null;
-    const base = process.env.MEDIA_RAW_BASE || (gh && gh.owner && gh.repo ? `https://raw.githubusercontent.com/${encodeURIComponent(gh.owner)}/${encodeURIComponent(gh.repo)}/${encodeURIComponent(gh.branch || 'main')}` : '');
+    let base = process.env.MEDIA_RAW_BASE;
+    if (!base) {
+        let r = null;
+        try { r = gh && gh.repoForSync ? gh.repoForSync(full.join('/')) : null; } catch (_) { r = null; }
+        const owner = r ? r.owner : (gh && gh.owner);
+        const repo = r ? r.repo : (gh && gh.repo);
+        const branch = r ? r.branch : (gh && gh.branch);
+        if (owner && repo) base = `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(branch || 'main')}`;
+    }
     if (!base) return null;
     return base.replace(/\/+$/, '') + '/' + enc(full) + (v ? '?v=' + encodeURIComponent(v) : '');
 }

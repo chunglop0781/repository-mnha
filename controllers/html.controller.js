@@ -14,11 +14,15 @@
 //   GET  /code/html/raw?dir=&file= , GET /code/html/online/raw?url=   tải nội dung file chữ lớn (ghi từng khúc, không nhúng vào trang)
 // Việc đọc file khi xem trang nằm ở services/code/previewServer.js (/preview/<token>/...).
 'use strict';
+const crypto = require('crypto');
 const store = require('../services/code/codeStore');
 const media = require('../services/code/mediaService');
 const remoteSource = require('../services/code/remoteSource');
 const token = require('../services/code/previewToken');
 const keys = require('../services/code/keyService');
+const nodes = require('../services/connect/nodes');
+const uploadToken = require('../services/connect/uploadToken');
+const { canUploadMedia, uploadDenyMessage } = require('../middleware/uploadAuth');
 const { LANGS, MEDIA, ASSET_EXTS, mediaKind } = require('../config/codeConfig');
 
 const LANG = LANGS.html;
@@ -73,12 +77,18 @@ exports.files = wrap(async (req, res) => {
     }
     for (const m of hlsMedia) if (!names.has(m.name)) assets.push({ name: m.name, kind: m.kind, cut: true, state: m.state, done: m.done, total: m.total, size: m.size });
     assets.sort((a, b) => a.name.localeCompare(b.name));
+    const canUpload = canUploadMedia(req.user);
     const payload = {
         dir: data.dir,
         limits: { directMax: MEDIA.DIRECT_MAX, maxFile: MEDIA.MAX_FILE_BYTES, partBytes: MEDIA.PART_BYTES, hlsAudio: MEDIA.HLS_AUDIO_EXTS, hlsVideo: MEDIA.HLS_VIDEO_EXTS },
-        exts: ASSET_EXTS, textExts: LANG.exts
+        exts: ASSET_EXTS, textExts: LANG.exts, canUpload
     };
-    res.render('code/html-files', { title: LANG.name, user: req.user, lang: LANG, dir: data.dir, shareUrl: store.githubFolderUrl(uid, 'html', data.dir), folders: data.folders, textFiles, assets, isPage, payloadJson: json(payload) });
+    res.render('code/html-files', {
+        title: LANG.name, user: req.user, lang: LANG, dir: data.dir,
+        shareUrl: store.githubFolderUrl(uid, 'html', data.dir), folders: data.folders, textFiles, assets, isPage,
+        canUpload, uploadMessage: canUpload ? null : uploadDenyMessage(req.user),
+        payloadJson: json(payload)
+    });
 });
 
 exports.createFile = wrap(async (req, res) => {
@@ -179,12 +189,57 @@ exports.player = wrap(async (req, res) => {
 exports.mediaVisibility = wrap(async (req, res) => res.json(await media.setPublic(uidOf(req), req.body || {})));
 
 // ---------------------------------------------------------------- tải lên
+//
+// Web chính KHÔNG tự nhận file nữa: /upload/init chỉ chọn web dữ liệu (kiểm tra
+// LẦN LƯỢT cũ → mới), ký phiếu tải lên rồi trả địa chỉ web cho trình duyệt gửi
+// thẳng. Không có web nào / tất cả lỗi → tuỳ CONNECT_FALLBACK_LOCAL mà báo lỗi
+// hoặc tải lên máy chủ chính (kèm thông báo rõ).
 const asBuf = (b) => (Buffer.isBuffer(b) ? b : Buffer.alloc(0));
-exports.uploadInit = wrap(async (req, res) => res.json(await media.init(uidOf(req), req.body || {})));
+const allowLocalFallback = () => String(process.env.CONNECT_FALLBACK_LOCAL || 'on').toLowerCase() !== 'off'
+    && String(process.env.CONNECT_REQUIRED || '').toLowerCase() !== 'on';
+
+exports.uploadInit = wrap(async (req, res) => {
+    const uid = uidOf(req);
+    const body = req.body || {};
+    const dir = store.cleanDir(body.dir || '').join('/');
+    const name = media.cleanAssetName(body.name);
+    const base = { dir, name, lastModified: body.lastModified, srcName: body.srcName, size: body.size, encrypt: body.encrypt };
+
+    // Web dữ liệu tự đăng nhập admin mặc định: dùng luôn máy chủ đó.
+    if (String(process.env.DATA_NODE || '').toLowerCase() === 'on') {
+        return res.json({ ok: true, mode: 'local', ...(await media.init(uid, base)) });
+    }
+
+    const plan = await nodes.pickForUpload().catch((e) => ({ primary: null, candidates: [], checks: [], error: e.message }));
+    if (plan.primary) {
+        const uploadId = crypto.randomBytes(16).toString('hex');
+        const tok = uploadToken.sign({ uid, uploadId, name, dir });
+        return res.json({
+            ok: true, mode: 'node', node: plan.primary, candidates: plan.candidates,
+            token: tok, uploadId, dir, name, ttl: uploadToken.TTL_MS, checks: plan.checks
+        });
+    }
+    const error = plan.error || 'Không có web kết nối nào để tải lên.';
+    if (!allowLocalFallback()) {
+        throw Object.assign(new Error(error), { status: 503, code: 'NO_NODE' });
+    }
+    return res.json({
+        ok: true, mode: 'local', notice: error + ' Tạm thời tải lên máy chủ chính.',
+        checks: plan.checks || []
+    });
+});
+
+// Tải lên máy chủ chính (fallback / web dữ liệu).
+exports.uploadLocalInit = wrap(async (req, res) => res.json(await media.init(uidOf(req), req.body || {})));
 exports.uploadPart = wrap(async (req, res) => res.json(await media.putPart(uidOf(req), req.query, asBuf(req.body))));
 exports.uploadFinish = wrap(async (req, res) => res.json(await media.finish(uidOf(req), req.body || {})));
 exports.uploadSeg = wrap(async (req, res) => res.json(await media.putSeg(uidOf(req), req.query, asBuf(req.body))));
 exports.uploadCommit = wrap(async (req, res) => res.json(await media.commit(uidOf(req), req.body || {})));
+exports.uploadNodeFail = wrap(async (req, res) => {
+    const id = String((req.body && req.body.id) || req.query.id || '');
+    if (id) nodes.markFailed(id);
+    res.json({ ok: true });
+});
 exports.mediaDelete = wrap(async (req, res) => res.json(await media.deleteMedia(uidOf(req), req.body || {})));
 
 // ---------------------------------------------------------------- xem code trên mạng

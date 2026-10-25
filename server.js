@@ -26,6 +26,9 @@ app.use(express.json({ limit: '4.4mb' }));      // html lưu tối đa 3MB (xem 
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Đếm lưu lượng trình duyệt ⇄ web (xấp xỉ) cho trang /connect — xem services/connect/usage.js
+app.use(require('./services/connect/usage').middleware());
+
 // Session CHỈ đọc/ghi ở GitHub (cookies/index.json, mã hoá AES-256-GCM) — KHÔNG còn ghi session vào MongoDB.
 // Thiếu GITHUB_* hoặc SESSION_ENC_KEY thì dừng ngay (không có đường lùi về Mongo).
 let sessionStore;
@@ -46,7 +49,37 @@ const { attachUser, requireAuth } = require('./middleware/auth');
 app.use(attachUser);
 app.use((req, res, next) => { res.locals.user = req.user || null; next(); });
 
+// Web dữ liệu (DATA_NODE=on) hay web chính: cùng codebase, khác .env.
+const connectVercel = require('./connect/vercel');
+const DATA_NODE = connectVercel.isDataNode();
+app.use((req, res, next) => {
+    res.locals.dataNode = DATA_NODE;
+    res.locals.nodeName = DATA_NODE ? connectVercel.nodeName() : null;
+    next();
+});
+if (DATA_NODE) {
+    // Web dữ liệu: tài khoản KHÔNG phải admin mặc định không được dùng (kể cả session cũ).
+    app.use((req, res, next) => {
+        const u = req.user;
+        if (!u || (u.role === 'admin' && !u.userKey)) return next();
+        if (req.session) delete req.session.user;
+        req.user = null;
+        res.locals.user = null;
+        if (req.path.startsWith('/auth/')) return next();
+        if (req.session) return req.session.save(() => res.redirect('/auth/login'));
+        return res.redirect('/auth/login');
+    });
+}
+
 app.use('/auth', require('./routes/auth'));
+if (DATA_NODE) {
+    // /api/node/health|status|media/* + /connect (chỉ admin mặc định) của web dữ liệu
+    app.use(connectVercel.createRouter());
+    console.log('🔗 Chế độ WEB DỮ LIỆU: ' + connectVercel.nodeName() + ' (' + connectVercel.nodeId() + ')');
+} else {
+    // Quản lý các web dữ liệu + Fast Data Transfer / Fast Origin Transfer
+    app.use('/connect', require('./routes/connect'));
+}
 app.get('/', requireAuth, require('./controllers/code.controller').hub);     // menu chính: chọn ngôn ngữ code
 app.get('/code', (req, res) => res.redirect('/'));
 app.use('/code', require('./routes/code'));

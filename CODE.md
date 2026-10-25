@@ -100,3 +100,144 @@ Trang *Xem code trên mạng* có 2 ô: **Xem tệp code** (dán link file, như
 - Trang **Xem thư mục trên mạng** + trình phát trên mạng không liệt kê file riêng tư (các file còn lại hiện bình thường). Tắt công khai CHỈ ẩn khỏi danh sách/trình phát: nhúng vào html (`<img src>`, `<video src>`...) vẫn chạy bình thường, cả khi xem trang qua link trên mạng.
 - Thư mục chỉ có media đã cắt m3u8 (danh sách file rỗng vì `mnha-media.json`/`_media` bị ẩn) vẫn đọc manifest để hiện video và nút trình phát.
 - **Giới hạn file**: dạng HTML gần như không giới hạn (trần **50MB**, vì GitHub 100MB/file và Vercel 60s). Vercel chặn request/response > 4.5MB nên file lớn được **lưu theo phần** (`PUT /code/html/save/part` ≤ 3.5MB mỗi phần + `POST /code/html/save/finish`, biên nhận HMAC) và **tải riêng** (`GET /code/html/raw`, `/code/html/online/raw`, ghi từng khúc) thay vì nhúng vào trang; preview file lớn cũng ghi từng khúc. Code HTML KHÔNG mã hoá — chỉ ảnh/âm thanh/video. Các dạng code khác (C++, emu8086) vẫn 200KB.
+
+## Web kết nối (nhiều Vercel + tải media dự phòng)
+Web chính (`https://repository-mnha.vercel.app`) có thể dùng **nhiều Vercel project cùng codebase** làm "web dữ liệu"
+để nhận ảnh / âm thanh / video. Mỗi web dữ liệu tự đăng ký vào `v-s/index.json` của repo GitHub chính; web chính chọn
+web còn sống, ký phiếu để trình duyệt gửi **thẳng** file lên web đó, và tự chuyển web khi lỗi.
+
+### 1. Dựng một web dữ liệu
+- Tạo Vercel project mới từ **cùng repo/mã nguồn**, ví dụ domain `https://repository-mnha-data-1.vercel.app`.
+- `.env` phải **GIỐNG HỆT** web chính ở mọi biến bí mật; chỉ đổi 4 biến:
+```
+DATA_NODE=on
+NODE_ID=repository-mnha-data-1
+NODE_URL=https://repository-mnha-data-1.vercel.app
+NODE_NAME=Web dữ liệu 1
+```
+- Web chính để `DATA_NODE=off` (hoặc bỏ trống). Mẫu đầy đủ ở `.env.example` và ngay trên trang `/connect`.
+- Các biến phải giống: `MONGODB_URI`, `SESSION_SECRET`, `SESSION_ENC_KEY`, `MEDIA_ENC_KEY`, `CONNECT_ENC_KEY`,
+  `CONNECT_HMAC_KEY`, `GITHUB_TOKEN`, `GITHUB_MEDIA_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_BRANCH`.
+  Khác khoá → không giải mã được khoá kết nối / không xác thực được phiếu tải / không đọc được media đã mã hoá.
+- Deploy lại sau khi sửa env. Kiểm tra nhanh: `GET https://<web-dữ-liệu>/api/node/health` → `{"ok":true,"id":"..."}`.
+- File `connect/vercel/index.js` chỉ hoạt động khi `DATA_NODE=on`; `server.js` mount `/api/node/*` và trang `/connect`
+  riêng cho web dữ liệu. Web chính dùng các module trong `services/connect/`.
+
+### 2. Đăng nhập và khoá kết nối (connection key)
+- Web dữ liệu **chỉ cho admin mặc định** đăng nhập: `role === 'admin' && userKey == null`. Admin tổ chức, student,
+  client đều bị chặn; đăng ký / OTP cũng bị tắt trên web dữ liệu (`controllers/auth.controller.js`).
+- **Lần đầu** admin mặc định đăng nhập, `connect/vercel.onAdminLogin` gọi `ensureRegistered()`:
+  - Nếu web chưa có trong `v-s/index.json`: sinh khoá ngẫu nhiên 32 byte (64 ký tự hex), **mã hoá 2 chiều**
+    AES-256-GCM (AAD gắn với id web) rồi ghi `keyEnc`; bản rõ chỉ giữ trong session để hiện **đúng một lần**.
+  - Nếu đã có: giữ nguyên khoá cũ, chỉ cập nhật tên/URL.
+- Trang `/connect` của web dữ liệu hiện khoá đầy đủ **một lần** sau khi tạo (đọc xong xoá khỏi session); các lần sau chỉ
+  hiện `keyHint` (4 ký tự cuối). Nút **Đổi khoá** (`POST /connect/rotate-key`) tạo khoá mới — web chính tự dùng khoá mới
+  ở lần kiểm tra kế tiếp. Mất khoá thì đổi khoá mới, không xem lại được.
+- Khoá **không bao giờ** gửi cho client/trình duyệt thường và không đi qua URL/log. Nó chỉ dùng server-server để ký
+  yêu cầu `POST /api/node/status`; request chỉ mang HMAC + timestamp, không mang khoá.
+
+### 3. Sổ đăng ký `v-s/index.json`
+```json
+{
+  "v": 1,
+  "nodes": [{
+    "id": "repository-mnha-data-1",
+    "url": "https://repository-mnha-data-1.vercel.app",
+    "name": "Web dữ liệu 1",
+    "enabled": true,
+    "keyEnc": "v1.<iv>.<tag>.<ciphertext>",
+    "keyHint": "a1b2",
+    "createdAt": "2026-...",
+    "health": { "ok": true, "ms": 123, "error": null, "statusOk": true, "version": "..." },
+    "vercel": { "fastDataTransfer": 0, "fastOriginTransfer": 0, "updatedAt": "2026-..." }
+  }],
+  "updatedAt": "2026-..."
+}
+```
+- `id` lấy từ host đã chuẩn hoá (`registry.idForUrl`): `https://repository-mnha-data-1.vercel.app` →
+  `repository-mnha-data-1`, khớp `NODE_ID` và `usage.nodeId()`.
+- Mọi thao tác ghi đều qua `registry.mutate()`: đọc kèm SHA → sửa → ghi kèm SHA, tự đọc lại và thử lại khi xung đột,
+  nên nhiều web dữ liệu đăng ký cùng lúc vẫn an toàn.
+- Đây là **nguồn duy nhất** cho: danh sách web, thứ tự tải lên (cũ → mới), khoá ký kiểm tra trạng thái, số liệu Vercel
+  nhập tay. File nằm trong repo chính; lộ file cũng không lấy được khoá nếu không có `CONNECT_ENC_KEY`.
+
+### 4. Trang `/connect` của web chính
+Chỉ admin mặc định dùng được (`routes/connect.js` gắn `requireDefaultAdmin`).
+- Thêm web bằng URL gốc (không kèm đường dẫn); **Kiểm tra** duyệt lần lượt **cũ → mới**, lưu `health` và trạng thái.
+- Đổi tên / bật-tắt / xoá web; dán khoá kết nối thủ công (nếu web đã tạo khoá mà chưa tự đăng ký); nhập số liệu Vercel.
+- **Fast Data Transfer** ≈ dữ liệu trình duyệt ⇄ web (bytes vào + ra). **Fast Origin Transfer** ≈ dữ liệu web ⇄ GitHub
+  (đọc + ghi qua `githubService`). Vercel không có API công khai cho 2 chỉ số này, nên app **tự đo xấp xỉ** theo request
+  và ghi vào `v-s/usage.json`; số chính thức của Vercel do admin nhập tay và cộng thêm. Trang ghi rõ đây là số ước lượng.
+- Mỗi web có một ô `.env` mẫu **giống hệt nhau**, chỉ khác 4 dòng `DATA_NODE` / `NODE_ID` / `NODE_URL` / `NODE_NAME`.
+
+### 5. Luồng tải media và chuyển web dự phòng
+1. Người dùng bấm Tải lên → `POST /code/html/upload/init` (đã qua `requireMediaUploader`).
+2. Web chính gọi `nodes.pickForUpload()`: đọc các web đang bật trong `v-s/index.json`, duyệt **tuần tự cũ → mới**,
+   kiểm tra `GET /api/node/health` (timeout 4 giây, cache 60 giây). Web đầu tiên OK là **primary**, các web còn lại là
+   **candidates**. Web lỗi bị tạm nghỉ 90 giây (`nodes.markFailed` qua `POST /code/html/upload/node-fail`).
+3. Web chính trả `mode:'node'` kèm `node`, `candidates`, `uploadId`, `token`, `ttl` và `checks`. `token` là phiếu HMAC
+   (`services/connect/uploadToken.js`), hạn 2 giờ (`UPLOAD_TOKEN_TTL_MS`), gắn chặt `uid + uploadId + tên file + thư mục`.
+4. Trình duyệt (`public/js/mediaUpload.js`) gửi file **trực tiếp** tới web dữ liệu, hiện "Web: &lt;tên&gt; — tiến trình";
+   không quay lại web chính nên không tốn thêm một lần Fast Origin Transfer.
+5. Endpoint trên web dữ liệu: `POST /api/node/media/init`, `PUT /part`, `POST /finish`, `PUT /seg`,
+   `POST /commit`, `POST /visibility`, `POST /delete`. Xác thực bằng header `X-MNHA-Upload: Bearer <token>`
+   (hoặc `Authorization`, body/query `token`) — **không dùng cookie**; phiếu phải khớp đúng `dir`/`name`/`uploadId`.
+6. Web đang dùng lỗi giữa chừng → trình duyệt báo web chính cho web đó nghỉ, rồi thử candidate kế tiếp với cùng
+   `uploadId` (web mới ký lại phiếu nếu cần, đọc `mnha-media.json` để làm tiếp đoạn đã có). Hết candidate → lỗi rõ ràng.
+7. Không có web nào hoạt động:
+   - `CONNECT_FALLBACK_LOCAL=on` (mặc định) và `CONNECT_REQUIRED` khác `on`: tải lên máy chủ chính, kèm thông báo
+     "… Tạm thời tải lên máy chủ chính."
+   - `CONNECT_FALLBACK_LOCAL=off` hoặc `CONNECT_REQUIRED=on`: HTTP 503 `NO_NODE` với câu
+     "Chưa có web kết nối nào. Hãy vào /connect thêm web dữ liệu trước khi tải ảnh / âm thanh / video lên."
+
+### 6. Chặn tài khoản chưa duyệt tải media
+- Chỉ chặn **tải ảnh / âm thanh / video** (`middleware/uploadAuth.js` → `requireMediaUploader` gắn vào các route
+  `/code/html/upload/*`). Sửa code, tạo thư mục, chạy code, xem file… vẫn dùng bình thường.
+- Được tải: admin mặc định, admin tổ chức, student, client có `status='approved'`. Bị chặn: `pending`, `rejected`,
+  `disabled`, hoặc client chưa được duyệt.
+- Thông báo đúng dạng: **"Tài khoản bị … vì vậy hãy nhắn quản trị viên để mở tính năng này."**
+  (`chưa được duyệt` / `bị từ chối` / `bị vô hiệu hoá` / `chưa được cấp quyền tải lên`).
+- Trang HTML ẩn khu vực tải lên với tài khoản bị chặn; API trả 403 kèm `code: 'UPLOAD_NOT_ALLOWED'`.
+
+### 7. Tự xoay vòng repo media (~500MB)
+- Bật mặc định bằng `MEDIA_REPO_POOL=on`; `services/connect/mediaRepo.js` bọc `githubService` và định tuyến:
+  - `mnha-media.json`, `v-s/`, `cookies/`, `*/keys/*` → **luôn ở repo chính** (một nguồn duy nhất).
+  - File/đoạn media → repo **đang dùng** trong `v-s/media-repos.json`.
+- Khi repo đang dùng đạt `MEDIA_REPO_LIMIT_BYTES` (mặc định 500MB), app tạo repo mới
+  `<GITHUB_MEDIA_REPO_PREFIX>-N` (mặc định `repository-mnha-media-1`, `-2`…) bằng `GITHUB_MEDIA_TOKEN`
+  (cần quyền tạo repo; có thể dùng chính `GITHUB_TOKEN`), ghi vào `v-s/media-repos.json` rồi ghi tiếp.
+  `MEDIA_REPO_PRIVATE=on` nếu muốn repo mới ở chế độ riêng tư.
+- Khi **đọc**, app gộp cây thư mục + blob của repo chính và **tất cả** repo media, nên media cũ vẫn phát/tải bình thường.
+  Xoá file thì tìm đúng repo đang chứa file đó.
+- Chỉ đường dẫn hệ thống thay đổi thì **không** tạo repo mới / không xoay vòng.
+- `MEDIA_REPO_POOL=off` → quay lại hành vi cũ (mọi thứ trong repo chính), hữu ích khi chạy test hoặc repo nhỏ.
+
+### 8. Biến môi trường liên quan
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `DATA_NODE` | `off` | `on` = web dữ liệu (khóa đăng nhập thường, mở `/api/node/*`). |
+| `NODE_ID` / `NODE_URL` / `NODE_NAME` | — | Danh tính web dữ liệu; `NODE_ID` nên trùng id trong `v-s/index.json`. |
+| `CONNECT_INDEX_PATH` | `v-s/index.json` | Sổ đăng ký web. |
+| `CONNECT_USAGE_PATH` | `v-s/usage.json` | Bộ đếm lưu lượng theo ngày (giữ 62 ngày). |
+| `CONNECT_ENC_KEY` | — | Khoá mã hoá khoá kết nối (≥ 32 ký tự); fallback `SESSION_ENC_KEY`. |
+| `CONNECT_HMAC_KEY` | — | Khoá ký phiếu tải lên; fallback `CONNECT_ENC_KEY` → `MEDIA_ENC_KEY` → `SESSION_ENC_KEY`. |
+| `CONNECT_PROBE_TIMEOUT_MS` | `4000` | Thời gian chờ kiểm tra một web. |
+| `UPLOAD_TOKEN_TTL_MS` | `7200000` | Hạn phiếu tải lên (2 giờ). |
+| `CONNECT_FALLBACK_LOCAL` | `on` | Không có web → tải lên máy chủ chính. |
+| `CONNECT_REQUIRED` | `off` | `on` = bắt buộc có web, không fallback. |
+| `MAIN_URL` | `https://repository-mnha.vercel.app` | Địa chỉ web chính, hiện trong `.env` mẫu. |
+| `MEDIA_REPO_POOL` | (bật khi `on`) | Bật xoay vòng repo media. |
+| `MEDIA_REPO_LIMIT_BYTES` | `524288000` | Ngưỡng xoay vòng (~500MB). |
+| `MEDIA_REPO_INDEX_PATH` | `v-s/media-repos.json` | Danh sách repo media + repo đang dùng. |
+| `GITHUB_MEDIA_TOKEN` | — | Token tạo repo mới; mặc định dùng `GITHUB_TOKEN`. |
+| `GITHUB_MEDIA_OWNER` | `GITHUB_OWNER` | Chủ repo media. |
+| `GITHUB_MEDIA_REPO_PREFIX` | `<GITHUB_REPO>-media` | Tiền tố tên repo mới. |
+| `MEDIA_REPO_PRIVATE` | `off` | Repo media mới là private. |
+
+### 9. Kiểm thử
+```
+node test/run.js                 # toàn bộ test (tự tìm test/*.js)
+node test/html-upload-client.js  # riêng phần chọn web / phiếu tải ở trình duyệt
+```
+Test dùng `githubService` giả qua `require.cache`, không gọi GitHub thật. Các test cũ vẫn chạy với
+`MEDIA_REPO_POOL` tắt để giữ nguyên hành vi mặc định.

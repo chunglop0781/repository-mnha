@@ -10,7 +10,7 @@ const fakeGh = {
   async readBinaryFile(p) { return repoFiles.has(p) ? Buffer.from(repoFiles.get(p)) : null; },
   async writeJsonFile(p, d) { saved.push(d); }
 };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 const inc = require(R + 'services/code/includeResolver.js');
 const rs = require(R + 'services/code/remoteSource.js');
@@ -82,3 +82,4 @@ const FILES = {            // "thư mục PhanA" trong repo / thư mục của n
   assert(/system\(\)/.test(bad.error || bad.consoleText || ''), 'header bị cấm phải bị chặn: ' + bad.error); console.log('✔ header chứa system() bị chặn như main.cpp');
   process.exit(0);
 })().catch((e) => { console.error('✘', e); process.exit(1); });
+

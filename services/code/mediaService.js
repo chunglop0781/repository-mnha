@@ -11,7 +11,8 @@
 //   Biên nhận HMAC ngăn client nhét sha blob bất kỳ (của người khác) vào commit.
 'use strict';
 const crypto = require('crypto');
-const gh = require('../githubService');
+const mediaRepo = require('../connect/mediaRepo');
+const gh = mediaRepo.facade();
 const store = require('./codeStore');
 const mc = require('./mediaCrypto');
 const hls = require('./hlsPlaylist');
@@ -121,6 +122,7 @@ async function putPart(uid, q, body) {
         await dropEntryIfAny(uid, c);
         const data = encrypt ? mc.encryptBuffer(body) : body;
         await gh.writeBinaryFileBig(c.filePath, data, `media: ${c.name}`);
+        mediaRepo.addBytes(data.length);
         return { ok: true, done: true, name: c.name, encrypted: encrypt };
     }
     if (!encrypt) throw bad('File nhiều phần bắt buộc mã hoá.');
@@ -146,6 +148,7 @@ async function finish(uid, b) {
     if (data.length > MEDIA.DIRECT_MAX + 1024 * 1024) throw bad('File quá lớn.');
     await dropEntryIfAny(uid, c);
     await gh.writeBinaryFileBig(c.filePath, data, `media: ${c.name}`);
+    mediaRepo.addBytes(data.length);
     return { ok: true, name: c.name, encrypted: true };
 }
 
@@ -178,6 +181,7 @@ async function putSeg(uid, q, body) {
     // (Âm thanh m3u8 tải lên trước đây dùng MNHAENC1 từng đoạn — không có mục `drm` trong json — vẫn phát được qua máy chủ.)
     const data = mc.encryptHlsSegment(body, mc.hlsKey(uid, uploadId), i);
     const sha = await gh.createBlob(data);
+    mediaRepo.addBytes(data.length);
     const path = join(root(uid), dirRel(c.dirSegs), segRel(id, file));
     return { ok: true, sha, size: data.length, plainSize: body.length, receipt: mc.receipt(uid, uploadId, path, sha, data.length) };
 }

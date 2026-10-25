@@ -7,7 +7,7 @@ const saved = [];
 const fakeGh = { isConfigured: true, owner: 'o', repo: 'r', branch: 'main',
   async getRepoTree() { return { files: new Map(), truncated: false }; },
   async writeJsonFile(p, data) { saved.push({ p, data }); } };
-const gp = R + 'services/githubService.js';
+const gp = require.resolve(R + 'services/githubService.js');
 require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 
 const rs = require(R + 'services/code/remoteSource.js');
@@ -53,3 +53,4 @@ const P = (u) => rs.parseSourceUrl(u);
   assert(!('origin' in saved[saved.length - 1].data)); console.log('✔ file thường không gắn origin');
   process.exit(0);
 })().catch((e) => { console.error('✘', e); process.exit(1); });
+

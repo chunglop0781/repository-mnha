@@ -1,0 +1,292 @@
+// connect/vercel/index.js — phần chạy trên từng "web dữ liệu" Vercel.
+//
+//   Cùng một codebase với web chính; chỉ khác .env:
+//       DATA_NODE=on
+//       NODE_ID=repository-mnha-data-1
+//       NODE_URL=https://repository-mnha-data-1.vercel.app
+//       NODE_NAME=Web dữ liệu 1
+//
+//   Nhiệm vụ:
+//     • Chỉ admin MẶC ĐỊNH (role=admin, userKey=null) được đăng nhập (xem server.js + auth.controller).
+//     • Lần đăng nhập đầu: tự tạo "khoá kết nối", mã hoá 2 chiều rồi ghi vào v-s/index.json
+//       của repo GitHub chính (registry.upsertNode) — khoá KHÔNG gửi cho người dùng thường.
+//     • /api/node/health   công khai: web chính kiểm tra web này còn sống.
+//     • /api/node/status   ký HMAC bằng khoá kết nối: trả lưu lượng + tình trạng repo media.
+//     • /api/node/media/*  nhận phần/đoạn file từ trình duyệt bằng phiếu tải lên (uploadToken).
+//     • /connect           trang quản trị của web dữ liệu (khoá, đăng ký, .env mẫu, lưu lượng).
+'use strict';
+const crypto = require('crypto');
+const express = require('express');
+const pkg = require('../../package.json');
+const registry = require('../../services/connect/registry');
+const cc = require('../../services/connect/crypto');
+const usage = require('../../services/connect/usage');
+const mediaRepo = require('../../services/connect/mediaRepo');
+const uploadToken = require('../../services/connect/uploadToken');
+const { envTemplate } = require('../../services/connect/envTemplate');
+const { requireDefaultAdmin, nodeUploadAuth } = require('../../middleware/uploadAuth');
+
+const isDataNode = () => String(process.env.DATA_NODE || '').toLowerCase() === 'on';
+const startedAt = Date.now();
+
+function nodeId() {
+    if (process.env.NODE_ID) return String(process.env.NODE_ID);
+    if (process.env.NODE_URL) {
+        try {
+            // Giống hệt registry.idForUrl (dùng URL gốc) → khớp id web chính đã thêm tay.
+            return registry.idForUrl(registry.cleanUrl(process.env.NODE_URL));
+        } catch (_) {
+            try { return registry.idForUrl(String(process.env.NODE_URL).replace(/\/+$/, '')); } catch (__) { /* ignore */ }
+        }
+    }
+    return 'data-node';
+}
+function nodeName() {
+    return String(process.env.NODE_NAME || process.env.NODE_ID || nodeId());
+}
+function nodeUrl(req) {
+    if (process.env.NODE_URL) return String(process.env.NODE_URL).replace(/\/+$/, '');
+    if (!req) return '';
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0];
+    return `${proto}://${req.get('host')}`.replace(/\/+$/, '');
+}
+
+function json(res, status, obj) {
+    res.status(status).type('application/json').send(JSON.stringify(obj));
+}
+const bad = (m, status = 400) => Object.assign(new Error(m), { status });
+
+// ------------------------------------------------------------------ đăng ký web
+/**
+ * Bảo đảm web này có mặt trong v-s/index.json. Chỉ tạo khoá mới khi chưa có
+ * (hoặc force=true). Khoá gốc chỉ lưu trong session của admin mặc định để hiện 1 lần.
+ */
+async function ensureRegistered({ req, force = false } = {}) {
+    const id = nodeId(), url = nodeUrl(req), name = nodeName();
+    const doc = await registry.load();
+    const found = doc.nodes.find((n) => n && (n.id === id || n.url === url)) || null;
+    if (found && found.keyEnc && !force) {
+        // Đã đăng ký: cập nhật tên/URL nếu đổi, giữ nguyên khoá.
+        const r = await registry.upsertNode({ id, url, name, createdBy: 'data-node' });
+        return { ok: true, created: false, node: r.node, key: null };
+    }
+    if (!url) throw new Error('Thiếu NODE_URL — không biết địa chỉ web này để đăng ký.');
+    const key = cc.newKey();
+    const r = await registry.upsertNode({ id, url, name, key, createdBy: 'data-node' });
+    if (req && req.session) {
+        req.session.nodeSetup = {
+            id, url, name, created: true, at: new Date().toISOString(),
+            key: r.created || force ? key : (req.session.nodeSetup && req.session.nodeSetup.key) || key
+        };
+    }
+    return { ok: true, created: true, node: r.node, key };
+}
+
+/** Gọi sau khi admin mặc định đăng nhập thành công (server.js / auth.controller). */
+async function onAdminLogin(req, user) {
+    if (!isDataNode()) return { skipped: true };
+    if (!user || user.role !== 'admin' || user.userKey) return { skipped: true };
+    try {
+        const r = await ensureRegistered({ req });
+        console.log('[connect/vercel] đăng ký web ' + nodeId() + ': ' + (r.created ? 'tạo khoá mới' : 'đã có'));
+        return r;
+    } catch (e) {
+        console.warn('[connect/vercel] không đăng ký được:', e.message);
+        if (req.session) req.session.nodeSetup = { id: nodeId(), url: nodeUrl(req), error: e.message, at: new Date().toISOString() };
+        return { error: e.message };
+    }
+}
+
+// ------------------------------------------------------------------ chữ ký web chính → web dữ liệu
+// Khoá riêng của web này (giải mã từ v-s/index.json), nhớ 60 giây để khỏi đọc GitHub mỗi lần.
+let _keyCache = null;
+async function ownKey(req) {
+    if (_keyCache && Date.now() - _keyCache.at < 60 * 1000) return _keyCache.key;
+    const doc = await registry.load();
+    const ids = new Set([nodeId()]);
+    try { ids.add(registry.idForUrl(registry.cleanUrl(nodeUrl(req)))); } catch (_) { /* ignore */ }
+    const node = doc.nodes.find((n) => n && (ids.has(n.id) || n.url === nodeUrl(req)));
+    const key = registry.nodeKey(node);
+    _keyCache = { at: Date.now(), key };
+    return key;
+}
+
+async function verifyNodeSignature(req) {
+    const id = String(req.headers['x-mnha-node'] || '');
+    const ts = String(req.headers['x-mnha-ts'] || '');
+    const sig = String(req.headers['x-mnha-sig'] || '');
+    if (!id || !ts || !sig) throw bad('Thiếu chữ ký.', 401);
+    if (Math.abs(Date.now() - Number(ts)) > 5 * 60 * 1000) throw bad('Chữ ký đã hết hạn.', 401);
+    // Chấp nhận id đang cấu hình HOẶC id suy ra từ URL (trường hợp web chính thêm tay URL trước).
+    const accepted = new Set([nodeId()]);
+    try { accepted.add(registry.idForUrl(registry.cleanUrl(nodeUrl(req)))); } catch (_) { /* ignore */ }
+    if (!accepted.has(id)) throw bad('Sai mã web.', 403);
+    const bodyHash = crypto.createHash('sha256').update('').digest('hex');
+    // Ký bằng KHOÁ KẾT NỐI RIÊNG của web này — không đủ nếu chỉ biết CONNECT_ENC_KEY dùng chung.
+    let key;
+    try { key = await ownKey(req); } catch (e) { throw bad('Web này chưa có khoá kết nối: ' + e.message, 409); }
+    const expect = cc.hmacWithKey(key, [id, ts, 'POST', '/api/node/status', bodyHash].join('\n'));
+    if (!cc.safeEqual(expect, sig)) { _keyCache = null; throw bad('Chữ ký không hợp lệ.', 403); }
+}
+
+// ------------------------------------------------------------------ router
+function createRouter() {
+    const router = express.Router();
+    const raw = express.raw({ type: () => true, limit: '4mb' });
+
+    // CORS cho trình duyệt gọi thẳng từ web chính sang web dữ liệu (không cookie).
+    router.use('/api/node', (req, res, next) => {
+        // Có MAIN_URL → chỉ web chính được gọi từ trình duyệt; không có thì giữ hành vi cũ.
+        const main = String(process.env.MAIN_URL || '').replace(/\/+$/, '');
+        const origin = req.headers.origin || '';
+        if (main && origin && origin.replace(/\/+$/, '') !== main) return res.status(403).json({ error: 'Origin không được phép.' });
+        res.setHeader('Access-Control-Allow-Origin', main || origin || '*');
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-MNHA-Upload, X-MNHA-Node, X-MNHA-Ts, X-MNHA-Sig');
+        res.setHeader('Access-Control-Max-Age', '600');
+        if (req.method === 'OPTIONS') return res.status(204).end();
+        next();
+    });
+
+    // ---- công khai: web chính dò tuần tự
+    router.get('/api/node/health', (req, res) => {
+        json(res, 200, {
+            ok: true, id: nodeId(), name: nodeName(), url: nodeUrl(req),
+            v: pkg.version, time: new Date().toISOString(),
+            uptime: Math.round((Date.now() - startedAt) / 1000)
+        });
+    });
+
+    // ---- ký HMAC: lưu lượng + tình trạng
+    router.post('/api/node/status', (req, res) => {
+        Promise.resolve().then(() => verifyNodeSignature(req)).then(() => {
+            Promise.resolve()
+                .then(() => usage.flush().catch(() => { /* đã log */ }))
+                .then(() => Promise.all([
+                    usage.snapshot(nodeId()).catch(() => null),
+                    mediaRepo.summary().catch(() => null)
+                ])).then(([use, media]) => json(res, 200, {
+                ok: true, id: nodeId(), name: nodeName(), url: nodeUrl(req),
+                v: pkg.version, time: new Date().toISOString(),
+                uptime: Math.round((Date.now() - startedAt) / 1000),
+                dataNode: isDataNode(), usage: use, media,
+                features: {
+                    mediaPool: mediaRepo.enabled(),
+                    fallbackLocal: String(process.env.CONNECT_FALLBACK_LOCAL || 'on').toLowerCase() !== 'off'
+                }
+            })).catch((e) => json(res, 500, { ok: false, error: e.message }));
+        }).catch((e) => json(res, e.status || 401, { ok: false, error: e.message }));
+    });
+
+    // ---- nhận file từ trình duyệt (phiếu tải lên thay cookie)
+    async function run(fn, req, res) {
+        try {
+            const out = await fn();
+            json(res, 200, { ok: true, ...(out || {}) });
+        } catch (e) {
+            if (!e.status || e.status >= 500) console.error('[connect/vercel] media:', e);
+            json(res, e.status || (e.code === 'SHA_CONFLICT' ? 409 : 500), { error: e.message, code: e.code || undefined });
+        }
+    }
+
+    router.post('/api/node/media/init', (req, res) => {
+        nodeUploadAuth(req, res, () => run(async () => {
+            const media = require('../../services/code/mediaService');
+            const uid = req.mediaUid;
+            const init = await media.init(uid, req.body || {});
+            // Phiếu mới gắn đúng uploadId/tên/thư mục đã chuẩn hoá (resume có thể đổi uploadId).
+            const token = uploadToken.sign({
+                uid,
+                uploadId: init.uploadId,
+                name: init.name,
+                dir: (req.body && req.body.dir) || ''
+            });
+            return { ...init, token, node: { id: nodeId(), name: nodeName(), url: nodeUrl(req) } };
+        }, req, res));
+    });
+    router.put('/api/node/media/part', raw, nodeUploadAuth, (req, res) => run(async () => {
+        const media = require('../../services/code/mediaService');
+        return media.putPart(req.mediaUid, req.query, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    }, req, res));
+    router.post('/api/node/media/finish', nodeUploadAuth, (req, res) => run(async () => {
+        const media = require('../../services/code/mediaService');
+        return media.finish(req.mediaUid, req.body || {});
+    }, req, res));
+    router.put('/api/node/media/seg', raw, nodeUploadAuth, (req, res) => run(async () => {
+        const media = require('../../services/code/mediaService');
+        return media.putSeg(req.mediaUid, req.query, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    }, req, res));
+    router.post('/api/node/media/commit', nodeUploadAuth, (req, res) => run(async () => {
+        const media = require('../../services/code/mediaService');
+        return media.commit(req.mediaUid, req.body || {});
+    }, req, res));
+    // xoá media / bật-tắt công khai: chỉ web chính gọi (phiếu tải lên không đủ quyền)
+    router.post('/api/node/media/visibility', nodeUploadAuth, (req, res) => run(async () => {
+        const media = require('../../services/code/mediaService');
+        return media.setPublic(req.mediaUid, req.body || {});
+    }, req, res));
+    router.post('/api/node/media/delete', nodeUploadAuth, (req, res) => run(async () => {
+        const media = require('../../services/code/mediaService');
+        return media.deleteMedia(req.mediaUid, req.body || {});
+    }, req, res));
+
+    // ---- trang quản trị của web dữ liệu
+    router.get('/connect', requireDefaultAdmin, async (req, res, next) => {
+        try {
+            let setup = req.session && req.session.nodeSetup ? req.session.nodeSetup : null;
+            let node = null, error = null;
+            try {
+                const doc = await registry.load();
+                node = doc.nodes.find((n) => n && (n.id === nodeId() || n.url === nodeUrl(req))) || null;
+                if (!node || !node.keyEnc) {
+                    const r = await ensureRegistered({ req });
+                    node = r.node;
+                    setup = req.session && req.session.nodeSetup ? req.session.nodeSetup : setup;
+                }
+            } catch (e) { error = e.message; }
+            // Khoá gốc chỉ hiện MỘT LẦN ngay sau khi tạo/đổi — sau đó xoá khỏi session.
+            const setupKey = setup && setup.key ? String(setup.key) : null;
+            if (setupKey && req.session) {
+                req.session.nodeSetup = Object.assign({}, setup, { key: null, shown: true, shownAt: new Date().toISOString() });
+            }
+            await usage.flush().catch(() => { /* đã log */ });
+            const use = await usage.snapshot(nodeId()).catch(() => null);
+            const media = await mediaRepo.summary().catch(() => null);
+            const template = envTemplate({ id: nodeId(), url: nodeUrl(req), name: nodeName(), dataNode: true });
+            res.render('connect/node', {
+                title: 'Web dữ liệu — ' + nodeName(), user: req.user,
+                nodeId: nodeId(), nodeUrl: nodeUrl(req), nodeName: nodeName(), node,
+                setup, setupKey, error, use, media, template, registryPath: registry.PATH(), usagePath: usage.FILE(), fmt: usage.formatBytes
+            });
+        } catch (e) { next(e); }
+    });
+
+    router.post('/connect/register', requireDefaultAdmin, async (req, res, next) => {
+        try {
+            await ensureRegistered({ req });
+            res.redirect('/connect');
+        } catch (e) { next(e); }
+    });
+
+    router.post('/connect/rotate-key', requireDefaultAdmin, async (req, res, next) => {
+        try {
+            _keyCache = null;
+            const r = await ensureRegistered({ req, force: true });
+            if (req.session) req.session.nodeSetup = { id: nodeId(), url: nodeUrl(req), name: nodeName(), created: true, at: new Date().toISOString(), key: r.key };
+            res.redirect('/connect');
+        } catch (e) { next(e); }
+    });
+
+    return router;
+}
+
+/** Gắn router vào app Express (server.js gọi khi DATA_NODE=on). */
+function mount(app) {
+    app.use(createRouter());
+}
+
+module.exports = {
+    createRouter, mount, isDataNode, onAdminLogin, ensureRegistered,
+    nodeId, nodeName, nodeUrl, verifyNodeSignature
+};

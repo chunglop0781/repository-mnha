@@ -4,6 +4,7 @@ const router = express.Router();
 const ctrl = require('../controllers/code.controller');
 const html = require('../controllers/html.controller');
 const { attachUser, requireAuth } = require('../middleware/auth');
+const { requireMediaUploader } = require('../middleware/uploadAuth');
 
 router.use(attachUser);
 router.use(requireAuth);          // chỉ cần đăng nhập
@@ -23,11 +24,13 @@ router.get('/html/online/folder', html.onlineFolder);
 router.get('/html/online/player', html.onlinePlayer);
 router.post('/html/file', html.createFile);
 router.post('/html/preview-token', html.previewToken);
-router.post('/html/upload/init', html.uploadInit);
-router.put('/html/upload/part', raw, html.uploadPart);
-router.post('/html/upload/finish', html.uploadFinish);
-router.put('/html/upload/seg', raw, html.uploadSeg);
-router.post('/html/upload/commit', html.uploadCommit);
+router.post('/html/upload/init', requireMediaUploader, html.uploadInit);
+router.post('/html/upload/local/init', requireMediaUploader, html.uploadLocalInit);
+router.post('/html/upload/node-fail', requireMediaUploader, html.uploadNodeFail);
+router.put('/html/upload/part', requireMediaUploader, raw, html.uploadPart);
+router.post('/html/upload/finish', requireMediaUploader, html.uploadFinish);
+router.put('/html/upload/seg', requireMediaUploader, raw, html.uploadSeg);
+router.post('/html/upload/commit', requireMediaUploader, html.uploadCommit);
 router.put('/html/save/part', raw, html.savePart);
 router.post('/html/save/finish', html.saveFinish);
 router.get('/html/raw', html.raw);

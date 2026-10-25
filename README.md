@@ -29,3 +29,22 @@ Xem `CODE.md` cho chi tiết emu8086/C++, lưu GitHub và lưu ý triển khai.
 
 ## HTML + CSS (`/code/html`)
 Viết html/css/js, **xem trang ngay** (tab Code ⇄ View), tải **ảnh / âm thanh / video** lên (mã hoá; file > 23MB tự cắt m3u8 ngay trong trình duyệt — video H.264, H.265/HEVC, AV1, VP9 — mã hoá DRM AES-128), nhúng vào html bằng tên gốc. Trang `/code/html/online` xem code + trang html từ GitHub/GitLab (kèm css/ảnh/media cùng thư mục) và **xem thư mục**. Trình phát ảnh/âm thanh/video cho cả thư mục của tôi lẫn trên mạng, mọi media đều có nút Tải. Media được **trình duyệt tự giải mã** (tải thẳng từ GitHub raw, máy chủ chỉ trả khoá nhỏ từng file sau khi kiểm quyền) để không tốn Fast Origin Transfer của Vercel — repo cần công khai, hoặc đặt `MEDIA_DIRECT=off` để quay về giải mã ở máy chủ. Chi tiết, giới hạn và bảo mật: xem `CODE.md` (mục HTML + CSS → "Trình duyệt TỰ giải mã"). Chạy toàn bộ test: `npm test` (cần ffmpeg để chạy test cắt/phát m3u8; thiếu thì bỏ qua phần đó).
+
+## Nhiều web dữ liệu + tải lên dự phòng (`/connect`)
+Web chính có thể dùng **nhiều Vercel deployment** làm "web dữ liệu" để nhận ảnh / âm thanh / video.
+- Mỗi web dữ liệu chạy **cùng codebase**, chỉ khác `.env`: `DATA_NODE=on`, `NODE_ID`, `NODE_URL`, `NODE_NAME`; các biến bí mật (`MONGODB_URI`, `SESSION_*`, `CONNECT_*`, `GITHUB_*`) phải **giống hệt** web chính.
+- Web dữ liệu **chỉ cho admin mặc định** (`role=admin`, `userKey=null`) đăng nhập; admin tổ chức / student / client bị từ chối.
+- Lần đầu admin mặc định đăng nhập ở web dữ liệu: web tự tạo **khoá kết nối**, mã hoá 2 chiều rồi ghi vào `v-s/index.json` của repo GitHub chính. Khoá gốc chỉ hiện **một lần** ở `/connect` của web dữ liệu.
+- Trang `/connect` của web chính (chỉ admin mặc định): thêm / đổi tên / bật-tắt / xoá web, kiểm tra **lần lượt cũ → mới**, xem **Fast Data Transfer** và **Fast Origin Transfer** (số đo thực tế của app + số chính thức của Vercel nhập tay), và `.env` mẫu giống hệt cho từng web.
+- Khi tải media: web chính chọn web đầu tiên hoạt động và ký **phiếu tải lên** (HMAC, 2 giờ) để trình duyệt gửi **thẳng** lên web dữ liệu; web đang dùng lỗi → tự chuyển web kế tiếp (web lỗi tạm nghỉ 90 giây). Không có web nào → báo lỗi, hoặc tải lên máy chủ chính nếu `CONNECT_FALLBACK_LOCAL=on`.
+- Repo media tự xoay vòng: khi repo đang dùng đạt ~500MB (`MEDIA_REPO_LIMIT_BYTES`), hệ thống tự tạo `GITHUB_MEDIA_REPO_PREFIX-N` bằng `GITHUB_MEDIA_TOKEN` và ghi tiếp; `mnha-media.json` vẫn ở repo chính, đọc gộp mọi repo.
+- Tài khoản **chưa được duyệt** (`pending`/`rejected`/`disabled` hoặc client chưa approved) bị chặn tải ảnh/âm thanh/video với thông báo: *"Tài khoản bị … vì vậy hãy nhắn quản trị viên để mở tính năng này."* Sửa code/file vẫn dùng bình thường.
+- Cấu hình mẫu: xem `.env.example`; chi tiết luồng & bảo mật: `CODE.md` mục "Web kết nối".
+
+## Tài khoản GitHub riêng cho media + bảo mật mã hoá (cập nhật)
+- **GitHub mới chỉ để chứa media**: đặt `GITHUB_MEDIA_TOKEN` (token của tài khoản mới, quyền tạo repo) và `GITHUB_MEDIA_OWNER` (tên tài khoản đó). Khi `GITHUB_MEDIA_OWNER` khác `GITHUB_OWNER`, pool tự bật: repo đầu tiên `<prefix>-1` được tạo ở tài khoản mới (không ghi media vào repo chính), đầy ~500MB thì tạo `-2`, `-3`… `mnha-media.json` và `v-s/*` vẫn ở repo chính.
+- **Khoá kết nối thật sự có tác dụng**: web chính ký yêu cầu tới từng web dữ liệu bằng khoá RIÊNG của web đó (`hmacWithKey`), nên chỉ biết `CONNECT_ENC_KEY` dùng chung vẫn không giả được chữ ký.
+- **Mã hoá v2** (`v2.<iv>.<tag>.<ct>`): AES-256-GCM, AAD = `connect|<id web>`, kiểu dữ liệu nằm trong phần mã hoá; vẫn đọc được bản `v1` cũ. `CONNECT_ENC_KEY` quá yếu bị từ chối.
+- Đặt `MAIN_URL=https://repository-mnha.vercel.app` ở web dữ liệu để chỉ web chính được gọi `/api/node/*` từ trình duyệt (CORS).
+- Test: `node test/connect-crypto.js`.
+- **Tên repo media theo thời gian**: đặt `GITHUB_MEDIA_REPO_PREFIX=mnha-media-{ts}` → repo tạo ra dạng `mnha-media-20261025-091530`. Không có `{ts}` thì vẫn đánh số `-1`, `-2`.

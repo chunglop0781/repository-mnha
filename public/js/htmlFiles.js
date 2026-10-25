@@ -44,6 +44,7 @@
 
     // ---- tải lên
     var drop = document.getElementById('upDrop'), input = document.getElementById('upInput'), list = document.getElementById('upList'), enc = document.getElementById('upEnc');
+    if (!drop || !input || !list) return;          // tài khoản chưa được duyệt: chỉ hiện thông báo, không có khung tải lên
     var queue = [], running = false, okCount = 0;
     function check(f) {
         var k = kindOf(f.name), e = extOf(f.name);
@@ -74,12 +75,14 @@
             if (!it) { running = false; if (okCount) setTimeout(function () { location.reload(); }, 900); return; }
             var bar = it.li.querySelector('.bar>i'), msg = it.li.querySelector('.msg');
             MnhaUpload.upload(it.file, {
-                dir: dir, encrypt: enc.checked,
+                dir: dir, encrypt: enc && enc.checked,
                 confirmOverwrite: function (n) { return confirm('"' + n + '" đã có. Ghi đè?'); },
+                onNode: function (n) { if (n) msg.textContent = 'Web tải lên: ' + (n.name || n.id); },
+                onNotice: function (t) { msg.className = 'msg err'; msg.textContent = t; },
                 onProgress: function (t, fr) { msg.textContent = t; bar.style.width = Math.round(fr * 100) + '%'; }
             }).then(function (r) {
                 okCount++; it.li.classList.add('ok'); bar.style.width = '100%'; msg.className = 'msg ok';
-                msg.textContent = '✓ Xong' + (r.plan === 'hls' ? ' — đã cắt m3u8, tên gốc khai báo trong mnha-media.json' : ' — đã mã hoá') + '.';
+                msg.textContent = '✓ Xong' + (r.node ? ' qua web ' + r.node : '') + (r.plan === 'hls' ? ' — đã cắt m3u8, tên gốc khai báo trong mnha-media.json' : ' — đã mã hoá') + '.';
             }).catch(function (e) {
                 it.li.classList.add('err'); msg.className = 'msg err'; msg.textContent = (e.cancelled ? '' : '✗ ') + e.message + (e.cancelled ? '' : ' — chọn lại file để thử/làm tiếp.');
             }).then(next);
