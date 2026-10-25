@@ -48,7 +48,7 @@
     var queue = [], running = false, okCount = 0;
     function check(f) {
         var k = kindOf(f.name), e = extOf(f.name);
-        if (!k) return 'Đuôi .' + (e || '?') + ' không hỗ trợ (ảnh, âm thanh, video).';
+        if (!k) return 'Đuôi .' + (e || '?') + ' không hỗ trợ — chỉ được tải ảnh.';
         if (f.size > L.maxFile) return 'Quá lớn (tối đa ' + mb(L.maxFile) + 'MB).';
         if (f.size > L.directMax) {
             if (k === 'image') return 'Ảnh tối đa ' + mb(L.directMax) + 'MB.';

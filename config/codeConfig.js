@@ -6,6 +6,8 @@ const ASSET_EXTS = {
     audio: ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus'],
     video: ['mp4', 'm4v', 'mov', 'webm', 'ogv', 'mkv']
 };
+// Đuôi được phép TẢI LÊN: chỉ ảnh. (ASSET_EXTS vẫn giữ audio/video để xem/xoá các file đã tải trước đây.)
+const UPLOAD_EXTS = { image: ASSET_EXTS.image, audio: [], video: [] };
 const LANGS = {
     emu8086: {
         key: 'emu8086', name: 'Emu8086 (Assembly 8086)', icon: 'cpu',
@@ -21,12 +23,12 @@ const LANGS = {
     },
     html: {
         key: 'html', name: 'HTML + CSS', icon: 'layout-template', kind: 'web',
-        description: 'Viết HTML/CSS/JS và xem trang ngay (Code ⇄ View); tải ảnh, âm thanh, video lên (có mã hoá) để nhúng vào trang. Xem được cả trang HTML trên GitHub/GitLab kèm CSS, JS, ảnh cùng thư mục.',
+        description: 'Viết HTML/CSS/JS và xem trang ngay (Code ⇄ View); tải ảnh lên (có mã hoá) để nhúng vào trang. Xem được cả trang HTML trên GitHub/GitLab kèm CSS, JS, ảnh cùng thư mục.',
         runExt: 'html', runExts: ['html', 'htm'],
         maxFileBytes: 50 * 1024 * 1024,     // html chỉ để soạn/xem (không chạy trên runner) → gần như không giới hạn: lưu/đọc theo từng phần ≤ 3MB (Vercel chặn request/response > 4.5MB); trần 50MB vì GitHub 100MB/file + Vercel 60s
         exts: ['html', 'htm', 'css', 'js', 'json', 'svg', 'txt'], editorMode: 'html',
         assetExts: ASSET_EXTS,
-        template: ['<!DOCTYPE html>', '<html lang="vi">', '<head>', '  <meta charset="UTF-8">', '  <meta name="viewport" content="width=device-width, initial-scale=1">', '  <title>Trang của tôi</title>', '  <!-- CSS riêng: tạo file style.css cùng thư mục rồi bỏ comment dòng dưới -->', '  <!-- <link rel="stylesheet" href="style.css"> -->', '  <style>', '    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }', '    h1 { color: #4f46e5; }', '  </style>', '</head>', '<body>', '  <h1>Xin chào, MNHA!</h1>', '  <p>Sửa code ở tab Code, bấm View để xem trang.</p>', '  <!-- Ảnh/âm thanh/video đã tải lên (cùng thư mục) nhúng như bình thường: -->', '  <!-- <img src="anh.png" alt="" width="300"> -->', '  <!-- <audio controls src="nhac.mp3"></audio> -->', '  <!-- <video controls src="phim.mp4" width="480"></video> -->', '</body>', '</html>', ''].join('\n')
+        template: ['<!DOCTYPE html>', '<html lang="vi">', '<head>', '  <meta charset="UTF-8">', '  <meta name="viewport" content="width=device-width, initial-scale=1">', '  <title>Trang của tôi</title>', '  <!-- CSS riêng: tạo file style.css cùng thư mục rồi bỏ comment dòng dưới -->', '  <!-- <link rel="stylesheet" href="style.css"> -->', '  <style>', '    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }', '    h1 { color: #4f46e5; }', '  </style>', '</head>', '<body>', '  <h1>Xin chào, MNHA!</h1>', '  <p>Sửa code ở tab Code, bấm View để xem trang.</p>', '  <!-- Ảnh đã tải lên (cùng thư mục) nhúng như bình thường: -->', '  <!-- <img src="anh.png" alt="" width="300"> -->', '</body>', '</html>', ''].join('\n')
     }
 };
 
@@ -79,4 +81,4 @@ const mediaKind = (name) => {
     for (const k of Object.keys(ASSET_EXTS)) if (ASSET_EXTS[k].includes(e)) return k;
     return null;
 };
-module.exports = { EMPTY_TXT_PLACEHOLDER, LANGS, LIMITS, NAME_RE, FILE_STEM_RE, CPP_RUN_MODE, CPP_RUNNER_URL, CPP_RUNNER_KEY, ASSET_EXTS, MEDIA, mediaKind };
+module.exports = { EMPTY_TXT_PLACEHOLDER, LANGS, LIMITS, NAME_RE, FILE_STEM_RE, CPP_RUN_MODE, CPP_RUNNER_URL, CPP_RUNNER_KEY, ASSET_EXTS, UPLOAD_EXTS, MEDIA, mediaKind };

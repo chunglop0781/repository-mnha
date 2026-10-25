@@ -25,7 +25,7 @@ const gh = mediaRepo.facade();
 const store = require('./codeStore');
 const mc = require('./mediaCrypto');
 const hls = require('./hlsPlaylist');
-const { LANGS, MEDIA, mediaKind } = require('../../config/codeConfig');
+const { LANGS, MEDIA, UPLOAD_EXTS, mediaKind } = require('../../config/codeConfig');
 
 const bad = (m, status = 400) => Object.assign(new Error(m), { status });
 const cfg = LANGS.html;
@@ -41,11 +41,11 @@ const isMediaStorage = (st) => !!(st && (st.provider === 'cloudflare' || st.prov
 const provOf = (st) => (isMediaStorage(st) ? st.provider : 'github');
 const isAudioVideo = (kind) => kind === 'audio' || kind === 'video';
 
-/** Tên file tải lên → tên hợp lệ (chữ/số/-/_ + đuôi ảnh/âm thanh/video). Ký tự lạ đổi thành "_". */
+/** Tên file tải lên → tên hợp lệ (chữ/số/-/_ + đuôi ảnh). Ký tự lạ đổi thành "_". */
 function cleanAssetName(name) {
     const base = String(name || '').split(/[\\/]/).pop().trim();
     const ext = extOf(base);
-    if (!mediaKind('x.' + ext)) throw bad('Đuôi file không hỗ trợ (ảnh: ' + cfg.assetExts.image.join(', ') + ' · âm thanh: ' + cfg.assetExts.audio.join(', ') + ' · video: ' + cfg.assetExts.video.join(', ') + ').');
+    if (!UPLOAD_EXTS.image.includes(ext)) throw bad('Chỉ được tải ảnh lên (' + UPLOAD_EXTS.image.join(', ') + '). Âm thanh và video không được hỗ trợ.');
     let stem = stemOf(base).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^A-Za-z0-9_\-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);
     if (!stem) stem = 'file';
     if ((stem + '.' + ext).toLowerCase() === MEDIA.MANIFEST) stem = 'file_' + stem;

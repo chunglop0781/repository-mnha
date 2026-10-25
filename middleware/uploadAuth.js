@@ -37,14 +37,9 @@ function requireDefaultAdmin(req, res, next) {
     });
 }
 
-/** Tài khoản được tải media? (admin / student / client đã duyệt) */
+/** Tài khoản được tải ảnh? (mọi tài khoản đã đăng nhập) */
 function canUploadMedia(user) {
-    if (!user) return false;
-    if (user.status === 'rejected' || user.status === 'disabled') return false;
-    if (isDefaultAdmin(user)) return true;
-    if (user.role === 'admin') return true;             // admin tổ chức: vẫn cho tải
-    if (user.role === 'student') return true;           // đã được duyệt
-    return user.role === 'client' && user.status === 'approved';
+    return !!user;      // mở quyền: mọi tài khoản đã đăng nhập (kể cả chưa duyệt) đều được tải ảnh lên
 }
 
 function requireMediaUploader(req, res, next) {

@@ -23,7 +23,7 @@ const keys = require('../services/code/keyService');
 const nodes = require('../services/connect/nodes');
 const uploadToken = require('../services/connect/uploadToken');
 const { canUploadMedia, uploadDenyMessage } = require('../middleware/uploadAuth');
-const { LANGS, MEDIA, ASSET_EXTS, mediaKind } = require('../config/codeConfig');
+const { LANGS, MEDIA, UPLOAD_EXTS, mediaKind } = require('../config/codeConfig');
 
 const LANG = LANGS.html;
 const uidOf = (req) => String(req.user._id);
@@ -81,7 +81,7 @@ exports.files = wrap(async (req, res) => {
     const payload = {
         dir: data.dir,
         limits: { directMax: MEDIA.DIRECT_MAX, maxFile: MEDIA.MAX_FILE_BYTES, partBytes: MEDIA.PART_BYTES, hlsAudio: MEDIA.HLS_AUDIO_EXTS, hlsVideo: MEDIA.HLS_VIDEO_EXTS },
-        exts: ASSET_EXTS, textExts: LANG.exts, canUpload
+        exts: UPLOAD_EXTS, textExts: LANG.exts, canUpload
     };
     res.render('code/html-files', {
         title: LANG.name, user: req.user, lang: LANG, dir: data.dir,
