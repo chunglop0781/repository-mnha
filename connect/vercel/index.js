@@ -260,7 +260,7 @@ function createRouter() {
             }
             await usage.flush().catch(() => { /* đã log */ });
             const use = await usage.snapshot(nodeId()).catch(() => null);
-            const hist = await usage.history(nodeId(), { days: 14 }).catch(() => null);
+            const hist = await usage.history(nodeId(), { week: usage.clampWeek(req.query && req.query.w) }).catch(() => null);
             const media = await mediaRepo.summary().catch(() => null);
             const template = envTemplate({ id: nodeId(), url: nodeUrl(req), name: nodeName(), dataNode: true });
             res.render('connect/node', {

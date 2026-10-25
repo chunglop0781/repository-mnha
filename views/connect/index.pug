@@ -1,6 +1,7 @@
 extends ../layout
 
 block content
+    include _week
     - var okCls = 'border-emerald-300 bg-emerald-50 text-emerald-900'
     - var errCls = 'border-red-300 bg-red-50 text-red-900'
     - var infoCls = 'border-sky-300 bg-sky-50 text-sky-900'
@@ -36,35 +37,13 @@ block content
                 div(class="sm:col-span-2")
                     button(type="submit", class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700") Thêm / cập nhật web
 
-        //- bảng lịch sử từng ngày (dùng cho từng web)
-        mixin histTable(hist)
-            - var dn = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
-            div(class="overflow-x-auto")
-                table(class="min-w-full text-xs")
-                    thead
-                        tr(class="text-left text-gray-500 border-b border-gray-200")
-                            th(class="py-1.5 pr-3 font-medium") Ngày
-                            th(class="py-1.5 pr-3 font-medium text-right") Tải lên (vào)
-                            th(class="py-1.5 pr-3 font-medium text-right") Tải xuống (ra)
-                            th(class="py-1.5 pr-3 font-medium text-right") Ghi GitHub
-                            th(class="py-1.5 pr-3 font-medium text-right") Đọc GitHub
-                            th(class="py-1.5 font-medium text-right") Request
-                    tbody
-                        each r in hist.days
-                            tr(class="border-b border-gray-100" + (r.date >= hist.week.from ? ' bg-indigo-50/40' : ''))
-                                td(class="py-1 pr-3 font-mono text-gray-800") #{r.date} 
-                                    span(class="text-gray-400") #{dn[r.dow]}
-                                td(class="py-1 pr-3 text-right") #{fmt(r.in)}
-                                td(class="py-1 pr-3 text-right") #{fmt(r.out)}
-                                td(class="py-1 pr-3 text-right") #{fmt(r.originOut)}
-                                td(class="py-1 pr-3 text-right") #{fmt(r.originIn)}
-                                td(class="py-1 text-right") #{r.req}
-
-        //- tổng tuần này theo từng web
-        if nodes.length && weekRange
-            section(class="mt-8 bg-white rounded-2xl border border-gray-200 p-5")
-                h2(class="text-lg font-semibold text-gray-900") Lưu lượng tuần này theo từng web
-                p(class="mt-1 text-xs text-gray-500") Thứ Hai #{weekRange.from} → #{weekRange.to} (ngày theo UTC: 0h UTC = 7h sáng giờ Việt Nam). "Tải lên" = dữ liệu trình duyệt gửi vào web; "Ghi GitHub" = web ghi lên GitHub.
+        //- tổng TUẦN đang xem theo từng web (đổi tuần bằng ?w=0, -1, -2 …)
+        if nodes.length && weekInfo
+            section(id="tuan", class="mt-8 bg-white rounded-2xl border border-gray-200 p-5")
+                h2(class="text-lg font-semibold text-gray-900") Lưu lượng theo tuần của từng web
+                p(class="mt-1 text-xs text-gray-500") Mỗi tuần đủ 7 ngày (thứ Hai → Chủ nhật), ngày theo UTC: 0h UTC = 7h sáng giờ Việt Nam. "Tải lên" = dữ liệu trình duyệt gửi vào web; "Ghi GitHub" = web ghi lên GitHub. Mỗi tuần lưu một file riêng <code>#{weekInfo.file}</code> (không xoá). Mở thẻ từng web bên dưới để xem từng ngày.
+                div(class="mt-3")
+                    +weekNav(weekInfo)
                 div(class="mt-3 overflow-x-auto")
                     table(class="min-w-full text-xs")
                         thead
@@ -75,11 +54,11 @@ block content
                                 th(class="py-1.5 pr-3 font-medium text-right") Ghi GitHub
                                 th(class="py-1.5 pr-3 font-medium text-right") Đọc GitHub
                                 th(class="py-1.5 pr-3 font-medium text-right") Request
-                                th(class="py-1.5 font-medium text-right") Tuần trước
+                                th(class="py-1.5 font-medium text-right") Tuần liền trước (vào+ra)
                         tbody
                             each n in nodes
-                                - var w = n.hist ? n.hist.week : { in: 0, out: 0, originIn: 0, originOut: 0, req: 0 }
-                                - var lw = n.hist ? n.hist.lastWeek : { in: 0, out: 0, originIn: 0, originOut: 0, req: 0 }
+                                - var w = n.hist ? n.hist.total : { in: 0, out: 0, originIn: 0, originOut: 0, req: 0 }
+                                - var pw = n.hist ? n.hist.prevTotal : { in: 0, out: 0, originIn: 0, originOut: 0, req: 0 }
                                 tr(class="border-b border-gray-100")
                                     td(class="py-1.5 pr-3 font-medium text-gray-900") #{n.name}
                                     td(class="py-1.5 pr-3 text-right") #{fmt(w.in)}
@@ -87,7 +66,7 @@ block content
                                     td(class="py-1.5 pr-3 text-right") #{fmt(w.originOut)}
                                     td(class="py-1.5 pr-3 text-right") #{fmt(w.originIn)}
                                     td(class="py-1.5 pr-3 text-right") #{w.req}
-                                    td(class="py-1.5 text-right text-gray-500") #{fmt(lw.in + lw.out)}
+                                    td(class="py-1.5 text-right text-gray-500") #{fmt(pw.in + pw.out)}
                             tr(class="font-semibold bg-gray-50")
                                 td(class="py-1.5 pr-3") Tất cả
                                 td(class="py-1.5 pr-3 text-right") #{fmt(weekTotal.in)}
@@ -153,9 +132,9 @@ block content
                                 div(class="mt-1 text-[11px] text-gray-400") cập nhật: #{u.updatedAt}
                     if n.hist
                         details(class="mt-3")
-                            summary(class="cursor-pointer text-xs text-indigo-700 hover:underline") Lịch sử từng ngày (14 ngày) · tuần này: #{fmt(n.hist.week.in)} tải lên · #{fmt(n.hist.week.out)} tải xuống · #{n.hist.week.req} request
+                            summary(class="cursor-pointer text-xs text-indigo-700 hover:underline") Từng ngày trong tuần #{n.hist.from} → #{n.hist.to} · #{fmt(n.hist.total.in)} tải lên · #{fmt(n.hist.total.out)} tải xuống · #{n.hist.total.req} request
                             div(class="mt-2")
-                                +histTable(n.hist)
+                                +weekTable(n.hist)
                     p(class="mt-2 text-[11px] text-gray-500") Đây là số đo thực tế của ứng dụng (xấp xỉ). Số chính thức của Vercel nhập ở ô bên dưới.
 
                     form(method="post", action="/connect/node/" + n.id + "/vercel", class="mt-3 grid gap-2 sm:grid-cols-4")

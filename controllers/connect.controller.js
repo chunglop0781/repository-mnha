@@ -43,7 +43,8 @@ exports.index = wrap(async (req, res) => {
     await usage.flush().catch(() => { /* đã log */ });
     const list = await registry.list();
     const useMap = await usage.snapshotAll(list.map((n) => n.id)).catch(() => ({}));
-    const histMap = await usage.historyAll(list.map((n) => n.id), { days: 14 }).catch(() => ({}));
+    const weekOffset = usage.clampWeek(req.query && req.query.w);
+    const histMap = await usage.historyAll(list.map((n) => n.id), { week: weekOffset }).catch(() => ({}));
     const media = await mediaRepo.summary().catch((e) => ({
         enabled: mediaRepo.enabled(), active: null, repos: [], limit: mediaRepo.LIMIT(), error: e.message
     }));
@@ -53,15 +54,15 @@ exports.index = wrap(async (req, res) => {
         hist: histMap[n.id] || null,
         env: nodeEnv(n)
     }));
-    // Tổng tuần này của tất cả web (mỗi web một dòng + dòng cộng tất cả).
+    // Tổng của TUẦN đang xem, cộng tất cả web.
     const weekTotal = viewNodes.reduce((a, n) => {
-        const w = n.hist ? n.hist.week : null;
+        const w = n.hist ? n.hist.total : null;
         if (w) for (const k of ['in', 'out', 'originIn', 'originOut', 'req']) a[k] += Number(w[k]) || 0;
         return a;
     }, { in: 0, out: 0, originIn: 0, originOut: 0, req: 0 });
-    const weekRange = viewNodes.length && viewNodes[0].hist ? viewNodes[0].hist.week : null;
+    const weekInfo = viewNodes.length && viewNodes[0].hist ? viewNodes[0].hist : (await usage.history('__none__', { week: weekOffset }).catch(() => null));
     res.render('connect/index', {
-        title: 'Web kết nối', user: req.user, nodes: viewNodes, media, weekTotal, weekRange,
+        title: 'Web kết nối', user: req.user, nodes: viewNodes, media, weekTotal, weekInfo,
         mainEnv: mainEnv(), diffKeys: DIFFERENT_KEYS,
         registryPath: registry.PATH(), usagePath: usage.FILE(),
         fmt: usage.formatBytes, gb: usage.bytesToGb,
