@@ -57,3 +57,39 @@ mixin weekTable(info)
                     td(class="py-1.5 pr-3 text-right") #{fmt(info.prevTotal.originOut)}
                     td(class="py-1.5 pr-3 text-right") #{fmt(info.prevTotal.originIn)}
                     td(class="py-1.5 text-right") #{info.prevTotal.req}
+
+//- Cloudflare R2 theo ngày trong tuần đang xem (cộng mọi web). info = usage.cloudSummary()
+mixin cfWeekTable(info)
+    details
+        summary(class="cursor-pointer text-xs text-indigo-700 hover:underline") Từng ngày trong tuần #{info.from} → #{info.to} · #{fmt(info.week.cfUp)} đã ghi lên R2
+        div(class="mt-2 overflow-x-auto")
+            table(class="min-w-full text-xs")
+                thead
+                    tr(class="text-left text-gray-500 border-b border-gray-200")
+                        th(class="py-1.5 pr-3 font-medium") Ngày
+                        th(class="py-1.5 pr-3 font-medium text-right") Ghi lên R2
+                        th(class="py-1.5 pr-3 font-medium text-right") Đọc từ R2 (máy chủ)
+                        th(class="py-1.5 pr-3 font-medium text-right") Request R2
+                        th(class="py-1.5 font-medium text-right") Ghi GitHub dự phòng
+                tbody
+                    each r in info.days
+                        tr(class="border-b border-gray-100" + (r.today ? ' bg-indigo-50' : '') + (r.future ? ' text-gray-300' : ''))
+                            td(class="py-1.5 pr-3 whitespace-nowrap") #{r.date} #{r.name}
+                            if r.future
+                                td(class="py-1.5 text-right", colspan="4") chưa tới
+                            else
+                                td(class="py-1.5 pr-3 text-right") #{fmt(r.cfUp)}
+                                td(class="py-1.5 pr-3 text-right") #{fmt(r.cfDown)}
+                                td(class="py-1.5 pr-3 text-right") #{r.cfReq}
+                                td(class="py-1.5 text-right") #{fmt(r.fbUp)}
+                    tr(class="font-semibold bg-gray-50")
+                        td(class="py-1.5 pr-3") Tổng tuần
+                        td(class="py-1.5 pr-3 text-right") #{fmt(info.week.cfUp)}
+                        td(class="py-1.5 pr-3 text-right") #{fmt(info.week.cfDown)}
+                        td(class="py-1.5 pr-3 text-right") #{info.week.cfReq}
+                        td(class="py-1.5 text-right") #{fmt(info.week.fbUp)}
+        if info.perNode.length
+            div(class="mt-2 text-[11px] text-gray-500")
+                | Theo web (tuần này): 
+                each x, i in info.perNode
+                    | #{i ? ' · ' : ''}#{x.id}: #{fmt(x.week.cfUp)}

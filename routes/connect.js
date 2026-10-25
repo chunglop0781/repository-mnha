@@ -16,5 +16,9 @@ router.post('/node/:id/toggle', c.toggle);
 router.post('/node/:id/remove', c.remove);
 router.post('/node/:id/key', c.setKey);
 router.post('/node/:id/vercel', c.vercel);
+router.post('/cloudflare', c.cloudflareSave);
+router.post('/cloudflare/test', c.cloudflareTest);
+router.post('/cloudflare/measure', c.cloudflareMeasure);
+router.post('/cloudflare/clear', c.cloudflareClear);
 
 module.exports = router;

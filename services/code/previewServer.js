@@ -25,9 +25,11 @@ const shim = require('./previewShim');
 const hls = require('./hlsPlaylist');
 const remoteSource = require('./remoteSource');
 const ks = require('./keyService');
+const cloudflare = require('../connect/cloudflare');
 const { MEDIA, ASSET_EXTS, mediaKind } = require('../../config/codeConfig');
 
 const MOUNT = '/preview';
+const isStorage = (st) => !!(st && (st.provider === 'cloudflare' || st.provider === 'github-fallback'));
 const MIME = {
     html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8',
     json: 'application/json; charset=utf-8', txt: 'text/plain; charset=utf-8', svg: 'image/svg+xml', xml: 'application/xml; charset=utf-8', map: 'application/json',
@@ -59,14 +61,47 @@ async function blobCached(gh, sha) {
 }
 function ownSource(uid, gh) {
     const root = `${uid}/codes/html/`;
+    async function githubRead(segs) {
+        if (!segs.every((s) => /^[A-Za-z0-9_.\-() ]{1,100}$/.test(s))) return null;
+        const p = root + segs.join('/');
+        let sha = (await gh.getRepoTree()).files.get(p);
+        if (!sha && Date.now() - lastForce > 2000) { lastForce = Date.now(); sha = (await gh.getRepoTree({ force: true })).files.get(p); }   // file vừa lưu < 15s
+        return sha ? blobCached(gh, sha) : null;
+    }
+    async function manifestAt(dirSegs) {
+        const p = root + [...dirSegs, MEDIA.MANIFEST].join('/');
+        const sha = (await gh.getRepoTree()).files.get(p);
+        if (!sha) return null;
+        const b = await blobCached(gh, sha);
+        try { const j = JSON.parse(b.toString('utf8')); return j && typeof j === 'object' ? j : null; } catch (_) { return null; }
+    }
+    // Media mới của âm thanh/video nằm trên Cloudflare R2 hoặc repo GitHub dự phòng — đọc theo `storage` trong json.
+    async function storageRead(segs) {
+        const hidden = segs.indexOf(MEDIA.HIDDEN_DIR);
+        if (hidden >= 0) {
+            if (segs.length !== hidden + 3) return null;
+            const dirSegs = segs.slice(0, hidden), id = segs[hidden + 1], name = segs[hidden + 2];
+            const m = await manifestAt(dirSegs);
+            const entry = m && m.files && Object.values(m.files).find((x) => x && x.id === id);
+            if (!entry || !isStorage(entry.storage)) return null;
+            let st = entry.storage;
+            const sm = /^seg(\d+)\./.exec(name);
+            if (sm && entry.segStorage && isStorage(entry.segStorage[Number(sm[1])])) st = entry.segStorage[Number(sm[1])];
+            return cloudflare.readObject(st, root + segs.join('/')).catch(() => null);
+        }
+        const dirSegs = segs.slice(0, -1), name = segs[segs.length - 1];
+        if (name === MEDIA.MANIFEST) return null;
+        const m = await manifestAt(dirSegs);
+        const entry = m && m.files && m.files[name];
+        if (!entry || entry.mode !== 'direct' || !isStorage(entry.storage)) return null;
+        return cloudflare.readObject(entry.storage, root + segs.join('/')).catch(() => null);
+    }
     return {
         kind: 'own',
         async read(segs) {
-            if (!segs.every((s) => /^[A-Za-z0-9_.\-() ]{1,100}$/.test(s))) return null;
-            const p = root + segs.join('/');
-            let sha = (await gh.getRepoTree()).files.get(p);
-            if (!sha && Date.now() - lastForce > 2000) { lastForce = Date.now(); sha = (await gh.getRepoTree({ force: true })).files.get(p); }   // file vừa lưu < 15s
-            return sha ? blobCached(gh, sha) : null;
+            const buf = await githubRead(segs);
+            if (buf) return buf;
+            return storageRead(segs);
         }
     };
 }
@@ -286,9 +321,22 @@ async function serve(ctx) {
                 return sendBuffer(req, res, Buffer.from(mtxt), MIME.m3u8, { ...ctx, noRange: true });
             }
             const proxy = new URL(req.url, 'http://x').searchParams.get('proxy') === '1';          // ?proxy=1: đoạn qua máy chủ (Safari phát native: GitHub raw trả text/plain + nosniff nên có thể bị từ chối)
-            const tgt = entry.drm && ctx.direct && !proxy ?ks.resolveTarget(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'x'], ctx.gh) : null;     // đoạn AES-128: tải thẳng GitHub raw
-            const rawSeg = tgt ? (i) => ks.rawUrl(ctx.gh, [...tgt.full.slice(0, -1), hls.segName(i, entry.segExt)], entry.uploadId) : null;
-            const text = hls.build(entry, { seg: (i) => (rawSeg && rawSeg(i)) || dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
+            let text;
+            if (entry.drm && ctx.direct && !proxy && ctx.source.kind === 'own' && isStorage(entry.storage)) {
+                // Đoạn nằm trên R2 / repo dự phòng: mỗi đoạn một địa chỉ (public hoặc presign), lỗi → quay về /preview.
+                const urls = [], root = String((ctx.payload && ctx.payload.uid) || '') + '/codes/html/';
+                for (let i = 0; i < (entry.durs || []).length; i++) {
+                    const st = entry.segStorage && isStorage(entry.segStorage[i]) ? entry.segStorage[i] : entry.storage;
+                    const key = `${root}${[...dirSegs, MEDIA.HIDDEN_DIR, entry.id, hls.segName(i, entry.segExt)].join('/')}`;
+                    const u = await cloudflare.urlFor(st, key, { v: entry.uploadId }).catch(() => null);
+                    urls.push(u || dirUrl + hls.segName(i, entry.segExt));
+                }
+                text = hls.build(entry, { seg: (i) => urls[i] || dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
+            } else {
+                const tgt = entry.drm && ctx.direct && !proxy ? ks.resolveTarget(ctx.payload, [...dirSegs, MEDIA.HIDDEN_DIR, entry.id, 'x'], ctx.gh) : null;     // đoạn AES-128: tải thẳng GitHub raw
+                const rawSeg = tgt ? (i) => ks.rawUrl(ctx.gh, [...tgt.full.slice(0, -1), hls.segName(i, entry.segExt)], entry.uploadId) : null;
+                text = hls.build(entry, { seg: (i) => (rawSeg && rawSeg(i)) || dirUrl + hls.segName(i, entry.segExt), key: dirUrl + 'key.bin', init: dirUrl + 'init.mp4' });
+            }
             return sendBuffer(req, res, Buffer.from(text), MIME.m3u8, { ...ctx, noRange: true });
         }
     }
@@ -327,7 +375,7 @@ function createHandler(opt = {}) {
             const source = payload.k === 'own' ? ownSource(payload.uid, gh) : webSource(payload);
             const base = `${mount}/${tok}/`;
             const download = new URL(req.url, 'http://x').searchParams.get('dl') === '1';
-            const direct = ks.canDirect(payload, gh);            // trình duyệt tự giải mã: file mã hoá tải thẳng từ GitHub raw
+            const direct = await ks.canDirect(payload, gh);            // trình duyệt tự giải mã: file mã hoá tải thẳng từ GitHub raw / Cloudflare
             const libTag = direct ? `<script src="/js/mnhaMedia.js"></script>` : '';
             await serve({
                 req, res, source, segs, base, download, payload, gh, tok, direct,

@@ -70,6 +70,20 @@ Trước đây mọi byte media đi GitHub → hàm Vercel (giải mã bằng No
 - **Giới hạn thật**: người đã đăng nhập và được quyền xem một file vẫn lấy được khoá/bản giải mã của chính file đó bằng DevTools (trình duyệt phải phát được). Thiệt hại chỉ nằm trong file họ được xem. Repo public ⇒ mọi file khác trong repo (code, kết quả chạy, `cookies/index.json` đã mã hoá) cũng công khai; GitHub khuyến nghị repo < 1GB và `raw` có giới hạn tần suất.
 - Test: `node -r ./test/_stubs.js test/html-keys.js` (khoá, kiểm quyền, phiếu xem, playlist, giải mã WebCrypto, ghi đè HTML).
 
+### Cloudflare R2 cho video / âm thanh — thay GitHub media đang khoá
+
+Ảnh vẫn đi GitHub (`mediaRepo.facade()`); **video/âm thanh mới** đi Cloudflare R2. Khi R2 lỗi, đoạn/file + `m3u8` được ghi sang **repo GitHub dự phòng** (tài khoản khác, token riêng). Media cũ không có `storage` vẫn đọc GitHub như trước.
+
+- **Cấu hình** (`services/connect/cloudflare.js`): `v-s/cloudflare.json` (đổi bằng `CLOUDFLARE_INDEX_PATH`), lưu qua `/connect` (admin mặc định). Access Key, Secret và token dự phòng mã hoá AES-256-GCM bằng `services/connect/crypto.js` với AAD `cloudflare|accessKeyId`, `cloudflare|secretAccessKey`, `cloudflare|fallbackToken`; khoá lấy từ `CONNECT_ENC_KEY` (fallback `SESSION_ENC_KEY`). `runtime()` trả `{ storage, fallback, direct, error }`; storage ghi vào manifest **không chứa khoá**.
+- **Chọn kho** (`mediaService.targetFor`): ảnh → `github`; video/âm thanh → `cloudflare` nếu đủ cấu hình, ngược lại `github-fallback`, cuối cùng mới về đường GitHub cũ. `CLOUDFLARE_REQUIRED=on` → 503 thay vì ghi GitHub khi chưa cấu hình.
+- **Direct (≤ 23MB)**: mã hoá `MNHAENC1` (salt trong entry `enc.salt`), ghi 1 object R2 tại đúng đường dẫn gốc; lỗi ghi → file trong repo dự phòng. Đọc/giải mã theo `storage`; `keyService` trả URL trực tiếp qua `cloudflare.urlFor` (public/presign) hoặc để trình duyệt đi qua `/preview`.
+- **HLS (> 23MB)**: đoạn `.ts`/`.m4s` mã hoá AES-128-CBC, `index.m3u8` + tiến độ + khoá bọc trong `mnha-media.json` ở repo chính. Entry có `storage`; khi lẫn kho, `segStorage[i]` ghi kho của từng đoạn. R2 lỗi từng đoạn → đoạn đó sang dự phòng (client nhận `notice`); không đoạn nào lên R2 → chuyển `storage` sang `github-fallback`; R2 lỗi ghi `m3u8` → ghi `m3u8` dự phòng. Đoạn/m3u8 dự phòng được commit theo từng lô nên đứt mạng vẫn làm tiếp được.
+- **Đọc/phát** (`previewServer`): `ownSource` đọc object R2/repo dự phòng theo `storage`/`segStorage`; playlist do máy chủ dựng lại mỗi lần xem, mỗi đoạn trỏ `cloudflare.urlFor` (public, presign 6 giờ, hoặc `null` → `/preview`). `MEDIA_DIRECT=off` buộc mọi thứ qua máy chủ. `key.bin` luôn qua máy chủ sau kiểm quyền.
+- **Xoá/ghi đè**: `purgeEntry` xoá object/prefix trên R2 (`deletePrefix`) hoặc repo dự phòng (`fallbackRemovePrefix`) trước khi ghi bản mới/xoá media.
+- **Biến môi trường**: `CLOUDFLARE_INDEX_PATH` (mặc định `v-s/cloudflare.json`), `CLOUDFLARE_REQUIRED` (`off`; `on` = bắt buộc R2/dự phòng cho video/âm thanh), `GITHUB_FALLBACK_TOKEN` (tuỳ chọn, dự phòng khi token chưa lưu trong json), `MEDIA_DIRECT`, `MEDIA_RAW_BASE`.
+- **Bảo mật**: object trên R2/repo dự phòng là bản mã hoá; manifest/summary không chứa khoá thật. Đổi `MEDIA_ENC_KEY`/`CONNECT_ENC_KEY` = mất khả năng đọc media/khoá đã lưu.
+- Hướng dẫn người dùng + xử lý lỗi: `guide/connect-cloudflare.md`. Test: `node -r ./test/_stubs.js test/cloudflare.js` (ảnh→GitHub, direct/HLS→R2, R2 lỗi→dự phòng, đọc media cũ, purge, không lộ khoá).
+
 ## Trình soạn code — tính năng DÙNG CHUNG cho MỌI ngôn ngữ (`public/js/editorKit.js`)
 Áp dụng cho emu8086, C++, HTML/CSS/JS và mọi dạng code thêm sau này (trang nào có `<textarea>` soạn code đều gọi `EditorKit.attach(textarea, { lang, file, readOnly })`;
 dạng mới chỉ cần thêm 1 nhánh trong `cfgFor()`: dấu chú thích, độ thụt, có tự đóng ngoặc hay không).

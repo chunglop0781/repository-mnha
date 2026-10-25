@@ -50,7 +50,7 @@ const ownToken = (uid) => token.sign({ k: 'own', uid });
 // uid = chủ thư mục đang xem (đoạn đầu đường dẫn trong repo của app), viewer = người đang xem: keyService chỉ mở khoá media trong phạm vi này
 const webPayload = (f, req) => ({ k: 'web', host: f.host, base: f.base, ref: f.ref, uid: (f.pathSegs || f.dirSegs || [])[0], viewer: uidOf(req) });
 const webToken = (f, req) => token.sign(webPayload(f, req));
-const directFlag = (payload) => { try { return keys.canDirect(payload, require('../services/githubService')); } catch (_) { return false; } };
+const directFlag = async (payload) => { try { return await keys.canDirect(payload, require('../services/githubService')); } catch (_) { return false; } };
 const previewUrl = (tok, segs) => `/preview/${tok}/${enc(segs)}`;
 
 const TEMPLATES = {
@@ -179,7 +179,8 @@ exports.player = wrap(async (req, res) => {
     const items = [];
     for (const f of data.files) { const k = mediaKind(f); if (k) { names.add(f); items.push({ name: f, kind: k, url: base(f), dl: base(f) + '?dl=1', pub: !priv.has(f) }); } }
     for (const x of hls) if (!names.has(x.name)) items.push({ name: x.name, kind: x.kind, url: base(x.name), dl: base(x.name) + '?dl=1', cut: true, pending: x.state !== 'ready', pub: !priv.has(x.name) });
-    const payload = { items: sortItems(items), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct: directFlag({ k: 'own', uid }), own: true, dir: dirSegs.join('/'), visUrl: '/code/html/media/visibility' };
+    const direct = await directFlag({ k: 'own', uid });
+    const payload = { items: sortItems(items), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct, own: true, dir: dirSegs.join('/'), visUrl: '/code/html/media/visibility' };
     res.render('code/html-player', {
         title: 'Trình phát' + (dirSegs.length ? ' — ' + dirSegs.join('/') : ''), user: req.user, lang: LANG,
         backUrl: '/code/html' + (dirSegs.length ? '?dir=' + encodeURIComponent(dirSegs.join('/')) : ''), heading: 'Thư mục: ' + (dirSegs.join('/') || 'gốc'),
@@ -322,7 +323,7 @@ exports.onlinePlayer = wrap(async (req, res) => {
     const priv = privateSet(manifest);
     for (const x of items) if (x.type === 'file' && mediaKind(x.name) && !priv.has(x.name)) { out.push(mk(x.name)); have.add(x.name); }
     if (manifest && manifest.files) for (const [name, e] of Object.entries(manifest.files)) if (!have.has(name) && !priv.has(name) && e && e.state === 'ready' && mediaKind(name)) out.push(mk(name, { cut: true }));
-    const payload = { items: sortItems(out), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct: directFlag(webPayload(f, req)) };
+    const payload = { items: sortItems(out), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct: await directFlag(webPayload(f, req)) };
     res.render('code/html-player', {
         title: 'Trình phát trên mạng', user: req.user, lang: LANG,
         backUrl: '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(f, f.dirSegs)), heading: f.base.join('/') + (f.dirSegs.length ? ' / ' + f.dirSegs.join('/') : ''),

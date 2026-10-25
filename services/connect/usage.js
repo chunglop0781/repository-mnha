@@ -2,6 +2,8 @@
 //
 //   Fast Data Transfer      ≈ dữ liệu trình duyệt ⇄ web      (bytes vào + ra, đếm theo request)
 //   Fast Origin Transfer    ≈ dữ liệu web ⇄ GitHub           (bytes ghi/đọc qua githubService)
+//   Cloudflare R2           = bytes web GHI lên R2 (cfUp) / ĐỌC từ R2 (cfDown) / số request R2 (cfReq)
+//   GitHub dự phòng         = bytes web ghi sang repo GitHub dự phòng khi R2 lỗi (fbUp)
 //
 //   Vercel không có API công khai cho 2 chỉ số này, nên đây là số ĐO THỰC TẾ của ứng dụng
 //   (xấp xỉ, mỗi instance serverless giữ bộ đếm và ghi lên GitHub định kỳ). Số chính thức của
@@ -10,7 +12,7 @@
 //   LƯU TRỮ — KHÔNG XOÁ gì cả, mỗi TUẦN một file riêng (thứ Hai → Chủ nhật, ngày theo UTC):
 //     usage/week-<N>/index.json
 //       { v:2, week:N, from:"YYYY-MM-DD", to:"YYYY-MM-DD",
-//         nodes:{ "<id>": { days:{ "YYYY-MM-DD":{in,out,originIn,originOut,req} }, updatedAt } } }
+//         nodes:{ "<id>": { days:{ "YYYY-MM-DD":{in,out,originIn,originOut,req,cfUp,cfDown,cfReq,fbUp} }, updatedAt } } }
 //   N = số thứ tự tuần tính từ tuần chứa CONNECT_USAGE_EPOCH (mặc định 2026-01-05 = tuần 1).
 //   File cũ v-s/usage.json (bản trước) vẫn được ĐỌC và cộng vào, nhưng không ghi thêm.
 'use strict';
@@ -48,7 +50,8 @@ function nodeId() {
     return 'main';
 }
 
-const pending = { in: 0, out: 0, originIn: 0, originOut: 0, req: 0 };
+const KEYS = ['in', 'out', 'originIn', 'originOut', 'req', 'cfUp', 'cfDown', 'cfReq', 'fbUp'];
+const pending = { in: 0, out: 0, originIn: 0, originOut: 0, req: 0, cfUp: 0, cfDown: 0, cfReq: 0, fbUp: 0 };
 let timer = null;
 let flushing = null;
 let lastError = null;
@@ -64,14 +67,22 @@ function noteOrigin({ in: read = 0, out: write = 0 } = {}) {
     pending.originIn += Math.max(0, Number(read) || 0);
     pending.originOut += Math.max(0, Number(write) || 0);
 }
-function hasPending() { return pending.in + pending.out + pending.originIn + pending.originOut > 0 || pending.req > 0; }
+/** Cloudflare R2 / GitHub dự phòng: up = bytes ghi lên R2, down = bytes đọc từ R2, req = số request, fbUp = bytes ghi repo dự phòng. */
+function noteCloud({ up = 0, down = 0, req = 0, fbUp = 0 } = {}) {
+    pending.cfUp += Math.max(0, Number(up) || 0);
+    pending.cfDown += Math.max(0, Number(down) || 0);
+    pending.cfReq += Math.max(0, Number(req) || 0);
+    pending.fbUp += Math.max(0, Number(fbUp) || 0);
+    schedule();
+}
+function hasPending() { return KEYS.some((k) => pending[k] > 0); }
 function schedule() {
     if (timer) return;
     timer = setTimeout(() => { timer = null; flush().catch(() => { /* đã log */ }); }, FLUSH_MS);
     if (timer.unref) timer.unref();
 }
 
-const empty = () => ({ in: 0, out: 0, originIn: 0, originOut: 0, req: 0 });
+const empty = () => ({ in: 0, out: 0, originIn: 0, originOut: 0, req: 0, cfUp: 0, cfDown: 0, cfReq: 0, fbUp: 0 });
 function add(a, b) {
     for (const k of Object.keys(empty())) a[k] += Number(b && b[k]) || 0;
     return a;
@@ -101,16 +112,12 @@ async function flush({ force = false } = {}) {
             const n = d.nodes[id] || (d.nodes[id] = { days: {} });
             if (!n.days) n.days = {};
             const row = n.days[today] || (n.days[today] = empty());
-            row.in += snapshot.in; row.out += snapshot.out;
-            row.originIn += snapshot.originIn; row.originOut += snapshot.originOut;
-            row.req += snapshot.req;
+            for (const k of KEYS) row[k] = (Number(row[k]) || 0) + snapshot[k];
             n.updatedAt = new Date().toISOString();
             d.updatedAt = n.updatedAt;
             try {
                 await gh.writeJsonFileIfSha(file, d, cur ? cur.sha : null, 'connect: lưu lượng tuần ' + no + ' · ' + id);
-                pending.in -= snapshot.in; pending.out -= snapshot.out;
-                pending.originIn -= snapshot.originIn; pending.originOut -= snapshot.originOut;
-                pending.req -= snapshot.req;
+                for (const k of KEYS) pending[k] -= snapshot[k];
                 lastError = null;
                 _weekCache.delete(no);
                 return { ok: true, id, week: no, file, day: today, row };
@@ -232,6 +239,55 @@ async function historyAll(ids, { week = 0 } = {}) {
 }
 async function history(id, opts) { return (await historyAll([id], opts))[id]; }
 
+
+// ---------------------------------------------------------------- CLOUDFLARE R2 (gộp mọi web)
+const CF_KEYS = ['cfUp', 'cfDown', 'cfReq', 'fbUp'];
+const cfOf = (r) => { const o = {}; for (const k of CF_KEYS) o[k] = Number(r && r[k]) || 0; return o; };
+const MAX_ALL_WEEKS = 260;
+
+/** Gộp các ngày của MỌI web thành 1 bảng ngày: { "YYYY-MM-DD": row }. */
+function mergeAllNodes(nodes) {
+    const rows = {};
+    for (const n of Object.values(nodes || {})) {
+        for (const [k, row] of Object.entries((n && n.days) || {})) add(rows[k] || (rows[k] = empty()), row);
+    }
+    return rows;
+}
+
+/**
+ * Số liệu Cloudflare R2 của TOÀN HỆ THỐNG (cộng mọi web, mọi tuần đã lưu):
+ *   today / week (tuần đang xem, đủ 7 ngày) / days30 / all (từ tuần 1 đến nay) + từng web trong tuần.
+ */
+async function cloudSummary({ week = 0 } = {}) {
+    const offset = clampWeek(week);
+    const nowNo = weekNo(Date.now());
+    const todayMs = utcMidnight(Date.now());
+    const startMs = mondayOf(todayMs) + offset * WEEK_MS;
+    const viewNo = weekNo(startMs);
+    const all = [];
+    for (let n = Math.max(1, nowNo - MAX_ALL_WEEKS + 1); n <= nowNo; n++) all.push(n);
+    const nodes = await loadNodes(all);
+    const rows = mergeAllNodes(nodes);
+    const wk = buildWeek(rows, offset);
+    const sum = (a, b) => { const t = empty(); for (let ms = a; ms <= b; ms += DAY_MS) add(t, rows[isoDay(ms)]); return t; };
+    const total = Object.values(rows).reduce((t, r) => add(t, r), empty());
+    const perNode = Object.entries(nodes).map(([id, n]) => {
+        const t = empty();
+        for (let ms = startMs; ms <= startMs + 6 * DAY_MS; ms += DAY_MS) add(t, n.days[isoDay(ms)]);
+        const life = Object.values(n.days).reduce((a, r) => add(a, r), empty());
+        return { id, week: cfOf(t), all: cfOf(life) };
+    }).filter((x) => CF_KEYS.some((k) => x.week[k] || x.all[k]));
+    return {
+        offset, weekNo: viewNo, from: wk.from, to: wk.to, file: wk.file,
+        today: cfOf(sum(todayMs, todayMs)),
+        week: cfOf(wk.total), prevWeek: cfOf(wk.prevTotal),
+        days30: cfOf(sum(todayMs - 29 * DAY_MS, todayMs)),
+        all: cfOf(total),
+        days: wk.days.map((d) => Object.assign({ date: d.date, name: d.name, future: d.future, today: d.today }, cfOf(d))),
+        perNode, hasPrev: wk.hasPrev, hasNext: wk.hasNext
+    };
+}
+
 /** Middleware đếm request/response (gắn ở web chính và web dữ liệu). */
 function middleware() {
     return function usageCounter(req, res, next) {
@@ -262,6 +318,6 @@ function formatBytes(n) {
 const bytesToGb = (n) => Math.round((Number(n) || 0) / (1024 ** 3) * 100) / 100;
 
 module.exports = {
-    note, noteOrigin, schedule, flush, snapshot, snapshotAll, history, historyAll, buildWeek, clampWeek,
+    note, noteOrigin, noteCloud, cloudSummary, schedule, flush, snapshot, snapshotAll, history, historyAll, buildWeek, clampWeek,
     middleware, formatBytes, bytesToGb, nodeId, FILE, DIR, weekPath, weekNo, hasPending
 };

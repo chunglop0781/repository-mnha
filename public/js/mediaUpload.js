@@ -69,16 +69,19 @@
         for (var i = 0; i < n; i++) (function (i) {
             chain = chain.then(function () {
                 progress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n, i / n);
-                return sendPart(i).then(function (r) { if (n > 1) parts.push({ i: i, sha: r.sha, size: r.size, receipt: r.receipt }); });
+                return sendPart(i).then(function (r) {
+                    if (r.notice) opt.onNotice(r.notice);
+                    if (n > 1) parts.push({ i: i, sha: r.sha, ref: r.ref, provider: r.provider, size: r.size, receipt: r.receipt });
+                });
             });
         })(i);
         return chain.then(function () {
             if (n === 1) return null;
-            progress('Đang ghép & ghi lên GitHub…', 0.97);
+            progress('Đang ghép & ghi lên kho media…', 0.97);
             var body = { dir: opt.dir, name: init.name, uploadId: init.uploadId, parts: parts };
             if (token) body.token = token;
-            return retry(function () { return request('POST', urls.finish, body); }, 'ghép file');
-        }).then(function () { progress('Xong', 1); return { name: init.name, plan: 'direct', node: nodeName || null }; });
+            return retry(function () { return request('POST', urls.finish, body); }, 'ghép file').then(function (r) { if (r && r.notice) opt.onNotice(r.notice); });
+        }).then(function () { progress('Xong', 1); return { name: init.name, plan: 'direct', node: nodeName || null, storage: init.storage || null }; });
     }
 
     async function hls(file, init, opt, urls, token, nodeName) {
@@ -100,14 +103,17 @@
             var body = { dir: opt.dir, name: init.name, uploadId: init.uploadId, srcName: file.name, src: { size: file.size, lastModified: file.lastModified }, segs: recs, final: !!final };
             if (token) body.token = token;
             if (fm) { body.fmt = 'fmp4'; body.init = b64(f.init); body.codecs = f.codecString; }
-            chain = chain.then(function () { return retry(function () { return request('POST', urls.commit, body); }, final ? 'hoàn tất' : 'ghi lô đoạn'); }).catch(function (e) { fail = fail || e; });
+            chain = chain.then(function () { return retry(function () { return request('POST', urls.commit, body); }, final ? 'hoàn tất' : 'ghi lô đoạn'); }).then(function (r) { if (r && r.notice) opt.onNotice(r.notice); }).catch(function (e) { fail = fail || e; });
         }
         function sendSeg(seg) {
             var q = { dir: base.dir, name: base.name, uploadId: base.uploadId, i: seg.i };
             if (fm) q.fmt = 'fmp4';
             if (token) q.token = token;
             return retry(function () { return request('PUT', urls.seg + '?' + qs(q), seg.bytes, true); }, 'đoạn ' + (seg.i + 1))
-                .then(function (r) { done[seg.i] = { i: seg.i, dur: seg.dur, plainSize: r.plainSize, sha: r.sha, size: r.size, receipt: r.receipt }; });
+                .then(function (r) {
+                    if (r.notice) opt.onNotice(r.notice);
+                    done[seg.i] = { i: seg.i, dur: seg.dur, plainSize: r.plainSize, sha: r.sha, ref: r.ref, provider: r.provider, size: r.size, receipt: r.receipt };
+                });
         }
         if (skip) progress('Làm tiếp từ đoạn ' + (skip + 1) + '…', 0);
         for await (const seg of f.segments(skip)) {
@@ -123,7 +129,7 @@
         await chain;
         if (fail) throw fail;
         progress('Xong', 1);
-        return { name: init.name, plan: 'hls', node: nodeName || null };
+        return { name: init.name, plan: 'hls', node: nodeName || null, storage: init.storage || null };
     }
 
     async function upload(file, opt) {

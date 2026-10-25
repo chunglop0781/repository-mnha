@@ -12,9 +12,11 @@
 //   Mọi đường giải mã quan trọng (khoá file, key.bin, giải mã dự phòng ở Node, tải về) đều đi qua authorize()/release*() ở đây.
 'use strict';
 const mc = require('./mediaCrypto');
+const cloudflare = require('../connect/cloudflare');
 const { MEDIA } = require('../../config/codeConfig');
 
 const KEYS_DIR = 'keys';
+const isStorage = (st) => !!(st && (st.provider === 'cloudflare' || st.provider === 'github-fallback'));
 const MARKER = '.mnha-keys';
 const INDEX = 'index.json';
 
@@ -157,6 +159,15 @@ async function release(payload, segs, gh, opt = {}) {
         return { mode: 'direct', key: mc.fileKey(Buffer.from(hex, 'hex')).toString('base64'), sha, raw: rawUrl(gh, t.full, sha) };
     }
     const e = t.loc.entry;
+    // Âm thanh/video nhỏ lưu trên Cloudflare R2 / repo GitHub dự phòng: salt nằm trong json,
+    // địa chỉ xem do cloudflare.urlFor() quyết định (public / presign / null = qua máy chủ).
+    if (e && e.mode === 'direct' && isStorage(e.storage)) {
+        const saltHex = e.enc && /^[a-f0-9]{32}$/i.test(String(e.enc.salt || '')) ? String(e.enc.salt) : '';
+        if (!saltHex) return null;
+        await recordView(gh, t);
+        const raw = await cloudflare.urlFor(e.storage, path, { v: e.uploadId || e.updatedAt }).catch(() => null);
+        return { mode: 'direct', key: mc.fileKey(Buffer.from(saltHex, 'hex')).toString('base64'), sha: e.uploadId || null, raw };
+    }
     if (e && (e.mode === 'hls-audio' || e.mode === 'hls-video')) { await recordView(gh, t); return { mode: 'hls', kind: e.kind, drm: !!e.drm, codecs: e.codecs || null }; }
     return null;
 }
@@ -169,10 +180,13 @@ async function releaseHlsKey(payload, segs, gh, entry, opt = {}) {
     return mc.unwrapKey(entry.drm.key);
 }
 
-/** Trình duyệt có thể tự giải mã với token này? (đã cấu hình địa chỉ raw và token nằm trong phạm vi app) */
-function canDirect(payload, gh) {
-    if (!rawUrl(gh, ['x'])) return false;
-    return !!payload && (payload.k === 'own' || (isAppRepo(payload, gh) && !!payload.uid));
+/** Trình duyệt có thể tự giải mã với token này? (đã cấu hình địa chỉ raw hoặc Cloudflare, và token nằm trong phạm vi app) */
+async function canDirect(payload, gh) {
+    if (!payload) return false;
+    if (process.env.MEDIA_DIRECT === 'off' || MEDIA.DIRECT === false) return false;
+    if (!(payload.k === 'own' || (isAppRepo(payload, gh) && !!payload.uid))) return false;
+    if (rawUrl(gh, ['x'])) return true;
+    try { return !!(await cloudflare.runtime()).direct; } catch (_) { return false; }
 }
 
 /** Kiểm quyền cho đường giải mã dự phòng ở Node (không trả khoá). */
