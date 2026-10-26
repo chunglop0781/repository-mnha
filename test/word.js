@@ -232,5 +232,195 @@ const SAMPLE = '<h1>Báo cáo tháng 10</h1>' +
         assert(!/<(?:p|span)[^>]*>(?:<span[^>]*>)?<hr/.test(rh), 'ngắt trang không được nằm trong <p>/<span>');
     } catch (e) { if (e.code !== 'ENOENT') throw e; }
 
+    // ---- công thức Word (OMML) + hộp văn bản: trước đây bị dẹt thành "R4", "x1" và mất hẳn nội dung hộp văn bản
+    {
+        const { htmlToDocx } = require('../services/word/htmlToDocx');
+        const { sanitizeHtml } = require('../services/word/htmlSanitize');
+        const buf = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'math-textbox.docx'));
+        const c = convertDocx(buf), h = sanitizeHtml(c.html);
+        const count = (x, t) => (x.match(new RegExp('<' + t + '[ >]', 'g')) || []).length;
+        assert(count(h, 'math') > 200 && count(h, 'msub') > 300 && count(h, 'mfrac') === 21 && count(h, 'mtable') === 5 && count(h, 'mover') === 9, 'giữ công thức: chỉ số, phân số, ma trận, vector');
+        assert(/<msup><mrow><mi[^>]*>R<\/mi><\/mrow><mrow><mn>4<\/mn><\/mrow><\/msup>/.test(h), 'R^4 là chỉ số trên thật, không phải chữ "R4"');
+        assert((h.match(/class="word-textbox"/g) || []).length === 19, 'giữ đủ 19 hộp văn bản (mc:Choice, không nhân đôi bằng Fallback)');
+        const back = htmlToDocx(h, { title: c.title, page: c.page });
+        const zip = readZip(back), xml = zip.text('word/document.xml');
+        assert(/xmlns:m="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/math"/.test(xml), 'khai báo namespace m:');
+        assert((xml.match(/<m:oMath>/g) || []).length === count(h, 'math'), 'mỗi <math> → một m:oMath');
+        assert(!/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(xml), 'không có ký tự điều khiển cấm trong XML');
+        // thứ tự phần tử trong w:rPr / w:pPr theo schema (Word kén thứ tự, sai là báo "file bị lỗi")
+        const RPR = ['rFonts', 'b', 'bCs', 'i', 'iCs', 'strike', 'color', 'sz', 'szCs', 'u', 'shd', 'vertAlign'];
+        const PPR = ['pStyle', 'keepNext', 'numPr', 'pBdr', 'shd', 'ind', 'jc'];
+        const inOrder = (names, order) => names.every((n, i) => i === 0 || order.indexOf(n) >= order.indexOf(names[i - 1]));
+        for (const m of xml.matchAll(/<w:rPr>(.*?)<\/w:rPr>/g)) assert(inOrder([...m[1].matchAll(/<w:(\w+)[ /]/g)].map((x) => x[1]), RPR), 'thứ tự w:rPr: ' + m[1].slice(0, 120));
+        for (const m of xml.matchAll(/<w:pPr>(.*?)<\/w:pPr>/g)) assert(inOrder([...m[1].replace(/<w:numPr>.*?<\/w:numPr>|<w:pBdr>.*?<\/w:pBdr>/g, (t) => '<w:' + t.slice(3, t.indexOf('>')) + '/>').matchAll(/<w:(\w+)[ /]/g)].map((x) => x[1]), PPR), 'thứ tự w:pPr: ' + m[1].slice(0, 160));
+        // đi vòng docx → html → docx → html: công thức giữ nguyên cấu trúc, chữ không mất
+        const again = convertDocx(back).html;
+        const norm = (x) => x.replace(/<[^>]+>/g, '').replace(/[\s\u00a0]+/g, '');
+        for (const t of ['math', 'msub', 'msup', 'msubsup', 'mfrac', 'mtable', 'mover']) assert.strictEqual(count(again, t), count(h, t), 'đi vòng vẫn đủ <' + t + '>');
+        assert.strictEqual(norm(again), norm(h), 'đi vòng không mất chữ nào (kể cả nội dung hộp văn bản)');
+        // MathML vào từ trình soạn không được mang script/onclick
+        assert(!/onclick|<script/i.test(sanitizeHtml('<p><math onclick="x()"><mi>x</mi><script>1</script></math></p>')), 'sanitize MathML');
+    }
+
+    // ---- tách HTML theo trang/khối: ghép lại phải ĐÚNG NGUYÊN VĂN (không mất byte nào)
+    {
+        const big = '<p>ĐẦU 😀</p>' + Array.from({ length: 4000 }, (_, i) => '<p>Dòng ' + i + ' ' + 'nội dung '.repeat(20) + '</p>').join('') + '<p>CUỐI</p>';
+        const chunks = store.splitHtmlChunks(big, 64 * 1024);
+        assert(chunks.length > 1, 'phải cắt thành nhiều khúc');
+        assert.strictEqual(chunks.join(''), big, 'ghép các khúc phải khớp nguyên văn');
+        assert.strictEqual([...store.iterHtmlChunks(big, 64 * 1024)].join(''), big, 'generator cũng ghép đúng');
+        assert.strictEqual(store.groupHtmlChunks(chunks, 128 * 1024).join(''), big, 'gom khúc không làm mất nội dung');
+
+        // ưu tiên cắt ngay sau <hr class="word-pagebreak">
+        const pb = '<p>' + 'a'.repeat(60000) + '</p><hr class="word-pagebreak"><p>' + 'b'.repeat(90000) + '</p>';
+        const pcs = store.splitHtmlChunks(pb, 96 * 1024);
+        assert(pcs.length >= 2 && /word-pagebreak/.test(pcs[0]), 'cắt ưu tiên sau ngắt trang');
+        assert.strictEqual(pcs.join(''), pb);
+
+        // văn bản thuần rất dài: không cắt đôi cặp surrogate (emoji)
+        const emo = '😀'.repeat(40000);
+        const ec = store.splitHtmlChunks(emo, 64 * 1024);
+        assert.strictEqual(ec.join(''), emo, 'ghép đúng văn bản thuần');
+        ec.forEach((c) => assert(!/[\uD800-\uDBFF]$/.test(c), 'không cắt đôi surrogate'));
+    }
+
+    // ---- mã hoá TỪNG TRANG cho tài liệu lớn + dùng lại/xoá trang/đổi tên
+    {
+        const LANG = require(R + 'config/codeConfig').LANGS.word;
+        const mc = require(R + 'services/code/mediaCrypto');
+        const oldStore = LANG.pageStoreBytes, oldChunk = LANG.pageChunkBytes;
+        LANG.pageStoreBytes = 128 * 1024;
+        LANG.pageChunkBytes = 64 * 1024;
+        try {
+            const many = Array.from({ length: 1600 }, (_, i) => '<p>TRANG ' + i + ' ' + 'nội dung '.repeat(12) + '</p>').join('');
+            const expected = sanitizeHtml(many);
+            const createdPage = await store.createDoc('u1', 'thu-muc-lon', 'Lon trang.docx', { html: many });
+            assert(createdPage.pages > 1, 'tài liệu lớn phải lưu nhiều trang');
+            const docPath = 'u1/file-word/thu-muc-lon/Lon trang.docx';
+            const pageFolder = 'u1/file-word/thu-muc-lon/Lon trang/';
+            const pageFiles = [...files.keys()].filter((p) => p.startsWith(pageFolder) && /^trang-[a-f0-9]{16,64}\.mnha$/i.test(p.slice(pageFolder.length)));
+            assert(pageFiles.length > 1, 'mỗi trang là một file .mnha');
+            assert.strictEqual(files.get(docPath).subarray(0, 8).toString('latin1'), 'MNHAENC1', 'chỉ mục trang phải mã hoá');
+            const idxPlain = mc.decryptBuffer(files.get(docPath)).toString('utf8');
+            assert(idxPlain.startsWith('MNHAPAGE1'), 'file .docx nhỏ chỉ còn chỉ mục trang');
+            assert(!idxPlain.includes('TRANG 1') && !files.get(docPath).includes(Buffer.from('TRANG 1')), 'chỉ mục không chứa nội dung rõ');
+            for (const p of pageFiles) {
+                const raw = files.get(p);
+                assert.strictEqual(raw.subarray(0, 8).toString('latin1'), 'MNHAENC1', 'trang phải mã hoá');
+                assert(!raw.includes(Buffer.from('TRANG 1')) && !raw.includes(Buffer.from('nội dung')), 'không lộ nội dung trang');
+            }
+            const pagedRead = await store.readDoc('u1', 'thu-muc-lon', 'Lon trang.docx');
+            assert(pagedRead.paged === true && pagedRead.html === expected, 'ghép đúng HTML từ các trang đã giải mã');
+            const pagesOnly = await store.readDoc('u1', 'thu-muc-lon', 'Lon trang.docx', { pagesOnly: true });
+            assert(Array.isArray(pagesOnly.pages) && pagesOnly.pages.length === pageFiles.length, 'đọc được danh sách trang');
+            assert.strictEqual(pagesOnly.pages.join(''), expected, 'các trang ghép đúng nguyên văn');
+            const m1 = await store.readManifest('u1', 'thu-muc-lon');
+            assert.strictEqual(m1.docs['Lon trang.docx'].pageCount, pageFiles.length, 'manifest ghi số trang');
+            assert(!/TRANG 1|nội dung/.test(files.get('u1/file-word/thu-muc-lon/mnha-word.json').toString('utf8')), 'manifest không chứa nội dung');
+
+            // lưu y hệt → tên trang là hash nội dung nên dùng lại, không ghi thêm
+            const before = pageFiles.length;
+            await store.saveHtml('u1', 'thu-muc-lon', 'Lon trang.docx', many);
+            assert.strictEqual([...files.keys()].filter((p) => p.startsWith(pageFolder)).length, before, 'không ghi lại trang không đổi');
+
+            // nhỏ lại → quay về 1 file HTML mã hoá và xoá hết trang rời
+            await store.saveHtml('u1', 'thu-muc-lon', 'Lon trang.docx', '<p>Nhỏ lại</p>');
+            assert.strictEqual([...files.keys()].filter((p) => p.startsWith(pageFolder)).length, 0, 'xoá trang khi tài liệu nhỏ lại');
+            assert.strictEqual(mc.decryptBuffer(files.get(docPath)).toString('utf8'), '<p>Nhỏ lại</p>', 'file nhỏ lưu HTML trực tiếp');
+            assert.strictEqual((await store.readManifest('u1', 'thu-muc-lon')).docs['Lon trang.docx'].pageCount, 0, 'manifest bỏ số trang');
+
+            // lớn lại → đổi tên: toàn bộ trang đi theo thư mục mới
+            await store.saveHtml('u1', 'thu-muc-lon', 'Lon trang.docx', many);
+            const again = [...files.keys()].filter((p) => p.startsWith(pageFolder));
+            assert(again.length > 1, 'lưu lại thành nhiều trang');
+            await store.renameDoc('u1', 'thu-muc-lon', 'Lon trang.docx', 'Lon moi.docx');
+            const newFolder = 'u1/file-word/thu-muc-lon/Lon moi/';
+            assert(files.has('u1/file-word/thu-muc-lon/Lon moi.docx') && !files.has(docPath), 'đổi tên file tài liệu');
+            assert.strictEqual([...files.keys()].filter((p) => p.startsWith(newFolder)).length, again.length, 'đổi tên chuyển cả trang');
+            assert.strictEqual([...files.keys()].filter((p) => p.startsWith(pageFolder)).length, 0, 'không còn trang ở tên cũ');
+            assert.strictEqual((await store.readDoc('u1', 'thu-muc-lon', 'Lon moi.docx')).html, expected, 'đọc đúng sau đổi tên');
+            await store.removeDoc('u1', 'thu-muc-lon', 'Lon moi.docx');
+            assert(![...files.keys()].some((p) => p.startsWith(newFolder)), 'xoá tài liệu phải xoá cả trang');
+        } finally {
+            LANG.pageStoreBytes = oldStore;
+            LANG.pageChunkBytes = oldChunk;
+        }
+    }
+
+    // ---- tài liệu quá lớn khi tải về: tách thành ten-1.docx, ten-2.docx… trong ZIP, KHÔNG giảm chất lượng
+    {
+        const LANG = require(R + 'config/codeConfig').LANGS.word;
+        const oldPart = LANG.docxPartBytes, oldStore = LANG.pageStoreBytes;
+        LANG.docxPartBytes = 192 * 1024;
+        LANG.pageStoreBytes = 80 * 1024 * 1024;
+        try {
+            const many = Array.from({ length: 3500 }, (_, i) => '<p>Đoạn ' + i + ': ' + 'nội dung minh hoạ '.repeat(10) + '</p>').join('');
+            await store.createDoc('u1', '', 'Nhieu phan.docx', { html: many });
+            const out = await store.toDocxParts('u1', '', 'Nhieu phan.docx');
+            assert(out && out.multi && out.parts.length >= 2, 'phải tách thành nhiều .docx');
+            assert.strictEqual(out.zipName, 'Nhieu phan.zip');
+            out.parts.forEach((p, i) => {
+                assert.strictEqual(p.name, 'Nhieu phan-' + (i + 1) + '.docx', 'tên phần đánh số');
+                assert.strictEqual(p.buffer.subarray(0, 2).toString('latin1'), 'PK', 'mỗi phần là .docx thật');
+                assert(readZip(p.buffer).has('word/document.xml'), 'mỗi phần có document.xml');
+            });
+            const zipped = await store.toDocx('u1', '', 'Nhieu phan.docx');
+            assert(zipped.multi && zipped.buffer.subarray(0, 2).toString('latin1') === 'PK', 'tải về là ZIP');
+            const zr = readZip(zipped.buffer, { requireDocx: false });
+            assert.strictEqual(zr.names.length, out.parts.length, 'ZIP chứa đủ các phần');
+            assert(zr.names.every((n) => /^Nhieu phan-\d+\.docx$/.test(n)), 'tên trong ZIP đúng quy ước');
+            await store.removeDoc('u1', '', 'Nhieu phan.docx');
+            const one = await store.toDocx('u1', '', 'Bao cao.docx');
+            assert(one && !one.multi && one.buffer.subarray(0, 2).toString('latin1') === 'PK', 'tài liệu nhỏ vẫn tải .docx trực tiếp');
+        } finally {
+            LANG.docxPartBytes = oldPart;
+            LANG.pageStoreBytes = oldStore;
+        }
+    }
+
+    // ---- bảng khổng lồ bị cắt giữa chừng: các phần .docx sau KHÔNG được mất dòng (balanceParts)
+    {
+        const LANG = require(R + 'config/codeConfig').LANGS.word;
+        const oldPart = LANG.docxPartBytes, oldStore = LANG.pageStoreBytes;
+        LANG.docxPartBytes = 192 * 1024;
+        LANG.pageStoreBytes = 80 * 1024 * 1024;
+        try {
+            const rows = Array.from({ length: 6000 }, (_, i) => '<tr><td>Ô ' + i + '</td><td>' + 'x'.repeat(60) + '</td></tr>').join('');
+            const html = '<p>đầu</p><table><tbody>' + rows + '</tbody></table><p>cuối</p>';
+            const bal = store.balanceParts(store.splitHtmlChunks(html, 64 * 1024));
+            assert(bal.length > 2 && bal.every((c) => (c.match(/<table/g) || []).length === (c.match(/<\/table>/g) || []).length), 'mỗi phần cân bằng thẻ <table>');
+            await store.createDoc('u1', '', 'Bang lon.docx', { html: '<p>x</p>' });
+            await store.saveHtml('u1', '', 'Bang lon.docx', html, {});
+            const out = await store.toDocxParts('u1', '', 'Bang lon.docx');
+            assert(out.multi, 'bảng lớn phải tách nhiều phần');
+            let got = 0;
+            for (const p of out.parts) got += (readZip(p.buffer).text('word/document.xml').match(/Ô \d+/g) || []).length;
+            assert.strictEqual(got, 6000, 'đủ 6000 dòng sau khi tách (không mất dữ liệu)');
+            await store.removeDoc('u1', '', 'Bang lon.docx');
+        } finally {
+            LANG.docxPartBytes = oldPart;
+            LANG.pageStoreBytes = oldStore;
+        }
+    }
+
+    // ---- hình khối đặt tự do: sanitizer + xuất .docx (DrawingML)
+    {
+        const { sanitizeHtml: san } = require(R + 'services/word/htmlSanitize');
+        const { htmlToDocx: toDocx } = require(R + 'services/word/htmlToDocx');
+        const raw = '<p>Một</p><div class="word-shape" data-shape="star" data-oy="20" contenteditable="false" style="position: absolute; left: 300px; top: 60px; width: 120px; height: 110px; z-index: 2; background-color: rgb(255, 192, 0); border: 2px solid rgb(0, 0, 0); transform: rotate(20deg)">Sao</div>' +
+            '<p style="position:fixed;left:0;top:0">x</p><div class="word-shape" data-shape="line" style="position:absolute;left:10px;top:400px;width:200px;height:0px;z-index:-1;border-top:3px solid rgb(37,99,235)"></div>' +
+            '<div class="word-shape" data-shape="round" style="position:fixed;left:99999999px;width:100px;height:50px">trong dòng</div>';
+        const clean = san(raw);
+        assert(/class="word-shape"/.test(clean) && /data-shape="star"/.test(clean) && /data-oy="20"/.test(clean), 'giữ hình khối + data-shape + data-oy');
+        assert(/position:absolute;left:300px;top:60px/.test(clean.replace(/ /g, '')), 'giữ position:absolute/left/top của hình');
+        assert(!/position:fixed/.test(clean) && !/contenteditable/.test(clean) && !/99999999/.test(clean), 'chặn position:fixed, contenteditable và toạ độ phi lý');
+        const buf = toDocx(clean, { title: 't' });
+        const xml = readZip(Buffer.isBuffer(buf) ? buf : buf.buffer || buf).text('word/document.xml');
+        assert.strictEqual((xml.match(/<wp:anchor\b/g) || []).length, 2, '2 hình tự do → 2 wp:anchor');
+        assert(/prst="star5"/.test(xml) && /prst="line"/.test(xml) && /behindDoc="1"/.test(xml) && /rot="1200000"/.test(xml), 'hình sao xoay 20°, đường thẳng sau văn bản');
+        assert(/posOffset>2857500</.test(xml), 'left 300px = 2857500 EMU');
+        assert(/<wp:inline\b/.test(xml), 'hình cùng dòng → wp:inline');
+    }
+
     console.log('OK word');
 })().catch((e) => { console.error('✘', e); process.exit(1); });

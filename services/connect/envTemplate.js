@@ -13,6 +13,7 @@ const SECRETS = [
     'CONNECT_ENC_KEY',
     'CONNECT_HMAC_KEY',
     'GITHUB_TOKEN',
+    'GITHUB_WEBHOOK_SECRET',
     'GITHUB_MEDIA_TOKEN'
 ];
 
@@ -62,8 +63,15 @@ function envTemplate(o = {}) {
         '# --- GitHub repo chính (GIỐNG HỆT mọi web) ---',
         `GITHUB_TOKEN=${secret('GITHUB_TOKEN', 'ghp_...')}`,
         `GITHUB_OWNER=${current('GITHUB_OWNER', 'your-account')}`,
-        `GITHUB_REPO=${current('GITHUB_REPO', 'repository-mnha')}`,
+        `GITHUB_REPO=${current('GITHUB_REPO', 'repository-mnha-database')}`,
         `GITHUB_BRANCH=${current('GITHUB_BRANCH', 'main')}`,
+        '',
+        '# --- Nhiều repo dữ liệu: repo chính ≥ 200MB → tự tạo <GITHUB_REPO>-1, -2… (sổ: github/repos/index.json ở repo chính) ---',
+        '# Dung lượng từng repo lấy từ WEBHOOK push của GitHub (không lưu JSON): Payload URL = <MAIN_URL>/api/github/webhook,',
+        '# Content type = application/json. Webhook + secret được TỰ gắn/TỰ sinh (GITHUB_WEBHOOK_SECRET chỉ cần nếu muốn tự đặt).',
+        `GITHUB_REPO_POOL=${current('GITHUB_REPO_POOL', 'on')}`,
+        `GITHUB_REPO_LIMIT_MB=${current('GITHUB_REPO_LIMIT_MB', '200')}`,
+        `GITHUB_WEBHOOK_SECRET=${secret('GITHUB_WEBHOOK_SECRET', '')}`,
         '',
         '# --- Sổ đăng ký web kết nối + lưu lượng (trong repo chính) ---',
         `CONNECT_INDEX_PATH=${current('CONNECT_INDEX_PATH', 'v-s/index.json')}`,
@@ -75,7 +83,7 @@ function envTemplate(o = {}) {
         `MEDIA_REPO_INDEX_PATH=${current('MEDIA_REPO_INDEX_PATH', 'v-s/media-repos.json')}`,
         `GITHUB_MEDIA_TOKEN=${secret('GITHUB_MEDIA_TOKEN', 'ghp_... (cần quyền tạo repo, có thể trùng GITHUB_TOKEN)')}`,
         `GITHUB_MEDIA_OWNER=${secret('GITHUB_MEDIA_OWNER', current('GITHUB_OWNER', 'your-account'))}`,
-        `GITHUB_MEDIA_REPO_PREFIX=${current('GITHUB_MEDIA_REPO_PREFIX', current('GITHUB_REPO', 'repository-mnha') + '-media')}`,
+        `GITHUB_MEDIA_REPO_PREFIX=${current('GITHUB_MEDIA_REPO_PREFIX', current('GITHUB_REPO', 'repository-mnha-database') + '-media')}`,
         `MEDIA_REPO_PRIVATE=${current('MEDIA_REPO_PRIVATE', 'off')}`,
         '',
         '# --- Cloudflare R2 cho VIDEO / ÂM THANH (ảnh vẫn ở GitHub) ---',

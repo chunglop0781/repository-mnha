@@ -7,6 +7,7 @@
 'use strict';
 const { readZip } = require('./zip');
 const { parseXml, local, escapeText, escapeAttr } = require('./xml');
+const { ommlToMathml } = require('./omml');
 
 const { LANGS } = require('../../config/codeConfig');
 const EMU_PER_PX = 9525;          // 1 px CSS = 9525 EMU
@@ -270,6 +271,28 @@ function wrapRun(inner, p) {
     return html;
 }
 
+/** Hình trong run: ảnh → <img>; hộp văn bản (w:txbxContent) → khối .word-textbox, chèn ngay sau đoạn chứa nó (xem renderBlocks). */
+function drawingHtml(node, ctx) {
+    const boxes = [];
+    (function find(n) {
+        for (const c of elementChildren(n)) {
+            if (local(c.name) === 'txbxContent') boxes.push(c);
+            else find(c);
+        }
+    })(node);
+    if (boxes.length) {
+        if (!ctx.boxes) ctx.boxes = [];
+        for (const b of boxes) {
+            const saved = ctx.boxes; ctx.boxes = [];
+            const inner = renderBlocks(elementChildren(b), ctx);
+            ctx.boxes = saved;
+            if (inner) ctx.boxes.push('<div class="word-textbox">' + inner + '</div>');
+        }
+        return '';
+    }
+    return imageFrom(node, ctx);
+}
+
 function renderRun(run, ctx, baseProps) {
     const rPr = child(run, 'rPr');
     let props = { ...baseProps, ...parseRunProps(rPr) };
@@ -286,7 +309,14 @@ function renderRun(run, ctx, baseProps) {
         else if (ln === 'sym') {
             let code = attr(c, 'char'); if (code) { try { parts.push(escapeText(String.fromCharCode(parseInt(code, 16)))); } catch (_) { } }
         } else if (ln === 'drawing' || ln === 'pict' || ln === 'object') {
-            const img = imageFrom(c, ctx); if (img) parts.push(img);
+            const img = drawingHtml(c, ctx); if (img) parts.push(img);
+        } else if (ln === 'AlternateContent') {
+            // Word ghi cùng một hình 2 lần: Choice (DrawingML) + Fallback (VML) → chỉ lấy một nhánh để khỏi nhân đôi
+            const pick = elementChildren(c).find((x) => local(x.name) === 'Choice') || elementChildren(c).find((x) => local(x.name) === 'Fallback');
+            if (pick) for (const d of elementChildren(pick)) {
+                const l2 = local(d.name);
+                if (l2 === 'drawing' || l2 === 'pict' || l2 === 'object') { const img = drawingHtml(d, ctx); if (img) parts.push(img); }
+            }
         }
     }
     return wrapRun(parts.join(''), props);
@@ -307,8 +337,7 @@ function renderInline(n, ctx, baseProps) {
         } else if (ln === 'del') {
             /* bỏ phần đã xoá (tracked changes) */
         } else if (ln === 'oMath' || ln === 'oMathPara') {
-            const t = descendants(c, 't').map((x) => x.children.map((y) => y.text || '').join('')).join('');
-            if (t) out += preserveSpaces(t);
+            out += ommlToMathml(c);            // công thức → MathML (giữ chỉ số trên/dưới, phân số, ma trận, vector…)
         }
     }
     return out;
@@ -359,7 +388,7 @@ function renderParagraph(p, ctx) {
     const info = paragraphInfo(p, ctx);
     if (info.own.numId != null) return { list: true, info };
     const inner = renderInline(p, ctx, info.run);
-    const empty = !inner || !inner.replace(/<[^>]*>/g, '').replace(/&nbsp;|\u00a0/g, '').trim() && !/<(img|br|hr)\b/i.test(inner);
+    const empty = !inner || !inner.replace(/<[^>]*>/g, '').replace(/&nbsp;|\u00a0/g, '').trim() && !/<(img|br|hr|math)\b/i.test(inner);
     const body = empty ? '<br>' : inner;
     const attrs = paraStyleAttr(info) + (info.cls ? ` class="${info.cls}"` : '');
     // <hr> không được nằm trong <p>/<span> (trình duyệt tự cắt đoạn) → đặt ngắt trang ở mức khối
@@ -368,7 +397,7 @@ function renderParagraph(p, ctx) {
     if (stripped !== body) {
         return { html: stripped.split('\u0001').map((seg, i, arr) => {
             const t = seg.replace(/<[^>]*>/g, '').replace(/&nbsp;|\u00a0/g, '').trim();
-            const has = t || /<(img|br)\b/i.test(seg);
+            const has = t || /<(img|br|math)\b/i.test(seg);
             return (has ? `<${info.tag}${attrs}>${seg}</${info.tag}>` : '') + (i < arr.length - 1 ? PB : '');
         }).join('') };
     }
@@ -420,11 +449,13 @@ function renderBlocks(nodes, ctx) {
                 const lvl = info.own.ilvl || 0;
                 const st = lvl > 0 ? ` style="margin-left:${lvl * 24}px;list-style-type:${tag === 'ul' ? ['disc', 'circle', 'square'][lvl % 3] : ['decimal', 'lower-alpha', 'lower-roman'][lvl % 3]}"` : '';
                 out.push(`<li${st}>${inner || '<br>'}</li>`);
+                if (ctx.boxes && ctx.boxes.length) { closeList(); out.push(ctx.boxes.splice(0).join('')); }
                 continue;
             }
             closeList();
             const r = renderParagraph(n, ctx);
             if (r.html) out.push(r.html);
+            if (ctx.boxes && ctx.boxes.length) out.push(ctx.boxes.splice(0).join(''));
         } else if (ln === 'tbl') { closeList(); out.push(renderTable(n, ctx)); }
         else if (ln === 'sdt') { closeList(); const c = firstDesc(n, 'sdtContent'); if (c) out.push(renderBlocks(elementChildren(c), ctx)); }
     }

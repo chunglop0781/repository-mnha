@@ -87,6 +87,7 @@ block content
         ul(class="mt-2 text-xs text-gray-500 list-disc pl-5 space-y-1")
             li Chỉ nhận <b>.docx</b> (Word 2007 trở lên). File <b>.doc</b> hãy mở bằng Word rồi “Save As” → .docx.
             li Tối đa #{Math.round(lang.maxFileBytes / 1048576)}MB mỗi file; gửi theo từng phần ≤ 3.2MB nên vượt được giới hạn 4.5MB của Vercel.
+            li Tài liệu lớn được lưu theo <b>từng trang mã hoá riêng</b>; khi tải về nếu quá lớn sẽ chia thành <b>ten-1.docx, ten-2.docx…</b> trong 1 file ZIP (không giảm chất lượng ảnh).
             li File được chuyển sang HTML ngay khi tải lên; HTML lưu trên GitHub dưới dạng <b>mã hoá AES-256-GCM</b>.
             li Ảnh trong tài liệu được tách thành file riêng <b>anh-001-…</b> trong thư mục cùng tên tài liệu, cũng mã hoá; tải .docx về vẫn đủ ảnh.
         div(id="upList", class="mt-3 grid gap-2")

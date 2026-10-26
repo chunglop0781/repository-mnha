@@ -24,7 +24,10 @@ class GithubSessionStore extends Base {
         super();
         this.gh = opt.gh || require('./githubService');
         this.path = opt.path || process.env.SESSION_INDEX_PATH || 'cookies/index.json';
-        this.cacheMs = opt.cacheMs ?? 5000;       // index nằm trong bộ nhớ tối đa chừng này ms
+        this.cacheMs = opt.cacheMs ?? (Number(process.env.SESSION_CACHE_MS) || 15000);   // index nằm trong bộ nhớ tối đa chừng này ms (mỗi request đều cần session → đừng tải lại index liên tục)
+        this.staleMs = opt.staleMs ?? (Number(process.env.SESSION_STALE_MS) || 10 * 60 * 1000);   // GitHub chập chờn: vẫn dùng bản index cũ ≤ chừng này ms thay vì báo lỗi 500
+        this.retryGapMs = opt.retryGapMs ?? 3000;  // sau 1 lần tải lỗi, trong khoảng này dùng luôn bản cũ (không dồn request lên GitHub)
+        this.retryAfter = 0;
         this.flushMs = opt.flushMs ?? 300;        // gom thay đổi trong chừng này ms thành 1 commit
         this.touchExtendMs = opt.touchExtendMs ?? 6 * 60 * 60 * 1000;
         this.cache = null; this.pending = []; this.inflight = []; this.timer = null; this._flushing = false; this._loading = null;
@@ -38,13 +41,26 @@ class GithubSessionStore extends Base {
     }
     async _load({ maxAge = this.cacheMs } = {}) {
         if (this.cache && Date.now() - this.cache.at < maxAge) return this.cache.idx;
+        if (this.cache && Date.now() < this.retryAfter) return this.cache.idx;          // vừa tải lỗi → dùng bản đang có
         if (this._loading) return this._loading;
         this._loading = (async () => {
-            let idx = await this.gh.readJsonFile(this.path);
-            if (!idx) { idx = emptyIdx(); await this.gh.writeJsonFile(this.path, idx, 'cookies: khởi tạo index'); }
+            let idx;
+            try {
+                idx = await this.gh.readJsonFile(this.path);
+                if (!idx) { idx = emptyIdx(); await this.gh.writeJsonFile(this.path, idx, 'cookies: khởi tạo index'); }
+            } catch (e) {
+                // Lỗi mạng/GitHub (vd "terminated") khi tải cookies/index.json: có bản cũ trong bộ nhớ thì dùng tạm, KHÔNG làm hỏng request.
+                if (this.cache && Date.now() - this.cache.created < this.staleMs) {
+                    this.retryAfter = Date.now() + this.retryGapMs;
+                    console.warn('[session] không tải được cookies/index.json (' + e.message + ') — dùng bản trong bộ nhớ, thử lại sau ít giây');
+                    return this.cache.idx;
+                }
+                throw e;
+            }
+            this.retryAfter = 0;
             idx = norm(idx);
             this._apply(idx, this.inflight); this._apply(idx, this.pending.map((p) => p.op));   // giữ thay đổi chưa kịp lên GitHub
-            this.cache = { idx, at: Date.now() };
+            this.cache = { idx, at: Date.now(), created: Date.now() };
             return idx;
         })().finally(() => { this._loading = null; });
         return this._loading;
@@ -75,7 +91,7 @@ class GithubSessionStore extends Base {
             batch.forEach((b) => b.resolve());
         } catch (e) {
             console.error('[session] ghi cookies/index.json lỗi:', e.message);
-            this.cache = null;
+            if (this.cache) this.cache.at = 0;          // buộc đọc lại lần sau nhưng GIỮ bản cũ để dùng khi mạng còn chập chờn
             batch.forEach((b) => b.reject(e));
         } finally {
             this._flushing = false; this.inflight = [];
@@ -88,7 +104,10 @@ class GithubSessionStore extends Base {
         const id = sc.sidId(sid);
         let idx = await this._load();
         let rec = idx.sessions[id];
-        if (!rec && Date.now() - this.cache.at > 1000) { idx = await this._load({ maxAge: 0 }); rec = idx.sessions[id]; }   // phiên mới tạo ở instance khác
+        if (!rec && Date.now() - this.cache.at > 1000) {   // phiên mới tạo ở instance khác
+            try { idx = await this._load({ maxAge: 0 }); rec = idx.sessions[id]; }
+            catch (e) { console.warn('[session] bỏ qua lần tải lại index:', e.message); }
+        }
         if (!rec) return null;
         if (rec.exp <= Date.now()) { this._enqueue({ op: 'del', id }).catch(() => {}); return null; }
         try { return sc.decrypt(rec.data, id); }

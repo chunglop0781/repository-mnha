@@ -28,107 +28,558 @@ block content
                 button(type="button", id="wdSave", class="wd-btn wd-btn-primary", title="Lưu (Ctrl+S)")
                     i(data-lucide="save", class="w-4 h-4")
                     span Lưu
-        div(class="wd-ribbon", role="toolbar", aria-label="Thanh công cụ Word")
-            div(class="wd-group")
-                div(class="wd-group-label") Tệp
-                div(class="wd-row")
-                    button(type="button", class="wd-ic", data-cmd="undo", title="Hoàn tác (Ctrl+Z)")
-                        i(data-lucide="undo-2", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="redo", title="Làm lại (Ctrl+Y)")
-                        i(data-lucide="redo-2", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="removeFormat", id="wdClear", title="Xoá định dạng")
-                        i(data-lucide="eraser", class="w-4 h-4")
-                    button(type="button", class="wd-ic", id="wdDownload2", title="Tải Word (.docx) về máy")
-                        i(data-lucide="download", class="w-4 h-4")
-            div(class="wd-group wd-group-font")
-                div(class="wd-group-label") Phông chữ
-                div(class="wd-row")
-                    select(id="wdFont", class="wd-select wd-font-select", title="Phông chữ")
-                        option(value="Calibri") Calibri
-                        option(value="Arial") Arial
-                        option(value="'Times New Roman'") Times New Roman
-                        option(value="Cambria") Cambria
-                        option(value="'Courier New'") Courier New
-                        option(value="Georgia") Georgia
-                        option(value="Verdana") Verdana
-                        option(value="Tahoma") Tahoma
-                    select(id="wdSize", class="wd-select wd-size-select", title="Cỡ chữ (pt)")
-                        each s in [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72]
-                            option(value=s, selected=(s === 11))= s
-                div(class="wd-row")
-                    button(type="button", class="wd-ic wd-strong", data-cmd="bold", title="Đậm (Ctrl+B)")
-                        i(data-lucide="bold", class="w-4 h-4")
-                    button(type="button", class="wd-ic wd-italic", data-cmd="italic", title="Nghiêng (Ctrl+I)")
-                        i(data-lucide="italic", class="w-4 h-4")
-                    button(type="button", class="wd-ic wd-underline", data-cmd="underline", title="Gạch chân (Ctrl+U)")
-                        i(data-lucide="underline", class="w-4 h-4")
-                    button(type="button", class="wd-ic wd-strike", data-cmd="strikeThrough", title="Gạch ngang")
-                        i(data-lucide="strikethrough", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="superscript", title="Chỉ số trên")
-                        i(data-lucide="superscript", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="subscript", title="Chỉ số dưới")
-                        i(data-lucide="subscript", class="w-4 h-4")
-                    label(class="wd-color", title="Màu chữ")
-                        span A
-                        input(type="color", id="wdColor", value="#1f2937")
-                    label(class="wd-color wd-hilite", title="Tô nền")
-                        span ▮
-                        input(type="color", id="wdHilite", value="#fff59d")
-            div(class="wd-group")
-                div(class="wd-group-label") Đoạn văn
-                div(class="wd-row")
-                    select(id="wdBlock", class="wd-select wd-block-select", title="Kiểu đoạn")
-                        option(value="P") Văn bản
-                        option(value="H1") Tiêu đề 1
-                        option(value="H2") Tiêu đề 2
-                        option(value="H3") Tiêu đề 3
-                        option(value="H4") Tiêu đề 4
-                        option(value="BLOCKQUOTE") Trích dẫn
-                        option(value="PRE") Đoạn mã
-                div(class="wd-row")
-                    button(type="button", class="wd-ic", data-cmd="justifyLeft", title="Căn trái")
-                        i(data-lucide="align-left", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="justifyCenter", title="Căn giữa")
-                        i(data-lucide="align-center", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="justifyRight", title="Căn phải")
-                        i(data-lucide="align-right", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="justifyFull", title="Căn đều")
-                        i(data-lucide="align-justify", class="w-4 h-4")
-                div(class="wd-row")
-                    button(type="button", class="wd-ic", data-cmd="insertUnorderedList", title="Danh sách chấm")
-                        i(data-lucide="list", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="insertOrderedList", title="Danh sách số")
-                        i(data-lucide="list-ordered", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="outdent", title="Giảm thụt lề")
-                        i(data-lucide="outdent", class="w-4 h-4")
-                    button(type="button", class="wd-ic", data-cmd="indent", title="Tăng thụt lề")
-                        i(data-lucide="indent", class="w-4 h-4")
-            div(class="wd-group")
-                div(class="wd-group-label") Chèn
-                div(class="wd-row")
-                    button(type="button", class="wd-ic", id="wdTable", title="Chèn bảng")
-                        i(data-lucide="table", class="w-4 h-4")
-                    button(type="button", class="wd-ic", id="wdImage", title="Chèn ảnh")
-                        i(data-lucide="image-plus", class="w-4 h-4")
-                    button(type="button", class="wd-ic", id="wdLink", title="Chèn liên kết")
-                        i(data-lucide="link-2", class="w-4 h-4")
-                    button(type="button", class="wd-ic", id="wdRule", title="Đường kẻ ngang")
-                        i(data-lucide="minus", class="w-4 h-4")
-                    button(type="button", class="wd-ic", id="wdPageBreak", title="Ngắt trang")
-                        i(data-lucide="file-minus-2", class="w-4 h-4")
-            div(class="wd-group")
-                div(class="wd-group-label") Trang
-                div(class="wd-row")
-                    select(id="wdPageSize", class="wd-select", title="Khổ giấy")
-                        option(value="A4") A4
-                        option(value="Letter") Letter
-                    select(id="wdOrient", class="wd-select", title="Hướng giấy")
-                        option(value="portrait") Dọc
-                        option(value="landscape") Ngang
-                    select(id="wdMargin", class="wd-select", title="Lề")
-                        option(value="normal") Lề thường
-                        option(value="narrow") Lề hẹp
-                        option(value="wide") Lề rộng
+        div(class="wd-ribbon", id="wdRibbon")
+            div(class="wd-tabstrip", role="tablist", aria-label="Thẻ ribbon Word")
+                button(type="button", class="wd-tab", data-tab="file", role="tab") Tệp
+                button(type="button", class="wd-tab active", data-tab="home", role="tab") Trang đầu
+                button(type="button", class="wd-tab", data-tab="insert", role="tab") Chèn
+                button(type="button", class="wd-tab", data-tab="layout", role="tab") Bố trí
+                button(type="button", class="wd-tab", data-tab="references", role="tab") Tham khảo
+                button(type="button", class="wd-tab", data-tab="review", role="tab") Xem lại
+                button(type="button", class="wd-tab", data-tab="view", role="tab") Xem
+                button(type="button", class="wd-tab", data-tab="help", role="tab") Trợ giúp
+                button(type="button", class="wd-tab wd-tab-ctx", id="wdTabShape", data-tab="shape", role="tab") Định dạng hình
+            div(class="wd-panes")
+                //- ---------------------------------------------------------- Tệp
+                div(class="wd-pane", data-pane="file", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="save", title="Lưu (Ctrl+S)")
+                                i(data-lucide="save", class="w-5 h-5")
+                                span Lưu
+                            button(type="button", class="wd-big", data-action="download", title="Tải .docx về máy")
+                                i(data-lucide="download", class="w-5 h-5")
+                                span Tải về
+                            button(type="button", class="wd-big", data-action="print", title="In (Ctrl+P)")
+                                i(data-lucide="printer", class="w-5 h-5")
+                                span In
+                        div(class="wd-group-label") Tệp
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="new-doc", title="Tạo tài liệu mới")
+                                i(data-lucide="file-plus-2", class="w-5 h-5")
+                                span Tài liệu mới
+                            button(type="button", class="wd-big", data-action="open-doc", title="Mở danh sách tài liệu")
+                                i(data-lucide="folder-open", class="w-5 h-5")
+                                span Mở
+                        div(class="wd-group-label") Mở
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="public", title="Bật/tắt link công khai /w")
+                                i(data-lucide=isPublic ? "globe" : "lock", class="w-5 h-5")
+                                span(id="wdRibbonPublicText")= isPublic ? "Công khai" : "Riêng tư"
+                            button(type="button", class="wd-big", data-action="copy-link", title="Sao chép link công khai")
+                                i(data-lucide="link", class="w-5 h-5")
+                                span Sao chép link
+                        div(class="wd-group-label") Chia sẻ
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="about", title="Thông tin tài liệu")
+                                i(data-lucide="info", class="w-5 h-5")
+                                span Thông tin
+                        div(class="wd-group-label") Thông tin
+                //- ---------------------------------------------------------- Trang đầu
+                div(class="wd-pane active", data-pane="home", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-cmd="paste", title="Dán (Ctrl+V)")
+                                    i(data-lucide="clipboard-paste", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="cut", title="Cắt (Ctrl+X)")
+                                    i(data-lucide="scissors", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="copy", title="Sao chép (Ctrl+C)")
+                                    i(data-lucide="copy", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="format-painter", title="Sao chép định dạng")
+                                    i(data-lucide="paintbrush", class="w-4 h-4")
+                        div(class="wd-group-label") Bảng tạm
+                    div(class="wd-group wd-group-font")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                select(id="wdFont", class="wd-select wd-font-select", title="Phông chữ")
+                                    option(value="Aptos") Aptos
+                                    option(value="Calibri") Calibri
+                                    option(value="Arial") Arial
+                                    option(value="'Times New Roman'") Times New Roman
+                                    option(value="Cambria") Cambria
+                                    option(value="'Courier New'") Courier New
+                                    option(value="Georgia") Georgia
+                                    option(value="Verdana") Verdana
+                                    option(value="Tahoma") Tahoma
+                                select(id="wdSize", class="wd-select wd-size-select", title="Cỡ chữ (pt)")
+                                    each s in [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72]
+                                        option(value=s, selected=(s === 12))= s
+                                button(type="button", class="wd-ic", data-action="grow-font", title="Tăng cỡ chữ")
+                                    i(data-lucide="a-arrow-up", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="shrink-font", title="Giảm cỡ chữ")
+                                    i(data-lucide="a-arrow-down", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="removeFormat", id="wdClear", title="Xoá định dạng")
+                                    i(data-lucide="eraser", class="w-4 h-4")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic wd-strong", data-cmd="bold", title="Đậm (Ctrl+B)")
+                                    i(data-lucide="bold", class="w-4 h-4")
+                                button(type="button", class="wd-ic wd-italic", data-cmd="italic", title="Nghiêng (Ctrl+I)")
+                                    i(data-lucide="italic", class="w-4 h-4")
+                                button(type="button", class="wd-ic wd-underline", data-cmd="underline", title="Gạch chân (Ctrl+U)")
+                                    i(data-lucide="underline", class="w-4 h-4")
+                                button(type="button", class="wd-ic wd-strike", data-cmd="strikeThrough", title="Gạch ngang")
+                                    i(data-lucide="strikethrough", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="superscript", title="Chỉ số trên")
+                                    i(data-lucide="superscript", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="subscript", title="Chỉ số dưới")
+                                    i(data-lucide="subscript", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="change-case", title="Đổi chữ hoa/thường")
+                                    i(data-lucide="case-sensitive", class="w-4 h-4")
+                                label(class="wd-color", title="Màu chữ")
+                                    span A
+                                    input(type="color", id="wdColor", value="#1f2937")
+                                label(class="wd-color wd-hilite", title="Tô nền")
+                                    span ▮
+                                    input(type="color", id="wdHilite", value="#fff59d")
+                        div(class="wd-group-label") Phông chữ
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-cmd="insertUnorderedList", title="Danh sách chấm")
+                                    i(data-lucide="list", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="insertOrderedList", title="Danh sách số")
+                                    i(data-lucide="list-ordered", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="outdent", title="Giảm thụt lề")
+                                    i(data-lucide="outdent", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="indent", title="Tăng thụt lề")
+                                    i(data-lucide="indent", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="para-border", title="Đường viền đoạn")
+                                    i(data-lucide="square-dashed-bottom", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="para-shading", title="Tô nền đoạn")
+                                    i(data-lucide="paint-bucket", class="w-4 h-4")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-cmd="justifyLeft", title="Căn trái")
+                                    i(data-lucide="align-left", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="justifyCenter", title="Căn giữa")
+                                    i(data-lucide="align-center", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="justifyRight", title="Căn phải")
+                                    i(data-lucide="align-right", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="justifyFull", title="Căn đều")
+                                    i(data-lucide="align-justify", class="w-4 h-4")
+                                select(id="wdLineHeight", class="wd-select wd-line-select", title="Giãn dòng")
+                                    option(value="1") 1,0
+                                    option(value="1.15") 1,15
+                                    option(value="1.5") 1,5
+                                    option(value="2") 2,0
+                        div(class="wd-group-label") Đoạn văn
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                select(id="wdBlock", class="wd-select wd-block-select", title="Kiểu đoạn")
+                                    option(value="P") Văn bản
+                                    option(value="H1") Tiêu đề 1
+                                    option(value="H2") Tiêu đề 2
+                                    option(value="H3") Tiêu đề 3
+                                    option(value="H4") Tiêu đề 4
+                                    option(value="BLOCKQUOTE") Trích dẫn
+                                    option(value="PRE") Đoạn mã
+                            div(class="wd-row")
+                                button(type="button", class="wd-style-btn", data-style="P", title="Kiểu thường") Văn bản
+                                button(type="button", class="wd-style-btn", data-style="H1", title="Tiêu đề 1") Tiêu đề 1
+                                button(type="button", class="wd-style-btn", data-style="H2", title="Tiêu đề 2") Tiêu đề 2
+                                button(type="button", class="wd-style-btn", data-style="BLOCKQUOTE", title="Trích dẫn") Trích dẫn
+                        div(class="wd-group-label") Kiểu
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="find", title="Tìm (Ctrl+F)")
+                                    i(data-lucide="search", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="replace", title="Thay thế (Ctrl+H)")
+                                    i(data-lucide="replace", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="selectAll", title="Chọn tất cả (Ctrl+A)")
+                                    i(data-lucide="mouse-pointer-square", class="w-4 h-4")
+                        div(class="wd-group-label") Chỉnh sửa
+                //- ---------------------------------------------------------- Chèn
+                div(class="wd-pane", data-pane="insert", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="cover", title="Trang bìa")
+                                i(data-lucide="book-cover", class="w-5 h-5")
+                                span Trang bìa
+                            button(type="button", class="wd-big", data-action="blank-page", title="Trang trống")
+                                i(data-lucide="file-plus", class="w-5 h-5")
+                                span Trang trống
+                            button(type="button", class="wd-big", id="wdPageBreak", title="Ngắt trang")
+                                i(data-lucide="file-minus-2", class="w-5 h-5")
+                                span Ngắt trang
+                        div(class="wd-group-label") Trang
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", id="wdTable", title="Chèn bảng")
+                                i(data-lucide="table", class="w-5 h-5")
+                                span Bảng
+                            button(type="button", class="wd-big", data-action="quick-table", title="Bảng nhanh 3×3")
+                                i(data-lucide="table-2", class="w-5 h-5")
+                                span Bảng nhanh
+                        div(class="wd-group-label") Bảng
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", id="wdImage", title="Chèn ảnh")
+                                i(data-lucide="image-plus", class="w-5 h-5")
+                                span Hình ảnh
+                            button(type="button", class="wd-big", id="wdShapeMenu", title="Hình khối — bấm để chọn hoặc kéo thả vào bất kỳ chỗ nào của trang")
+                                i(data-lucide="shapes", class="w-5 h-5")
+                                span Hình khối
+                            button(type="button", class="wd-big", data-action="icon", title="Chèn biểu tượng")
+                                i(data-lucide="smile", class="w-5 h-5")
+                                span Biểu tượng
+                        div(class="wd-group-label") Hình minh hoạ
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", id="wdLink", title="Chèn liên kết")
+                                    i(data-lucide="link-2", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="bookmark", title="Đánh dấu vị trí")
+                                    i(data-lucide="bookmark", class="w-4 h-4")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", id="wdRule", title="Đường kẻ ngang")
+                                    i(data-lucide="minus", class="w-4 h-4")
+                        div(class="wd-group-label") Liên kết
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="header", title="Đầu trang")
+                                    i(data-lucide="panel-top", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="footer", title="Chân trang")
+                                    i(data-lucide="panel-bottom", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="page-number", title="Số trang")
+                                    i(data-lucide="hash", class="w-4 h-4")
+                        div(class="wd-group-label") Đầu & chân trang
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="textbox", title="Hộp văn bản")
+                                    i(data-lucide="text-cursor-input", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="date", title="Ngày giờ")
+                                    i(data-lucide="calendar", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="symbol", title="Ký tự đặc biệt")
+                                    i(data-lucide="omega", class="w-4 h-4")
+                        div(class="wd-group-label") Văn bản
+                //- ---------------------------------------------------------- Bố trí
+                div(class="wd-pane", data-pane="layout", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                select(id="wdPageSize", class="wd-select", title="Khổ giấy")
+                                    option(value="A4") A4
+                                    option(value="Letter") Letter
+                                select(id="wdOrient", class="wd-select", title="Hướng giấy")
+                                    option(value="portrait") Dọc
+                                    option(value="landscape") Ngang
+                                select(id="wdMargin", class="wd-select", title="Lề")
+                                    option(value="normal") Lề thường
+                                    option(value="narrow") Lề hẹp
+                                    option(value="wide") Lề rộng
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="page-setup", title="Thiết lập trang")
+                                    i(data-lucide="settings-2", class="w-4 h-4")
+                                label(class="wd-color", title="Màu nền trang")
+                                    span ▤
+                                    input(type="color", id="wdPageColor", value="#ffffff")
+                        div(class="wd-group-label") Thiết lập trang
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="indent-left", title="Tăng lề trái")
+                                    i(data-lucide="arrow-right-to-line", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="indent-right", title="Giảm lề trái")
+                                    i(data-lucide="arrow-left-to-line", class="w-4 h-4")
+                                select(id="wdColumns", class="wd-select", title="Chia cột")
+                                    option(value="1") 1 cột
+                                    option(value="2") 2 cột
+                                    option(value="3") 3 cột
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="space-before", title="Tăng khoảng cách trên")
+                                    i(data-lucide="arrow-up-to-line", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="space-after", title="Tăng khoảng cách dưới")
+                                    i(data-lucide="arrow-down-to-line", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-cmd="indent", title="Thụt lề")
+                                    i(data-lucide="indent", class="w-4 h-4")
+                        div(class="wd-group-label") Đoạn văn
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="watermark", title="Hình chìm")
+                                    i(data-lucide="droplets", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="line-numbers", title="Số dòng")
+                                    i(data-lucide="list-ordered", class="w-4 h-4")
+                        div(class="wd-group-label") Nền trang
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="bring-front", title="Đưa lên trước")
+                                    i(data-lucide="bring-to-front", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="send-back", title="Đưa ra sau")
+                                    i(data-lucide="send-to-back", class="w-4 h-4")
+                        div(class="wd-group-label") Sắp xếp
+                //- ---------------------------------------------------------- Tham khảo
+                div(class="wd-pane", data-pane="references", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="toc", title="Chèn mục lục")
+                                i(data-lucide="list-tree", class="w-5 h-5")
+                                span Mục lục
+                            button(type="button", class="wd-big", data-action="toc-update", title="Cập nhật mục lục")
+                                i(data-lucide="refresh-cw", class="w-5 h-5")
+                                span Cập nhật
+                        div(class="wd-group-label") Mục lục
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="footnote", title="Chú thích cuối trang")
+                                    i(data-lucide="superscript", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="endnote", title="Chú thích cuối tài liệu")
+                                    i(data-lucide="file-text", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="next-footnote", title="Chú thích tiếp theo")
+                                    i(data-lucide="arrow-down", class="w-4 h-4")
+                        div(class="wd-group-label") Chú thích
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="citation", title="Trích dẫn nguồn")
+                                    i(data-lucide="quote", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="bibliography", title="Danh mục tài liệu tham khảo")
+                                    i(data-lucide="book-open", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="manage-sources", title="Quản lý nguồn")
+                                    i(data-lucide="library", class="w-4 h-4")
+                        div(class="wd-group-label") Trích dẫn
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="caption", title="Chú thích hình/bảng")
+                                    i(data-lucide="tag", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="cross-reference", title="Tham chiếu chéo")
+                                    i(data-lucide="link", class="w-4 h-4")
+                        div(class="wd-group-label") Chú thích ảnh
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="index-entry", title="Đánh dấu mục tra cứu")
+                                    i(data-lucide="book-marked", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="index", title="Chèn mục tra cứu")
+                                    i(data-lucide="list", class="w-4 h-4")
+                        div(class="wd-group-label") Chỉ mục
+                //- ---------------------------------------------------------- Xem lại
+                div(class="wd-pane", data-pane="review", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="spellcheck", title="Kiểm tra chính tả")
+                                i(data-lucide="spell-check", class="w-5 h-5")
+                                span Chính tả
+                            button(type="button", class="wd-big", data-action="word-count", title="Đếm từ")
+                                i(data-lucide="calculator", class="w-5 h-5")
+                                span Đếm từ
+                        div(class="wd-group-label") Kiểm tra
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="comment", title="Thêm nhận xét")
+                                    i(data-lucide="message-square-plus", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="delete-comment", title="Xoá nhận xét")
+                                    i(data-lucide="message-square-x", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="show-comments", title="Hiện/ẩn nhận xét")
+                                    i(data-lucide="messages-square", class="w-4 h-4")
+                        div(class="wd-group-label") Nhận xét
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="track-changes", title="Theo dõi thay đổi")
+                                    i(data-lucide="git-compare", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="accept-all", title="Chấp nhận tất cả")
+                                    i(data-lucide="check-check", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="reject-all", title="Từ chối tất cả")
+                                    i(data-lucide="undo-2", class="w-4 h-4")
+                        div(class="wd-group-label") Theo dõi
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="protect", title="Bảo vệ / mở khoá chỉnh sửa")
+                                    i(data-lucide="shield", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="compare", title="So sánh tài liệu")
+                                    i(data-lucide="files", class="w-4 h-4")
+                        div(class="wd-group-label") Bảo vệ
+                //- ---------------------------------------------------------- Xem
+                div(class="wd-pane", data-pane="view", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="read-mode", title="Chế độ đọc")
+                                i(data-lucide="book-open", class="w-5 h-5")
+                                span Đọc
+                            button(type="button", class="wd-big", data-action="print-layout", title="Bố cục in")
+                                i(data-lucide="layout-template", class="w-5 h-5")
+                                span Bố cục in
+                            button(type="button", class="wd-big", data-action="web-layout", title="Bố cục web")
+                                i(data-lucide="globe", class="w-5 h-5")
+                                span Bố cục web
+                        div(class="wd-group-label") Chế độ xem
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="ruler", title="Thước")
+                                    i(data-lucide="ruler", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="gridlines", title="Đường lưới")
+                                    i(data-lucide="grid-3x3", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="navigation", title="Khung dẫn hướng")
+                                    i(data-lucide="panel-left", class="w-4 h-4")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="dark", title="Chế độ tối")
+                                    i(data-lucide="moon", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="separate-pages", title="Các trang riêng biệt")
+                                    i(data-lucide="columns-2", class="w-4 h-4")
+                        div(class="wd-group-label") Hiển thị
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-action="zoom-out", title="Thu nhỏ")
+                                    i(data-lucide="zoom-out", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="zoom-in", title="Phóng to")
+                                    i(data-lucide="zoom-in", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-action="zoom-100", title="100%") 100%
+                                button(type="button", class="wd-ic", data-action="fit-page", title="Vừa trang")
+                                    i(data-lucide="maximize", class="w-4 h-4")
+                        div(class="wd-group-label") Thu phóng
+                //- ---------------------------------------------------------- Trợ giúp
+                div(class="wd-pane", data-pane="help", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="help", title="Trợ giúp")
+                                i(data-lucide="circle-help", class="w-5 h-5")
+                                span Trợ giúp
+                            button(type="button", class="wd-big", data-action="shortcuts", title="Phím tắt")
+                                i(data-lucide="keyboard", class="w-5 h-5")
+                                span Phím tắt
+                        div(class="wd-group-label") Trợ giúp
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="contact", title="Liên hệ")
+                                i(data-lucide="mail", class="w-5 h-5")
+                                span Liên hệ
+                            button(type="button", class="wd-big", data-action="feedback", title="Gửi phản hồi")
+                                i(data-lucide="message-circle", class="w-5 h-5")
+                                span Phản hồi
+                        div(class="wd-group-label") Hỗ trợ
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-action="about", title="Giới thiệu")
+                                i(data-lucide="info", class="w-5 h-5")
+                                span Giới thiệu
+                        div(class="wd-group-label") Thông tin
+                //- ---------------------------------------------------------- Định dạng hình (thẻ ngữ cảnh, hiện khi chọn một hình khối)
+                div(class="wd-pane", data-pane="shape", role="tabpanel")
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-shp-gallery", data-shape-gallery="pane")
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-shape-insert="textbox", draggable="true", title="Hộp văn bản (kéo thả vào trang)")
+                                    i(data-lucide="text-cursor-input", class="w-4 h-4")
+                                select(class="wd-select", data-shape-ctl="kind", title="Đổi kiểu hình đang chọn")
+                                    option(value="") Đổi kiểu hình…
+                                    option(value="rect") Chữ nhật
+                                    option(value="round") Bo góc
+                                    option(value="ellipse") Elip
+                                    option(value="triangle") Tam giác
+                                    option(value="diamond") Hình thoi
+                                    option(value="hexagon") Lục giác
+                                    option(value="arrow") Mũi tên
+                                    option(value="star") Ngôi sao
+                                    option(value="plus") Dấu cộng
+                                    option(value="line") Đường thẳng
+                        div(class="wd-group-label") Chèn hình khối
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-shp-styles", data-shape-styles="1")
+                            div(class="wd-row")
+                                label(class="wd-shp-lbl", title="Màu tô") Tô
+                                    input(type="color", class="wd-shp-color", data-shape-ctl="fill", value="#ffffff")
+                                label(class="wd-shp-lbl", title="Màu viền") Viền
+                                    input(type="color", class="wd-shp-color", data-shape-ctl="line", value="#475569")
+                                select(class="wd-select wd-shp-w", data-shape-ctl="lineWidth", title="Độ dày viền")
+                                    each w in [0, 1, 2, 3, 4, 6, 8]
+                                        option(value=w)= w + ' px'
+                                button(type="button", class="wd-ic", data-shape-act="nofill", title="Không tô màu") ∅
+                                button(type="button", class="wd-ic", data-shape-act="shadow", title="Đổ bóng")
+                                    i(data-lucide="layers", class="w-4 h-4")
+                        div(class="wd-group-label") Kiểu hình
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                label(class="wd-shp-lbl", title="Màu chữ") Chữ
+                                    input(type="color", class="wd-shp-color", data-shape-ctl="textColor", value="#0f172a")
+                                select(class="wd-select wd-shp-w", data-shape-ctl="fontSize", title="Cỡ chữ")
+                                    each z in [10, 12, 14, 16, 18, 20, 24, 28, 36, 48]
+                                        option(value=z, selected=(z === 16))= z
+                                button(type="button", class="wd-ic wd-strong", data-shape-act="bold", title="Đậm") B
+                            div(class="wd-row")
+                                select(class="wd-select", data-shape-ctl="hAlign", title="Căn ngang")
+                                    option(value="center") Giữa
+                                    option(value="left") Trái
+                                    option(value="right") Phải
+                                select(class="wd-select", data-shape-ctl="vAlign", title="Căn dọc")
+                                    option(value="center") Giữa dọc
+                                    option(value="flex-start") Trên
+                                    option(value="flex-end") Dưới
+                        div(class="wd-group-label") Văn bản
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                select(class="wd-select", data-shape-ctl="position", title="Vị trí trên trang")
+                                    option(value="") Vị trí…
+                                    option(value="tl") Trên trái
+                                    option(value="tc") Trên giữa
+                                    option(value="tr") Trên phải
+                                    option(value="ml") Giữa trái
+                                    option(value="mc") Giữa trang
+                                    option(value="mr") Giữa phải
+                                    option(value="bl") Dưới trái
+                                    option(value="bc") Dưới giữa
+                                    option(value="br") Dưới phải
+                                select(class="wd-select", data-shape-ctl="wrap", title="Ngắt dòng văn bản")
+                                    option(value="front") Trước văn bản
+                                    option(value="behind") Sau văn bản
+                                    option(value="inline") Cùng dòng với văn bản
+                            div(class="wd-row")
+                                button(type="button", class="wd-ic", data-shape-act="forward", title="Đưa lên một lớp")
+                                    i(data-lucide="bring-to-front", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-shape-act="backward", title="Lùi xuống một lớp")
+                                    i(data-lucide="send-to-back", class="w-4 h-4")
+                                select(class="wd-select", data-shape-ctl="align", title="Căn lề so với trang")
+                                    option(value="") Căn…
+                                    option(value="left") Căn trái
+                                    option(value="center") Căn giữa
+                                    option(value="right") Căn phải
+                                    option(value="top") Căn trên
+                                    option(value="middle") Giữa dọc
+                                    option(value="bottom") Căn dưới
+                                button(type="button", class="wd-ic", data-shape-act="rotl", title="Xoay trái 90°")
+                                    i(data-lucide="rotate-ccw", class="w-4 h-4")
+                                button(type="button", class="wd-ic", data-shape-act="rotr", title="Xoay phải 90°")
+                                    i(data-lucide="rotate-cw", class="w-4 h-4")
+                        div(class="wd-group-label") Sắp xếp
+                    div(class="wd-group")
+                        div(class="wd-group-body")
+                            div(class="wd-row")
+                                label(class="wd-shp-lbl", title="Chiều cao (cm)") Cao
+                                    input(type="number", class="wd-shp-num", data-shape-ctl="hCm", min="0", max="60", step="0.1")
+                            div(class="wd-row")
+                                label(class="wd-shp-lbl", title="Chiều rộng (cm)") Rộng
+                                    input(type="number", class="wd-shp-num", data-shape-ctl="wCm", min="0.3", max="60", step="0.1")
+                        div(class="wd-group-label") Kích thước
+                    div(class="wd-group")
+                        div(class="wd-group-body wd-row")
+                            button(type="button", class="wd-big", data-shape-act="duplicate", title="Nhân bản hình")
+                                i(data-lucide="copy-plus", class="w-5 h-5")
+                                span Nhân bản
+                            button(type="button", class="wd-big", data-shape-act="alt", title="Văn bản thay thế (trợ năng)")
+                                i(data-lucide="accessibility", class="w-5 h-5")
+                                span Văn bản thay thế
+                            button(type="button", class="wd-big", data-shape-act="delete", title="Xoá hình (Delete)")
+                                i(data-lucide="trash-2", class="w-5 h-5")
+                                span Xoá hình
+                        div(class="wd-group-label") Thao tác
         div(class="wd-canvas", id="wdCanvas")
             div(class="wd-page", id="wdPage")
                 div(class="wd-content", id="wdBody", contenteditable="true", spellcheck="true", role="textbox", aria-multiline="true")
@@ -145,4 +596,5 @@ block content
     script#payload(type="application/json")!= payloadJson
     script.
         (function(){ var p=document.getElementById('payload'); var d=JSON.parse(p.textContent); var b=document.getElementById('wdBack'); if(b&&d.backUrl) b.href=d.backUrl; })();
+    script(src="/js/wordShapes.js")
     script(src="/js/wordEditor.js")

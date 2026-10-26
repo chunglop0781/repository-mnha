@@ -35,8 +35,15 @@ const LANGS = {
         description: 'Soạn tài liệu như Word, tải lên .docx để tự chuyển thành bản soạn thảo đẹp; tải về lại thành .docx thật. HTML của tài liệu được mã hoá khi lưu.',
         root: 'file-word',                 // lưu tại {user_id}/file-word/... (không phải {user_id}/codes/word)
         runExt: 'docx', exts: ['docx'], editorMode: 'word',
-        maxFileBytes: 80 * 1024 * 1024,    // .docx tải lên: 80MB (GitHub 100MB/file; Vercel 60s cho bước chuyển đổi)
-        maxHtmlBytes: 40 * 1024 * 1024,    // HTML sau khi chuyển: 40MB (gửi/nhận theo từng phần ≤ 3.2MB)
+        // .docx tải lên: 200MB. File được gửi theo từng phần ≤ 3.2MB nên không chạm giới hạn 4.5MB của Vercel.
+        maxFileBytes: 200 * 1024 * 1024,
+        // HTML sau khi chuyển. Tài liệu lớn KHÔNG bị giảm chất lượng: HTML được cắt theo trang/khối và MÃ HOÁ TỪNG TRANG.
+        maxHtmlBytes: 256 * 1024 * 1024,
+        // Khi HTML lớn hơn ngưỡng này, mỗi trang là một file mã hoá riêng (tránh file GitHub > 100MB và giữ bộ nhớ thấp).
+        pageStoreBytes: (Number(process.env.WORD_PAGE_STORE_BYTES) > 0 ? Number(process.env.WORD_PAGE_STORE_BYTES) : 80 * 1024 * 1024),
+        pageChunkBytes: (Number(process.env.WORD_PAGE_CHUNK_BYTES) > 0 ? Number(process.env.WORD_PAGE_CHUNK_BYTES) : 4 * 1024 * 1024),
+        // Mỗi file .docx tải về ≤ ngưỡng này; vượt thì tách thành <tên>-1.docx, <tên>-2.docx… (không nén/giảm ảnh).
+        docxPartBytes: (Number(process.env.WORD_DOCX_PART_BYTES) > 0 ? Number(process.env.WORD_DOCX_PART_BYTES) : 48 * 1024 * 1024),
         manifest: 'mnha-word.json',        // tiêu đề / khổ giấy / công khai — KHÔNG chứa nội dung
         template: '<p><br></p>'
     }

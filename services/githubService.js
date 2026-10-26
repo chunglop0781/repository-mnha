@@ -19,28 +19,52 @@ const {
     randomJsonName
 } = require('../config/github');
 
-const MAX_RETRY = 3;
+const MAX_RETRY = 4;
 const BASE_DELAY = 500;
+const RETRY_BUDGET_MS = Number(process.env.GITHUB_RETRY_BUDGET_MS) || 45 * 1000;   // Vercel maxDuration 60s → đừng thử lại quá lâu
 
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
+const NET_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'ECONNABORTED',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_CLOSED']);
+const NET_MESSAGE_RE = /terminated|fetch failed|socket hang up|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|aborted|timed? ?out|other side closed|premature close/i;
+
 /**
- * Retry khi gặp 409 (SHA conflict) hoặc 5xx.
+ * Lỗi "thử lại có ích": GitHub 5xx/429/408, hết hạn mức tạm thời, hoặc rớt mạng giữa chừng.
+ * Octokit gói lỗi mạng (vd undici "terminated") thành RequestError status 500 nhưng có `cause`.
+ */
+function isTransient(e) {
+    if (!e) return false;
+    const status = Number(e.status || e.response?.status) || 0;
+    if (status === 404 || status === 401 || status === 422 || status === 413) return false;
+    if (status >= 500 && status < 600) return true;
+    if (status === 429 || status === 408) return true;
+    if (status === 403 && /rate limit|abuse|secondary|temporarily/i.test(String(e.message))) return true;
+    const code = (e.cause && (e.cause.code || e.cause.errno)) || (e.name !== 'HttpError' ? e.code : undefined);
+    if (code && NET_CODES.has(code)) return true;
+    if (!status && NET_MESSAGE_RE.test(String(e.message || ''))) return true;
+    return false;
+}
+
+/**
+ * Retry khi gặp 409 (SHA conflict), 5xx hoặc lỗi mạng. 404 là kết quả bình thường (file chưa có) → không ồn ào.
  */
 async function withRetry(fn, label = 'github') {
     let lastErr = null;
+    const t0 = Date.now();
     for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
         try {
             return await fn();
         } catch (e) {
             lastErr = e;
             const status = e.status || e.response?.status;
-            const retriable = status === 409 || (status >= 500 && status < 600);
-            console.warn(`⚠️ [${label}] attempt ${attempt} fail: ${e.message} (status=${status})`);
-            if (!retriable || attempt === MAX_RETRY) throw e;
-            await sleep(BASE_DELAY * Math.pow(2, attempt - 1));
+            const retriable = status === 409 || isTransient(e);
+            if (status !== 404) console.warn(`⚠️ [${label}] attempt ${attempt} fail: ${e.message} (status=${status})`);
+            const wait = BASE_DELAY * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 200);
+            if (!retriable || attempt === MAX_RETRY || Date.now() - t0 + wait > RETRY_BUDGET_MS) throw e;
+            await sleep(wait);
         }
     }
     throw lastErr;
@@ -52,6 +76,10 @@ async function withRetry(fn, label = 'github') {
 // (services/connect/mediaRepo.js) mà KHÔNG đụng tới client mặc định.
 // ---------------------------------------------------------------------------
 function buildClient({ octokit, owner, repo, branch, isConfigured }) {
+
+// Mọi thao tác ĐỌC đều thử lại khi rớt mạng ("terminated"…); 404 ném ra ngay để nơi gọi đổi thành null.
+const getContent = (path) => withRetry(() => octokit.repos.getContent({ owner, repo, path, ref: branch }), 'get:' + path);
+const getBlob = (sha) => withRetry(() => octokit.git.getBlob({ owner, repo, file_sha: sha }), 'blob:' + String(sha).slice(0, 8));
 
 /**
  * Đảm bảo các env cần thiết đã cấu hình.
@@ -71,7 +99,7 @@ function assertConfigured() {
 async function decodeContent(data, path) {
     if (data.content) return Buffer.from(data.content, 'base64').toString('utf8');
     if (data.sha) {
-        const blob = await octokit.git.getBlob({ owner, repo, file_sha: data.sha });
+        const blob = await getBlob(data.sha);
         return Buffer.from(blob.data.content, 'base64').toString('utf8');
     }
     throw new Error(`Không đọc được nội dung file: ${path}`);
@@ -156,9 +184,7 @@ async function uniqueJsonPath(dir, { timestamp = false } = {}) {
 async function getFileSha(path) {
     assertConfigured();
     try {
-        const res = await octokit.repos.getContent({
-            owner, repo, path, ref: branch
-        });
+        const res = await getContent(path);
         if (Array.isArray(res.data)) return null;
         return res.data.sha;
     } catch (e) {
@@ -211,9 +237,7 @@ async function readJsonFile(path) {
     assertConfigured();
 
     try {
-        const res = await octokit.repos.getContent({
-            owner, repo, path, ref: branch
-        });
+        const res = await getContent(path);
         if (Array.isArray(res.data)) {
             throw new Error(`Path không phải file: ${path}`);
         }
@@ -236,9 +260,7 @@ async function readJsonFileWithSha(path) {
     assertConfigured();
 
     try {
-        const res = await octokit.repos.getContent({
-            owner, repo, path, ref: branch
-        });
+        const res = await getContent(path);
         if (Array.isArray(res.data)) {
             throw new Error(`Path không phải file: ${path}`);
         }
@@ -397,9 +419,7 @@ async function readBinaryFile(path) {
     assertConfigured();
 
     try {
-        const res = await octokit.repos.getContent({
-            owner, repo, path, ref: branch
-        });
+        const res = await getContent(path);
         if (Array.isArray(res.data)) {
             throw new Error(`Path không phải file: ${path}`);
         }
@@ -425,16 +445,14 @@ async function readBinaryFileLarge(path) {
     assertConfigured();
 
     try {
-        const res = await octokit.repos.getContent({
-            owner, repo, path, ref: branch
-        });
+        const res = await getContent(path);
         if (Array.isArray(res.data)) {
             throw new Error(`Path không phải file: ${path}`);
         }
         if (res.data.content) { const b = Buffer.from(res.data.content, 'base64'); noteOrigin({ in: b.length }); return b; }
         if (res.data.size === 0) return Buffer.alloc(0);
         if (!res.data.sha) throw new Error(`Không đọc được nội dung file: ${path}`);
-        const blob = await octokit.git.getBlob({ owner, repo, file_sha: res.data.sha });
+        const blob = await getBlob(res.data.sha);
         const b = Buffer.from(blob.data.content, 'base64');
         noteOrigin({ in: b.length });
         return b;
@@ -463,7 +481,7 @@ async function createBlob(buffer) {
 async function getBlobBuffer(sha) {
     assertConfigured();
     try {
-        const res = await octokit.git.getBlob({ owner, repo, file_sha: sha });
+        const res = await getBlob(sha);
         const b = Buffer.from(res.data.content, 'base64');
         noteOrigin({ in: b.length });
         return b;
@@ -659,9 +677,28 @@ function lessonPath(subjectSlug, lessonSlug) {
     return lessonFile(subjectSlug, lessonSlug);
 }
 
+// ---------------------------------------------------------------------------
+// NHIỀU repo dữ liệu (services/githubPool.js): repo chính ≥ 200MB → tự tạo <GITHUB_REPO>-1, -2…
+// Facade có cùng giao diện với client mặc định: đọc gộp mọi repo, ghi file mới vào repo đang dùng.
+// GITHUB_REPO_POOL=off hoặc chưa cấu hình GitHub → dùng thẳng client mặc định như trước.
+// ---------------------------------------------------------------------------
+const pool = require('./githubPool').createPool({
+    env: process.env,
+    base: () => client,
+    createClient: (opt) => createClient(opt)
+});
+const pooled = Boolean(isConfigured) && pool.enabled();
+
 module.exports = {
     // Toàn bộ client mặc định (giữ tương thích code cũ)
     ...client,
+    // Có pool → mọi thao tác đi qua facade (đọc gộp / ghi vào repo đang dùng)
+    ...(pooled ? pool.facade() : {}),
+
+    // Client của repo CHÍNH (không qua pool) + bộ quản lý nhóm repo (webhook, dung lượng, trang /connect)
+    base: client,
+    pool,
+    pooled,
 
     // Path helpers
     submissionPath,
@@ -669,5 +706,9 @@ module.exports = {
     lessonPath,
 
     // Tạo client cho repo khác (media xoay vòng)
-    createClient
+    createClient,
+
+    // Dùng cho test + githubSessionStore
+    isTransient,
+    withRetry
 };

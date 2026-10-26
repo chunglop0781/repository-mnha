@@ -4,6 +4,7 @@
 const { writeZip } = require('./zip');
 const { parseHtml } = require('./htmlSanitize');
 const { escapeText } = require('./xml');
+const { mathmlToOmml } = require('./omml');
 const { LANGS } = require('../../config/codeConfig');
 
 const PX_PER_PT = 96 / 72;
@@ -20,7 +21,9 @@ const COLORS = {
 const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'blockquote', 'pre', 'hr']);
 const HEADING_OF = { h1: 'Heading1', h2: 'Heading2', h3: 'Heading3', h4: 'Heading4', h5: 'Heading5', h6: 'Heading6' };
 
-const esc = (s) => escapeText(String(s == null ? '' : s)).replace(/"/g, '&quot;');
+// Ký tự điều khiển (\u0000-\u0008, \u000b, \u000c, \u000e-\u001f, \ufffe, \uffff) KHÔNG hợp lệ trong XML 1.0 → Word từ chối mở cả file. Bỏ trước khi ghi.
+const XML_BAD = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g;
+const esc = (s) => escapeText(String(s == null ? '' : s).replace(XML_BAD, '')).replace(/"/g, '&quot;');
 
 function cssStyle(node) {
     const out = {};
@@ -108,15 +111,16 @@ function imageSize(buf) {
 }
 
 function runPropsXml(p) {
+    // Thứ tự theo schema CT_RPr: rFonts, b, bCs, i, iCs, strike, color, sz, szCs, u, shd, vertAlign (Word kén thứ tự)
     const out = [];
+    if (p.font) out.push(`<w:rFonts w:ascii="${esc(p.font)}" w:hAnsi="${esc(p.font)}" w:cs="${esc(p.font)}"/>`);
     if (p.bold) out.push('<w:b/><w:bCs/>');
     if (p.italic) out.push('<w:i/><w:iCs/>');
-    if (p.underline) out.push('<w:u w:val="single"/>');
     if (p.strike) out.push('<w:strike/>');
     if (p.color) out.push(`<w:color w:val="${p.color}"/>`);
-    if (p.fill) out.push(`<w:shd w:val="clear" w:color="auto" w:fill="${p.fill}"/>`);
-    if (p.font) out.push(`<w:rFonts w:ascii="${esc(p.font)}" w:hAnsi="${esc(p.font)}" w:cs="${esc(p.font)}"/>`);
     if (p.sizePt) out.push(`<w:sz w:val="${Math.round(p.sizePt * 2)}"/><w:szCs w:val="${Math.round(p.sizePt * 2)}"/>`);
+    if (p.underline) out.push('<w:u w:val="single"/>');
+    if (p.fill) out.push(`<w:shd w:val="clear" w:color="auto" w:fill="${p.fill}"/>`);
     if (p.vertAlign) out.push(`<w:vertAlign w:val="${p.vertAlign}"/>`);
     return out.length ? `<w:rPr>${out.join('')}</w:rPr>` : '';
 }
@@ -168,8 +172,17 @@ function collectRuns(node, props, ctx, out, pre) {
     const tag = node.tag;
     if (tag === 'br') { out.push({ br: true, ...props }); return; }
     if (tag === 'img') { const img = imageRun(node, props, ctx); if (img) out.push(img); return; }
+    if (tag === 'math') {
+        try { out.push({ omml: mathmlToOmml(node).xml }); }
+        catch (_) { out.push({ text: (function t(n) { return n.text != null ? n.text : (n.children || []).map(t).join(''); })(node), ...props }); }
+        return;
+    }
     const style = cssStyle(node);
     let p = applyInline(tag, style, props);
+    const cls = String((node.attrs && node.attrs.class) || '');
+    if (/\bword-comment\b/.test(cls)) { p.fill = p.fill || 'FFF2CC'; p.color = p.color || 'C00000'; }
+    if (/\bword-citation\b/.test(cls)) { p.italic = true; p.color = p.color || '595959'; }
+    if (/\bword-caption\b/.test(cls)) { p.italic = true; p.color = p.color || '595959'; }
     if (tag === 'a' && node.attrs && node.attrs.href) p.href = node.attrs.href;
     const blockChild = (node.children || []).some((c) => c.text == null && BLOCK_TAGS.has(c.tag) && c.tag !== 'br' && c.tag !== 'img' && c.tag !== 'hr');
     if (blockChild && tag === 'div') return;
@@ -201,6 +214,7 @@ function imageRun(node, props, ctx) {
 }
 
 function runXml(run, ctx) {
+    if (run.omml) return run.omml;          // công thức: m:oMath / m:oMathPara nằm cùng cấp với w:r
     if (run.image) {
         const rel = run.image;
         const cx = run.wPx * EMU_PER_PX, cy = run.hPx * EMU_PER_PX;
@@ -222,22 +236,117 @@ function runXml(run, ctx) {
     return `<w:r>${rPr}${text}</w:r>`;
 }
 
+
+// ---------------------------------------------------------------- hình khối (DrawingML wps)
+const SHAPE_PRST = { rect: 'rect', round: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', hexagon: 'hexagon', arrow: 'rightArrow', star: 'star5', plus: 'mathPlus', line: 'line' };
+
+function borderOf(st, line) {
+    const src = line ? st['border-top'] : st.border;
+    let w = null, color = null;
+    if (src) {
+        const m = /(-?[\d.]+)px/.exec(src);
+        if (m) w = Number(m[1]);
+        const c = /(rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})/.exec(src);
+        if (c) color = colorHex(c[1]);
+        if (/\bnone\b/.test(src)) w = 0;
+    }
+    if (w == null && st['border-width']) w = toPx(String(st['border-width']).split(/\s+/)[0]);
+    if (!color && st['border-color']) color = colorHex(String(st['border-color']).replace(/\s*,\s*/g, ',').split(/\s+(?![^(]*\))/)[0]);
+    if (line) {
+        if (st['border-top-width']) w = toPx(st['border-top-width']);
+        if (st['border-top-color']) color = colorHex(st['border-top-color']) || color;
+    }
+    return { w: w == null ? 0 : w, color };
+}
+
+function shapeXml(node, ctx) {
+    const a = node.attrs || {};
+    const st = cssStyle(node);
+    const kind = SHAPE_PRST[a['data-shape']] ? a['data-shape'] : 'rect';
+    const isLine = kind === 'line';
+    const free = /absolute/i.test(st.position || '');
+    const wPx = Math.max(6, toPx(st.width) || 150);
+    const hPx = isLine ? 0 : Math.max(6, toPx(st.height) || 90);
+    const cx = Math.round(wPx * EMU_PER_PX), cy = Math.round(hPx * EMU_PER_PX);
+    const rm = /rotate\((-?[\d.]+)deg\)/.exec(st.transform || '');
+    const rot = rm ? Math.round((((Number(rm[1]) % 360) + 360) % 360) * 60000) : 0;
+    const z = parseInt(st['z-index'], 10) || 1;
+    const fill = isLine ? null : colorHex(st['background-color']);
+    const bd = borderOf(st, isLine);
+    const lnXml = bd.w > 0 && bd.color
+        ? `<a:ln w="${Math.round(bd.w * EMU_PER_PX)}"><a:solidFill><a:srgbClr val="${bd.color}"/></a:solidFill></a:ln>`
+        : '<a:ln><a:noFill/></a:ln>';
+    const fillXml = fill ? `<a:solidFill><a:srgbClr val="${fill}"/></a:solidFill>` : '<a:noFill/>';
+    const ta = String(st['text-align'] || 'center').toLowerCase();
+    const jc = ta === 'right' || ta === 'end' ? 'right' : ta === 'left' || ta === 'start' ? 'left' : 'center';
+    const base = {};
+    const tc = colorHex(st.color); if (tc) base.color = tc;
+    base.sizePt = ptOf(st['font-size']) || 11.25;
+    if (/^(bold|[6-9]00)$/.test(String(st['font-weight'] || ''))) base.bold = true;
+    const paras = [];
+    let runs = [];
+    const flush = () => { paras.push(paragraphXml(runs, { align: jc, noAnchors: true }, ctx)); runs = []; };
+    if (!isLine) {
+        for (const c of node.children || []) {
+            if (c.text == null && (c.tag === 'div' || c.tag === 'p')) {
+                if (runs.length) flush();
+                for (const cc of c.children || []) collectRuns(cc, base, ctx, runs, false);
+                flush();
+            } else collectRuns(c, base, ctx, runs, false);
+        }
+    }
+    if (runs.length || !paras.length) flush();
+    const ai = String(st['align-items'] || 'center').toLowerCase();
+    const anchorV = ai === 'flex-start' ? 't' : ai === 'flex-end' ? 'b' : 'ctr';
+    const id = ctx.nextId();
+    const descr = a.title ? ` descr="${esc(String(a.title).slice(0, 300))}"` : '';
+    const wsp = '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">' +
+        '<wps:wsp><wps:cNvSpPr/>' +
+        `<wps:spPr><a:xfrm${rot ? ` rot="${rot}"` : ''}><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
+        `<a:prstGeom prst="${SHAPE_PRST[kind]}"><a:avLst/></a:prstGeom>${fillXml}${lnXml}</wps:spPr>` +
+        (isLine ? '' : `<wps:txbx><w:txbxContent>${paras.join('')}</w:txbxContent></wps:txbx>`) +
+        `<wps:bodyPr rot="0" vert="horz" wrap="square" lIns="91440" tIns="45720" rIns="91440" bIns="45720" anchor="${anchorV}" anchorCtr="0"><a:noAutofit/></wps:bodyPr>` +
+        '</wps:wsp></a:graphicData></a:graphic>';
+    if (!free) {
+        return '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">' +
+            `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>` +
+            `<wp:docPr id="${id}" name="Shape ${id}"${descr}/><wp:cNvGraphicFramePr/>${wsp}</wp:inline></w:drawing></w:r>`;
+    }
+    const left = Math.round((toPx(st.left) || 0) * EMU_PER_PX);
+    const oy = a['data-oy'] != null && a['data-oy'] !== '' && Number.isFinite(Number(a['data-oy'])) ? Number(a['data-oy']) : (toPx(st.top) || 0);
+    const top = Math.round(oy * EMU_PER_PX);
+    return `<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="${1000 + (z + 60) * 10}" behindDoc="${z < 0 ? 1 : 0}" locked="0" layoutInCell="1" allowOverlap="1">` +
+        '<wp:simplePos x="0" y="0"/>' +
+        `<wp:positionH relativeFrom="margin"><wp:posOffset>${left}</wp:posOffset></wp:positionH>` +
+        `<wp:positionV relativeFrom="paragraph"><wp:posOffset>${top}</wp:posOffset></wp:positionV>` +
+        `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>` +
+        `<wp:docPr id="${id}" name="Shape ${id}"${descr}/><wp:cNvGraphicFramePr/>${wsp}</wp:anchor></w:drawing></w:r>`;
+}
+// hình tự do được "neo" vào đoạn văn kế tiếp (không tạo dòng trống); nếu không còn đoạn nào thì dùng đoạn rất thấp
+function takeAnchors(ctx) { return ctx.pending.splice(0).join(''); }
+function flushAnchors(ctx, out) {
+    if (!ctx.pending.length) return;
+    out.push(`<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/></w:pPr>${takeAnchors(ctx)}</w:p>`);
+}
+
 function paragraphXml(runs, o, ctx) {
+    // Thứ tự theo schema CT_PPr: pStyle, keepNext, numPr, pBdr, shd, ind, jc
     const pPr = [];
     if (o.styleId) pPr.push(`<w:pStyle w:val="${esc(o.styleId)}"/>`);
-    if (o.numId) pPr.push(`<w:numPr><w:ilvl w:val="${o.ilvl || 0}"/><w:numId w:val="${o.numId}"/></w:numPr>`);
-    if (o.align) pPr.push(`<w:jc w:val="${o.align}"/>`);
-    if (o.indLeftPx) pPr.push(`<w:ind w:left="${Math.round(o.indLeftPx * TWIPS_PER_PX)}"${o.hangingPx ? ` w:hanging="${Math.round(o.hangingPx * TWIPS_PER_PX)}"` : ''}/>`);
-    if (o.fill) pPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${o.fill}"/>`);
-    if (o.border) pPr.push('<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="94A3B8"/></w:pBdr>');
     if (o.keepNext) pPr.push('<w:keepNext/>');
+    if (o.numId) pPr.push(`<w:numPr><w:ilvl w:val="${o.ilvl || 0}"/><w:numId w:val="${o.numId}"/></w:numPr>`);
+    if (o.border) pPr.push('<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="94A3B8"/></w:pBdr>');
+    if (o.fill) pPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${o.fill}"/>`);
+    if (o.indLeftPx) pPr.push(`<w:ind w:left="${Math.round(o.indLeftPx * TWIPS_PER_PX)}"${o.hangingPx ? ` w:hanging="${Math.round(o.hangingPx * TWIPS_PER_PX)}"` : ''}/>`);
+    if (o.align) pPr.push(`<w:jc w:val="${o.align}"/>`);
     const body = runs.map((r) => {
         const x = runXml(r, ctx);
         if (!x) return '';
         if (r.href) return `<w:hyperlink r:id="${ctx.addLink(r.href)}">${x}</w:hyperlink>`;
         return x;
     }).join('');
-    return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${body}</w:p>`;
+    const anchors = o.noAnchors || !ctx.pending ? '' : takeAnchors(ctx);
+    return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${anchors}${body}</w:p>`;
 }
 
 function listXml(node, ctx, level, out) {
@@ -339,7 +448,13 @@ function blocksOf(nodes, ctx, out, forceBold) {
         }
         const tag = n.tag;
         if (tag === 'ul' || tag === 'ol') { listXml(n, ctx, 0, out); continue; }
-        if (tag === 'table') { out.push(tableXml(n, ctx)); continue; }
+        if (tag === 'div' && /(?:^|\s)word-shape(?:\s|$)/.test(String((n.attrs && n.attrs.class) || ''))) {
+            const sx = shapeXml(n, ctx);
+            if (/<wp:anchor\b/.test(sx)) ctx.pending.push(sx);
+            else out.push(`<w:p>${sx}</w:p>`);
+            continue;
+        }
+        if (tag === 'table') { flushAnchors(ctx, out); out.push(tableXml(n, ctx)); continue; }
         if (tag === 'hr') {
             out.push(paragraphXml([{ br: true, page: true }], {}, ctx));
             continue;
@@ -449,7 +564,7 @@ function htmlToDocx(html, opt = {}) {
     page.marginsPx = Object.assign({ top: 96, right: 96, bottom: 96, left: 96 }, page.marginsPx || {});
     const ctx = {
         contentWidthPx: contentWidth(page),
-        media: [], rels: [], links: new Map(), ids: 0,
+        media: [], rels: [], links: new Map(), ids: 0, pending: [],
         addImage(buf, ext) {
             const n = this.media.length + 1;
             const name = `image${n}.${ext}`;
@@ -471,12 +586,13 @@ function htmlToDocx(html, opt = {}) {
     const root = parseHtml(html);
     const blocks = [];
     blocksOf(root.children, ctx, blocks);
+    flushAnchors(ctx, blocks);
     const wTw = Math.round((page.widthPx || 794) * TWIPS_PER_PX);
     const hTw = Math.round((page.heightPx || 1123) * TWIPS_PER_PX);
     const m = page.marginsPx;
     const sect = `<w:sectPr><w:pgSz w:w="${wTw}" w:h="${hTw}"/><w:pgMar w:top="${Math.round((m.top || 0) * TWIPS_PER_PX)}" w:right="${Math.round((m.right || 0) * TWIPS_PER_PX)}" w:bottom="${Math.round((m.bottom || 0) * TWIPS_PER_PX)}" w:left="${Math.round((m.left || 0) * TWIPS_PER_PX)}" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`;
     const documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">' +
         `<w:body>${blocks.join('') || '<w:p/>'}${sect}</w:body></w:document>`;
 
     const docRels = [

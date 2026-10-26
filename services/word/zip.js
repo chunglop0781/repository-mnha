@@ -5,7 +5,7 @@
 'use strict';
 const zlib = require('zlib');
 
-const MAX_TOTAL_UNCOMPRESSED = 160 * 1024 * 1024;     // chống zip-bomb
+const MAX_TOTAL_UNCOMPRESSED = 512 * 1024 * 1024;    // chống zip-bomb (đủ cho .docx 200MB có nhiều media)
 const MAX_ENTRIES = 4000;
 
 function fail(msg) { throw Object.assign(new Error(msg), { status: 400, code: 'BAD_DOCX' }); }
@@ -37,8 +37,12 @@ function findEocd(buf) {
     return -1;
 }
 
-/** Đọc ZIP trong bộ nhớ. File .docx hỏng/không phải ZIP → lỗi 400 BAD_DOCX. */
-function readZip(buf) {
+/**
+ * Đọc ZIP trong bộ nhớ. File .docx hỏng/không phải ZIP → lỗi 400 BAD_DOCX.
+ * opts.requireDocx === false → đọc ZIP thường (vd. gói nhiều phần .docx) không cần word/document.xml.
+ */
+function readZip(buf, opts) {
+    const requireDocx = !opts || opts.requireDocx !== false;
     if (!Buffer.isBuffer(buf) || buf.length < 22) fail('File Word không hợp lệ (không phải .docx).');
     const eocd = findEocd(buf);
     if (eocd < 0) fail('File Word không hợp lệ hoặc đã hỏng (không tìm thấy ZIP).');
@@ -73,7 +77,7 @@ function readZip(buf) {
         if (total > MAX_TOTAL_UNCOMPRESSED) fail('File Word giải nén quá lớn.');
         entries.set(name, { method, start, end, compSize, uncompSize });
     }
-    if (!entries.has('word/document.xml')) fail('File không phải tài liệu Word (.docx) hợp lệ (thiếu word/document.xml).');
+    if (requireDocx && !entries.has('word/document.xml')) fail('File không phải tài liệu Word (.docx) hợp lệ (thiếu word/document.xml).');
     const get = (name) => {
         const e = entries.get(String(name || '').replace(/^\/+/, ''));
         if (!e) return null;

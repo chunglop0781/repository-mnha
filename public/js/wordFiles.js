@@ -131,7 +131,7 @@
         var f = it.file, name = it.name, li = it.li, bar = li.querySelector('.bar>i'), msg = li.querySelector('.msg');
         var partSize = L.part || 3.2 * 1024 * 1024;
         var n = Math.max(1, Math.ceil(f.size / partSize));
-        if (n > 64) throw new Error('File quá nhiều phần (tối đa 64 phần × 3.2MB).');
+        if (n > (L.maxParts || 96)) throw new Error('File quá nhiều phần (tối đa ' + (L.maxParts || 96) + ' phần × 3.2MB).');
         var id = hexId(), parts = [];
         var i = 0;
         function next() {

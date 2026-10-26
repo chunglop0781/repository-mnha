@@ -1,8 +1,10 @@
 /* public/css/word-doc.css — nội dung tài liệu Word (dùng chung cho trình soạn và trang công khai) */
 .wd-content {
-    font-family: Calibri, Carlito, "Segoe UI", Arial, Helvetica, sans-serif;
-    font-size: 15px;
-    line-height: 1.55;
+    position: relative;      /* gốc toạ độ của hình khối đặt tự do */
+    z-index: 0;              /* tạo stacking context để hình "sau văn bản" (z-index âm) vẫn nằm trên nền trang */
+    font-family: Aptos, Calibri, Carlito, "Segoe UI", Arial, Helvetica, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
     color: #1f2937;
     overflow-wrap: break-word;
     word-break: break-word;
@@ -73,9 +75,89 @@
 .wd-content .word-table { border-collapse: collapse; }
 .wd-content .word-pagebreak { border: 0; border-top: 2px dashed #cbd5e1; }
 
+/* ---------- ribbon nâng cao: bình luận, mục lục, trích dẫn, đầu/chân trang ---------- */
+.wd-content .word-comment {
+    background: #fff2cc;
+    color: #9a3412;
+    border-bottom: 1px dotted #c2410c;
+    border-radius: 2px;
+    padding: 0 1px;
+    cursor: help;
+}
+.wd-content .word-footnote { color: #1d4ed8; font-weight: 600; }
+.wd-content .word-toc {
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 12px 16px;
+    margin: 12px 0 18px;
+}
+.wd-content .word-toc p { margin: 3px 0; }
+.wd-content .word-citation { color: #475569; font-style: italic; }
+.wd-content .word-caption { color: #595959; font-size: 13.5px; font-style: italic; text-align: center; margin: 4px 0 12px; }
+.wd-content .word-header, .wd-content .word-footer {
+    color: #64748b;
+    font-size: 12.5px;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 4px;
+    margin-bottom: 14px;
+}
+.wd-content .word-footer { border-bottom: 0; border-top: 1px solid #e2e8f0; padding-top: 4px; margin-top: 22px; margin-bottom: 0; text-align: center; }
+.wd-content .word-cover { text-align: center; padding: 70px 20px; }
+.wd-content .word-cover h1 { font-size: 34px; margin-bottom: 12px; }
+.wd-content .word-cover p { color: #64748b; font-size: 17px; }
+.wd-content .word-shape,
+.wd-shp-mini {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    min-height: 20px;
+    padding: 6px 10px;
+    border: 2px solid #475569;
+    border-radius: 6px;
+    background: #fff;
+    color: #0f172a;
+    font-size: 15px;
+    line-height: 1.25;
+    text-align: center;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    vertical-align: middle;
+}
+.wd-content .word-shape:not([style*="position"]) { display: inline-flex; width: 140px; height: 84px; }
+.wd-content .word-shape[style*="position"] { position: absolute; }
+.wd-content .word-shape > div, .wd-content .word-shape > p { margin: 0; width: 100%; }
+/* hình không phải hộp: tô bằng clip-path (viền được thay bằng màu nền) */
+.wd-content .word-shape[data-shape="rect"] { border-radius: 0; }
+.wd-content .word-shape[data-shape="round"], .wd-shp-mini[data-shape="round"] { border-radius: 14px; }
+.wd-content .word-shape[data-shape="ellipse"], .wd-shp-mini[data-shape="ellipse"] { border-radius: 50%; }
+.wd-content .word-shape[data-shape="line"] { padding: 0; min-height: 0; background: transparent; overflow: visible; border-radius: 0; border-left: 0; border-right: 0; border-bottom: 0; }
+.wd-content .word-shape[data-shape="triangle"], .wd-shp-mini[data-shape="triangle"] { clip-path: polygon(50% 0, 100% 100%, 0 100%); padding-top: 38%; border-radius: 0; }
+.wd-content .word-shape[data-shape="diamond"], .wd-shp-mini[data-shape="diamond"] { clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); border-radius: 0; }
+.wd-content .word-shape[data-shape="hexagon"], .wd-shp-mini[data-shape="hexagon"] { clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%); border-radius: 0; }
+.wd-content .word-shape[data-shape="arrow"], .wd-shp-mini[data-shape="arrow"] { clip-path: polygon(0 25%, 60% 25%, 60% 0, 100% 50%, 60% 100%, 60% 75%, 0 75%); border-radius: 0; padding-right: 22%; }
+.wd-content .word-shape[data-shape="star"], .wd-shp-mini[data-shape="star"] { clip-path: polygon(50% 0, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); border-radius: 0; }
+.wd-content .word-shape[data-shape="plus"], .wd-shp-mini[data-shape="plus"] { clip-path: polygon(35% 0, 65% 0, 65% 35%, 100% 35%, 100% 65%, 65% 65%, 65% 100%, 35% 100%, 35% 65%, 0 65%, 0 35%, 35% 35%); border-radius: 0; }
+.wd-content .word-bookmark { display: inline-block; width: 0; height: 0; overflow: hidden; }
+
+/* công thức Word (MathML) + hộp văn bản */
+.wd-content math { font-size: 1.12em; font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", "Noto Sans Math", serif; }
+.wd-content math[display="block"] { display: block math; margin: 8px 0; text-align: center; }
+.wd-content math mtd { padding: 0 .55em; }
+.wd-content .word-textbox { border: 1px dashed #94a3b8; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: rgba(248, 250, 252, .6); }
+.wd-content .word-textbox p { margin: 0 0 6px; }
+
 @media print {
     .wd-content { font-size: 11pt; color: #000; }
     .wd-content h1, .wd-content h2, .wd-content h3 { color: #1f3864; }
     .wd-content a { color: #1d4ed8; }
     .wd-content hr.word-pagebreak { visibility: hidden; border: 0; margin: 0; page-break-after: always; }
+    .wd-content .word-textbox { border: 0; background: transparent; padding: 0; }
+    .wd-content .word-shape { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* hình cắt bằng clip-path: viền bị cắt thành các vạch lẻ → bỏ viền, hình chỉ có màu tô */
+.wd-content .word-shape[data-shape="triangle"], .wd-content .word-shape[data-shape="diamond"], .wd-content .word-shape[data-shape="hexagon"],
+.wd-content .word-shape[data-shape="arrow"], .wd-content .word-shape[data-shape="star"], .wd-content .word-shape[data-shape="plus"] { border-width: 0 !important; }

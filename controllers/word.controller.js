@@ -62,7 +62,7 @@ exports.files = wrap(async (req, res) => {
     }));
     const payload = {
         dir: data.dir,
-        limits: { maxFile: LANG.maxFileBytes, maxHtml: LANG.maxHtmlBytes, part: store.PART_MAX },
+        limits: { maxFile: LANG.maxFileBytes, maxHtml: LANG.maxHtmlBytes, part: store.PART_MAX, maxParts: store.PART_MAX_PARTS },
         docs,
         urls: { create: '/code/word/file', del: '/code/word/delete', rename: '/code/word/rename-file', visibility: '/code/word/visibility', uploadPart: '/code/word/upload/part', uploadFinish: '/code/word/upload/finish' }
     };
@@ -168,7 +168,8 @@ exports.uploadFinish = wrap(async (req, res) => {
 exports.download = wrap(async (req, res) => {
     const out = await store.toDocx(uidOf(req), req.query.dir || '', req.query.file);
     if (!out) throw httpErr('Không tìm thấy tài liệu', 404);
-    sendDocx(res, out.buffer, out.meta.name);
+    if (out.multi) sendZip(res, out.buffer, out.zipName);
+    else sendDocx(res, out.buffer, out.meta.name);
 });
 
 // ---------------------------------------------------------------- công khai (không đăng nhập)
@@ -221,7 +222,8 @@ exports.publicDownload = wrap(async (req, res) => {
     if (!st || !st.public) return notFoundPage(res);
     const out = await store.toDocx(uid, dir, name);
     if (!out) return notFoundPage(res);
-    sendDocx(res, out.buffer, out.meta.name);
+    if (out.multi) sendZip(res, out.buffer, out.zipName);
+    else sendDocx(res, out.buffer, out.meta.name);
 });
 
 // ---------------------------------------------------------------- phụ trợ
@@ -230,6 +232,23 @@ function sendDocx(res, buf, name) {
     const ascii = safe.replace(/[^\x20-\x7E]/g, '_');
     res.status(200).set({
         'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`,
+        'Cache-Control': 'no-store',
+        'Content-Length': String(buf.length)
+    });
+    const write = (o) => {
+        if (o >= buf.length) return res.end();
+        if (res.write(buf.subarray(o, o + 256 * 1024)) === false) res.once('drain', () => write(o + 256 * 1024));
+        else write(o + 256 * 1024);
+    };
+    write(0);
+}
+/** Tài liệu lớn: nhiều .docx đặt trong 1 file ZIP (ten-1.docx, ten-2.docx…). */
+function sendZip(res, buf, name) {
+    const safe = String(name || 'tai-lieu.zip').replace(/["\\\r\n]/g, '_');
+    const ascii = safe.replace(/[^\x20-\x7E]/g, '_');
+    res.status(200).set({
+        'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`,
         'Cache-Control': 'no-store',
         'Content-Length': String(buf.length)
@@ -271,7 +290,8 @@ function publicDocument(doc) {
         `<title>${title}</title><link rel="stylesheet" href="/css/word-doc.css"><style>` +
         `html,body{margin:0;background:#e2e8f0}body{padding:22px 10px}` +
         `.wd-doc{width:${w}px;min-height:${h}px;margin:0 auto;background:#fff;box-sizing:border-box;padding:${m.top}px ${m.right}px ${m.bottom}px ${m.left}px;box-shadow:0 12px 34px rgba(15,23,42,.18);border-radius:2px}` +
-        `@media(max-width:900px){.wd-doc{width:100%;min-height:0;padding:28px 22px}}` +
+        `.wd-doc>.wd-content{min-height:${Math.max(120, h - m.top - m.bottom)}px}` +
+        `@media(max-width:900px){.wd-doc{width:100%;min-height:0;padding:28px 22px}.wd-doc>.wd-content{min-height:0}}` +
         `@media print{html,body{background:#fff}body{padding:0}.wd-doc{width:auto;min-height:0;box-shadow:none;border-radius:0;padding:0}}` +
-        `</style></head><body><div class="wd-doc wd-content">${doc.html}</div></body></html>`;
+        `</style></head><body><div class="wd-doc"><div class="wd-content">${doc.html}</div></div></body></html>`;
 }

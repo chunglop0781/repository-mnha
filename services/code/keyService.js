@@ -28,7 +28,8 @@ const sameCi = (a, b) => String(a || '').toLowerCase() === String(b || '').toLow
 /** Token 'web' trỏ đúng repo GitHub của app? (chỉ repo này mới có media mã hoá bằng khoá chủ của app) */
 function isAppRepo(payload, gh) {
     return !!(payload && payload.k === 'web' && payload.host === 'github' && Array.isArray(payload.base) && payload.base.length === 2
-        && gh && gh.owner && gh.repo && sameCi(payload.base[0], gh.owner) && sameCi(payload.base[1], gh.repo));
+        && gh && gh.owner && gh.repo && ((sameCi(payload.base[0], gh.owner) && sameCi(payload.base[1], gh.repo))
+            || (typeof gh.isPoolRepo === 'function' && gh.isPoolRepo(payload.base[0], payload.base[1]))));
 }
 
 /** Đường dẫn trong token → { ownerUid, viewerIsOwner, full[] } (full = đường dẫn đầy đủ trong repo) hoặc null nếu không được phép. */

@@ -51,5 +51,24 @@ const sess = (extra = {}) => ({ cookie: { originalMaxAge: 86400000, expires: new
     const s3 = mk(); const r = await s3.importSessions([c]); assert.deepStrictEqual(r, { added: 1, skipped: 0 });
     assert.deepStrictEqual(await s3.verify('MONGO-SID-1'), c.sess); assert.deepStrictEqual(await s3.importSessions([c]), { added: 0, skipped: 1 });
     const s4 = mk(); assert.strictEqual((await P(s4.get.bind(s4), 'MONGO-SID-1')).user.email, 'm@x.vn'); console.log('✓ chuyển từ Mongo → GitHub, đối chiếu khớp, chạy lại không nhân đôi');
+    // 10. GitHub rớt mạng ("terminated") → dùng bản index trong bộ nhớ, request KHÔNG bị 500
+    let fail = false; const flaky = { ...gh, readJsonFile: async (p) => { if (fail) { const e = new Error('terminated'); e.status = 500; throw e; } return gh.readJsonFile(p); } };
+    const s5 = new Store({ gh: flaky, flushMs: 5, cacheMs: 1, retryGapMs: 50 });
+    await P(s5.set.bind(s5), 'FLAKY', sess({ n: 42 }));
+    await new Promise((r) => setTimeout(r, 5)); fail = true;                       // cache hết hạn + GitHub lỗi
+    assert.strictEqual((await P(s5.get.bind(s5), 'FLAKY')).n, 42);
+    assert.strictEqual(await P(s5.get.bind(s5), 'khong-co-sid'), null);               // không có session cũng không văng lỗi
+    const s6 = new Store({ gh: flaky, flushMs: 5, cacheMs: 1 });                    // instance mới + GitHub lỗi + chưa có cache → lỗi thật (báo "GitHub đang gặp vấn đề")
+    await assert.rejects(P(s6.get.bind(s6), 'FLAKY'), /terminated/);
+    fail = false; assert.strictEqual((await P(s5.get.bind(s5), 'FLAKY')).n, 42);
+    console.log('✓ GitHub "terminated" → dùng bản đang có trong bộ nhớ, không 500');
+    // 11. withRetry nhận ra lỗi mạng (Octokit gói thành status 500 + cause) và thử lại
+    const ghs = require('../services/githubService');
+    const net = Object.assign(new Error('terminated'), { status: 500, cause: { code: 'UND_ERR_SOCKET' } });
+    assert(ghs.isTransient(net) && ghs.isTransient(new Error('fetch failed')) && !ghs.isTransient(Object.assign(new Error('Not Found'), { status: 404 })) && !ghs.isTransient(Object.assign(new Error('Bad'), { status: 422 })));
+    let tries = 0; const v = await ghs.withRetry(async () => { if (++tries < 3) throw net; return 'ok'; }, 'test');
+    assert.strictEqual(v, 'ok'); assert.strictEqual(tries, 3);
+    tries = 0; await assert.rejects(ghs.withRetry(async () => { tries++; throw Object.assign(new Error('Not Found'), { status: 404 }); }, 'test'), /Not Found/); assert.strictEqual(tries, 1);
+    console.log('✓ withRetry: rớt mạng → thử lại tới khi được; 404 → không thử lại');
     console.log('TẤT CẢ ĐẠT');
 })().catch((e) => { console.error('✗', e); process.exit(1); });

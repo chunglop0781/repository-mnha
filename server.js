@@ -41,6 +41,23 @@ app.get('/w', wordCtrl.publicView);
 app.get('/w/raw', wordCtrl.publicRaw);
 app.get('/w/media', wordCtrl.publicMedia);
 app.get('/w/download', wordCtrl.publicDownload);
+// Webhook GitHub (sự kiện push) → cập nhật DUNG LƯỢNG từng repo dữ liệu (services/githubPool.js). Cần body GỐC để kiểm tra chữ ký
+// HMAC (GITHUB_WEBHOOK_SECRET) nên gắn TRƯỚC express.json; dung lượng chỉ giữ trong RAM, không lưu JSON.
+app.post('/api/github/webhook', express.raw({ type: () => true, limit: '5mb' }), (req, res) => {
+    const gh = require('./services/githubService');
+    if (!gh.pool) return res.status(503).json({ ok: false, error: 'Chưa bật nhóm repo GitHub.' });
+    gh.pool.handleWebhook(req.body, req.headers)
+        .then((r) => res.json(r))
+        .catch((e) => res.status(e.status || 500).json({ ok: false, error: e.message }));
+});
+// Tự gắn webhook push cho mọi repo dữ liệu (1 lần, không chặn request) — địa chỉ lấy từ MAIN_URL hoặc từ request đầu tiên.
+app.use((req, res, next) => {
+    try {
+        const gh = require('./services/githubService');
+        if (gh.pool && gh.pooled) gh.pool.autoSetup({ origin: `${(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]}://${req.get('host')}` });
+    } catch (_) { /* không ảnh hưởng request */ }
+    next();
+});
 app.use(cookieParser());
 app.use(express.json({ limit: '4.4mb' }));      // html lưu tối đa 3MB (xem LANGS.html.maxFileBytes); Vercel chặn request > 4.5MB
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));

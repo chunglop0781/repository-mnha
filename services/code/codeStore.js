@@ -44,19 +44,26 @@ function filePath(uid, lang, dir, name, allowAssets = false) {
     return [root(uid, lang), ...segs, cleanFileName(lang, name, allowAssets)].join('/');
 }
 
+/** Repo (trong nhóm repo dữ liệu) đang chứa đường dẫn này — theo cây thư mục đã nạp; chưa biết thì repo chính. */
+function repoOfSync(p) {
+    try { if (gh.repoForSync) return gh.repoForSync(p); } catch (_) { /* dùng repo chính */ }
+    return { owner: ghCfg.owner, repo: ghCfg.repo, branch: ghCfg.branch };
+}
+
 /** Link trang GitHub (blob, KHÔNG phải raw) của 1 file code để chia sẻ: https://github.com/<owner>/<repo>/blob/<branch>/<đường dẫn>. Thiếu cấu hình → null. */
 function githubUrl(uid, lang, dir, name) {
     if (!ghCfg.owner || !ghCfg.repo) return null;
     const enc = (p) => String(p).split('/').map(encodeURIComponent).join('/');
-    return `https://github.com/${encodeURIComponent(ghCfg.owner)}/${encodeURIComponent(ghCfg.repo)}/blob/${enc(ghCfg.branch || 'main')}/${enc(filePath(uid, lang, dir, name))}`;
+    const fp = filePath(uid, lang, dir, name), r = repoOfSync(fp);
+    return `https://github.com/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.repo)}/blob/${enc(r.branch || 'main')}/${enc(fp)}`;
 }
 
 /** Link trang GitHub (tree) của 1 THƯ MỤC code để chia sẻ — như githubUrl nhưng cho thư mục (dir rỗng = codes/<lang>). */
 function githubFolderUrl(uid, lang, dir) {
     if (!ghCfg.owner || !ghCfg.repo) return null;
     const enc = (p) => String(p).split('/').map(encodeURIComponent).join('/');
-    const p = [root(uid, lang), ...cleanDir(dir)].join('/');
-    return `https://github.com/${encodeURIComponent(ghCfg.owner)}/${encodeURIComponent(ghCfg.repo)}/tree/${enc(ghCfg.branch || 'main')}/${enc(p)}`;
+    const p = [root(uid, lang), ...cleanDir(dir)].join('/'), r = repoOfSync(p + '/x');
+    return `https://github.com/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.repo)}/tree/${enc(r.branch || 'main')}/${enc(p)}`;
 }
 
 async function list(uid, lang, dir) {

@@ -13,14 +13,88 @@ const { convertDocx } = require('./docxToHtml');
 const { htmlToDocx } = require('./htmlToDocx');
 const { sanitizeHtml } = require('./htmlSanitize');
 const wi = require('./wordImages');
-const { readZip } = require('./zip');
+const { readZip, writeZip } = require('./zip');
 const store = require('../code/codeStore');
 
 const LANG = LANGS.word;
 const ROOT = LANG.root || 'file-word';
 const MANIFEST = LANG.manifest || 'mnha-word.json';
 const PART_MAX = 3.2 * 1024 * 1024;        // Vercel chặn request > 4.5MB
-const PARTS_MAX = 64;
+const PARTS_MAX = 96;                      // 96 × 3.2MB ≈ 307MB > trần 200MB của 1 file .docx
+
+// Tài liệu lớn: file .docx chỉ còn là "chỉ mục trang" đã mã hoá; mỗi trang là 1 file MNHAENC1 riêng.
+const PAGE_MAGIC = 'MNHAPAGE1';
+const PAGE_RE = /^trang-[a-f0-9]{16,64}\.mnha$/i;
+const isPageName = (v) => PAGE_RE.test(String(v || ''));
+const isAssetName = (v) => wi.isImageName(v) || isPageName(v);
+
+// ---------------------------------------------------------------- tách HTML theo trang/khối
+// Trả về từng khúc (generator) sao cho ghép lại ĐÚNG NGUYÊN VĂN HTML ban đầu.
+// Ưu tiên cắt sau khối cấp 1 (</p>, </table>, </ul>…) và sau <hr class="word-pagebreak">;
+// khối quá lớn (bảng/công thức khổng lồ) thì cắt ở ranh giới thẻ gần nhất để không vỡ cặp surrogate.
+function* iterHtmlChunks(html, maxBytes) {
+    const s = String(html == null ? '' : html);
+    const limit = Math.max(64 * 1024, Number(maxBytes) || 4 * 1024 * 1024);
+    if (!s) { yield ''; return; }
+
+    let start = 0, bytes = 0, depth = 0, pos = 0;
+    let lastTag = -1, lastTop = -1;
+    const sizeOf = (a, b) => Buffer.byteLength(s.slice(a, b), 'utf8');
+    const re = /<[^>]*>/g;
+    let m;
+    while ((m = re.exec(s))) {
+        if (m.index > pos) bytes += sizeOf(pos, m.index);
+        const tag = m[0];
+        const end = m.index + tag.length;
+        bytes += Buffer.byteLength(tag, 'utf8');
+        pos = end;
+
+        const closing = /^<\s*\//.test(tag);
+        const self = /\/\s*>$/.test(tag) || /^<\s*(?:br|hr|img|input|meta|link|source|track|wbr|area|base|col|embed|[!?])/i.test(tag);
+        if (closing) depth = Math.max(0, depth - 1);
+        else if (!self) depth++;
+
+        lastTag = end;
+        if (depth === 0) lastTop = end;
+        const pageBreak = /^<\s*hr\b/i.test(tag) && /\bword-pagebreak\b/i.test(tag);
+        if (pageBreak && bytes >= Math.floor(limit / 2) && end > start) {
+            yield s.slice(start, end);
+            start = end;
+            bytes = 0; lastTag = lastTop = -1;
+            continue;
+        }
+        if (bytes >= limit && end > start) {
+            const cut = lastTop > start ? lastTop : (lastTag > start ? lastTag : end);
+            yield s.slice(start, cut);
+            start = cut;
+            bytes = sizeOf(start, pos);
+            lastTag = lastTop = -1;
+        }
+    }
+    if (pos < s.length) bytes += sizeOf(pos, s.length);
+
+    // Phần đuôi không có thẻ (văn bản thuần rất dài): cắt theo byte, không cắt đôi surrogate.
+    while (start < s.length) {
+        let i = start, n = 0;
+        while (i < s.length) {
+            const cp = s.codePointAt(i);
+            const w = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+            if (n + w > limit && i > start) break;
+            n += w; i += cp > 0xFFFF ? 2 : 1;
+        }
+        if (i >= s.length) { yield s.slice(start); return; }
+        // lùi về khoảng trắng gần nhất trong 25% cuối để không cắt giữa từ
+        const floor = start + Math.floor((i - start) * 0.75);
+        for (let k = i; k > floor; k--) if (/\s/.test(s.charAt(k - 1))) { i = k; break; }
+        if (i <= start) i = Math.min(s.length, start + 1);
+        yield s.slice(start, i);
+        start = i;
+    }
+}
+function splitHtmlChunks(html, maxBytes) {
+    const out = [...iterHtmlChunks(html, maxBytes)];
+    return out.length ? out : [''];
+}
 
 const bad = (m, status = 400) => Object.assign(new Error(m), { status });
 const upId = (id) => { if (!/^[a-f0-9]{32}$/.test(String(id || ''))) throw bad('Mã lưu không hợp lệ.'); return String(id); };
@@ -37,6 +111,7 @@ const manifestPath = (uid, dir) => [rootPath(uid), ...(Array.isArray(dir) ? dir 
 const stemOf = (name) => String(name || '').replace(/\.docx$/i, '');
 // Thư mục ảnh của 1 tài liệu: {uid}/file-word/[thư-mục/...]/<tên-tài-liệu>/anh-001-....png
 const imageDirPath = (uid, dir, name) => [rootPath(uid), ...(Array.isArray(dir) ? dir : cleanDir(dir)), stemOf(docName(name))].join('/');
+const pagePath = (uid, dir, name, page) => imageDirPath(uid, dir, name) + '/' + String(page || '');
 const ownerMediaUrl = (uid, dir, name, img) => '/code/word/media?dir=' + encodeURIComponent(dir || '') + '&file=' + encodeURIComponent(name) +
     '&n=' + encodeURIComponent(img);
 const publicMediaUrl = (uid, dir, name, img) => '/w/media?u=' + encodeURIComponent(uid) +
@@ -61,6 +136,9 @@ function normalizePage(page) {
     const marginsPx = raw
         ? { top: clampMargin(raw.top), right: clampMargin(raw.right), bottom: clampMargin(raw.bottom), left: clampMargin(raw.left) }
         : null;
+    const color = /^#[0-9a-f]{6}$/i.test(String(p.color || '')) ? String(p.color).toLowerCase() : '#ffffff';
+    const columns = Math.max(1, Math.min(3, Math.round(Number(p.columns) || 1)));
+    const watermark = String(p.watermark == null ? '' : p.watermark).replace(/["\\\r\n]/g, ' ').slice(0, 60).trim();
     if (!margin) {
         const v = marginsPx ? [marginsPx.top, marginsPx.right, marginsPx.bottom, marginsPx.left] : [];
         const close = (x) => v.length === 4 && v.every((n) => Math.abs(n - x) <= 6);
@@ -68,12 +146,12 @@ function normalizePage(page) {
     }
     if (margin !== 'custom') {
         const m = MARGIN_PRESET[margin] || MARGIN_PRESET.normal;
-        return { size, orientation, margin, marginsPx: { top: m, right: m, bottom: m, left: m }, widthPx, heightPx };
+        return { size, orientation, margin, marginsPx: { top: m, right: m, bottom: m, left: m }, widthPx, heightPx, color, columns, watermark };
     }
     return {
         size, orientation, margin,
         marginsPx: marginsPx || { top: 96, right: 96, bottom: 96, left: 96 },
-        widthPx, heightPx
+        widthPx, heightPx, color, columns, watermark
     };
 }
 
@@ -124,9 +202,9 @@ async function list(uid, dir) {
         if (i >= 0) {
             const f = rest.slice(0, i);
             folders.add(f);
-            // thư mục chỉ chứa ảnh do hệ thống tách ra mới bị ẩn; có file khác → vẫn là thư mục người dùng
-            if (rest.slice(i + 1) !== '.keep' && !wi.isImageName(rest.slice(i + 1))) plainFolders.add(f);
-        } else if (rest !== '.keep' && rest !== MANIFEST && !(insideImages && wi.isImageName(rest))) names.push(rest);
+            // thư mục chỉ chứa ảnh/trang do hệ thống tách ra mới bị ẩn; có file khác → vẫn là thư mục người dùng
+            if (rest.slice(i + 1) !== '.keep' && !isAssetName(rest.slice(i + 1))) plainFolders.add(f);
+        } else if (rest !== '.keep' && rest !== MANIFEST && !(insideImages && isAssetName(rest))) names.push(rest);
     }
     const docsInDir = new Set(names.filter((n) => /\.docx$/i.test(n)).map(stemOf));
     const manifest = await readManifest(uid, segs);
@@ -169,17 +247,64 @@ async function readBuffer(path) {
 }
 
 /** Đọc + giải mã tài liệu → { html, meta }. File .docx thật (do người dùng đặt tay) vẫn đọc được. */
-async function readDoc(uid, dir, name) {
+function parsePageIndex(plain) {
+    if (!Buffer.isBuffer(plain) || plain.length <= PAGE_MAGIC.length) return null;
+    if (plain.toString('latin1', 0, PAGE_MAGIC.length) !== PAGE_MAGIC) return null;
+    let idx;
+    try { idx = JSON.parse(plain.toString('utf8', PAGE_MAGIC.length)); }
+    catch (_) { throw bad('Chỉ mục trang của tài liệu bị hỏng.', 422); }
+    if (!idx || idx.v !== 1 || !Array.isArray(idx.pages)) throw bad('Chỉ mục trang của tài liệu không hợp lệ.', 422);
+    return idx;
+}
+async function readPaged(uid, segs, file, index, pagesOnly) {
+    const parts = [];
+    let total = 0;
+    for (const pg of index.pages) {
+        const n = String((pg && pg.n) || '');
+        if (!isPageName(n)) throw bad('Chỉ mục trang của tài liệu không hợp lệ.', 422);
+        const buf = await readBuffer(pagePath(uid, segs, file, n));
+        if (!buf) throw bad('Thiếu trang đã lưu của tài liệu ("' + n + '"). Hãy khôi phục từ bản sao lưu hoặc liên hệ quản trị.', 422);
+        let data;
+        if (mc.isEncrypted(buf)) {
+            try { data = mc.decryptBuffer(buf); }
+            catch (err) { throw bad('Không giải mã được trang "' + n + '" (sai MEDIA_ENC_KEY hoặc file bị sửa): ' + err.message, 422); }
+        } else {
+            data = buf;                                   // trang do người dùng đặt tay
+        }
+        total += data.length;
+        parts.push(pagesOnly ? data.toString('utf8') : data);
+    }
+    if (pagesOnly) return parts;
+    return Buffer.concat(parts, total).toString('utf8');
+}
+
+async function readDoc(uid, dir, name, opt) {
     const segs = cleanDir(dir), file = docName(name);
     const p = [rootPath(uid), ...segs, file].join('/');
     const buf = await readBuffer(p);
     if (!buf) return null;
     const m = await readManifest(uid, segs);
     const e = entryOf(m, file);
-    let html;
+    const meta = {
+        dir: segs.join('/'), name: file, title: e.title || titleOf(file), size: Number(e.size) || buf.length,
+        public: e.public === true, updatedAt: e.updatedAt || null,
+        page: normalizePage(e.page || {})
+    };
+    const pagesOnly = !!(opt && opt.pagesOnly);
+    let html = null, pages = null, paged = false;
     if (mc.isEncrypted(buf)) {
-        try { html = mc.decryptBuffer(buf).toString('utf8'); }
+        let plain;
+        try { plain = mc.decryptBuffer(buf); }
         catch (err) { throw bad('Không giải mã được tài liệu (sai MEDIA_ENC_KEY hoặc file bị sửa): ' + err.message, 422); }
+        const index = parsePageIndex(plain);
+        if (index) {
+            paged = true;
+            const got = await readPaged(uid, segs, file, index, pagesOnly);
+            if (pagesOnly) pages = got;
+            else html = got;
+        } else {
+            html = plain.toString('utf8');
+        }
     } else if (buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b) {
         const c = convertDocx(buf);
         html = sanitizeHtml(c.html);
@@ -187,12 +312,8 @@ async function readDoc(uid, dir, name) {
         throw bad('File Word không hợp lệ (không phải tài liệu của hệ thống).', 422);
     }
     return {
-        html: html || '<p><br></p>',
-        meta: {
-            dir: segs.join('/'), name: file, title: e.title || titleOf(file), size: Number(e.size) || buf.length,
-            public: e.public === true, updatedAt: e.updatedAt || null,
-            page: normalizePage(e.page || {})
-        }
+        html: pagesOnly ? html : (html || '<p><br></p>'),
+        pages, paged, meta
     };
 }
 
@@ -241,6 +362,63 @@ async function inlineImageData(uid, dir, name, html) {
     return wi.mapImageSrc(html, (img) => map.get(img) || null);
 }
 
+/** Ghi 1 file nhị phân (tự chọn API cho file lớn). */
+async function writeFileSafe(path, buf, message) {
+    const write = buf.length > 512 * 1024 && gh.writeBinaryFileBig ? gh.writeBinaryFileBig : gh.writeBinaryFile;
+    await write(path, buf, message);
+}
+
+/** Xoá mọi trang rời của tài liệu (khi tài liệu nhỏ lại hoặc bị xoá). */
+async function removePageFiles(prefix, message, keep, tree) {
+    if (!tree) {
+        try { tree = await gh.getRepoTree({ force: true }); } catch (_) { return 0; }
+    }
+    if (!tree || tree.truncated) return 0;
+    const changes = [];
+    for (const q of tree.files.keys()) {
+        if (!q.startsWith(prefix)) continue;
+        const n = q.slice(prefix.length);
+        if (!isPageName(n) || (keep && keep.has(n))) continue;
+        changes.push({ path: q, remove: true });
+    }
+    if (changes.length) await gh.commitFiles(changes, message);
+    return changes.length;
+}
+
+/**
+ * Lưu tài liệu lớn thành nhiều trang mã hoá riêng:
+ *   name.docx            ← chỉ mục trang đã mã hoá (nhỏ, không chứa nội dung rõ)
+ *   name/trang-<hash>.mnha ← từng khúc HTML đã mã hoá AES-256-GCM
+ * Tên trang = hash nội dung → lưu lại không đổi thì dùng lại blob cũ, không ghi lại.
+ */
+async function writePagedDoc(uid, segs, file, text, size, imgDir, message) {
+    const chunkBytes = LANG.pageChunkBytes || 4 * 1024 * 1024;
+    const entries = [], newNames = new Set(), batch = [];
+    let tree = null;
+    try { tree = await gh.getRepoTree(); if (tree.truncated) tree = null; } catch (_) { tree = null; }
+    const flush = async () => {
+        if (!batch.length) return;
+        const changes = batch.splice(0, batch.length);
+        await gh.commitFiles(changes, message + ' (trang)');
+    };
+    for (const chunk of iterHtmlChunks(text, chunkBytes)) {
+        const plain = Buffer.from(chunk, 'utf8');
+        const name = 'trang-' + wi.sha256(plain).slice(0, 32) + '.mnha';
+        entries.push({ n: name, s: plain.length });
+        if (newNames.has(name)) continue;
+        newNames.add(name);
+        const path = imgDir + '/' + name;
+        if (tree && tree.files.has(path)) continue;           // cùng nội dung → dùng lại
+        batch.push({ path, content: mc.encryptBuffer(plain) });
+        if (batch.length >= 4) await flush();                 // ≤ ~16MB/commit, giới hạn bộ nhớ
+    }
+    await flush();
+    const index = PAGE_MAGIC + JSON.stringify({ v: 1, total: size, pages: entries });
+    await writeFileSafe([rootPath(uid), ...segs, file].join('/'), mc.encryptBuffer(Buffer.from(index, 'utf8')), message);
+    await removePageFiles(imgDir + '/', message + ' (dọn trang cũ)', newNames, tree);
+    return entries.length;
+}
+
 /** Ghi HTML đã mã hoá, cập nhật manifest. public giữ nguyên nếu không chỉ định. */
 async function writeDoc(uid, dir, name, html, opt = {}) {
     const segs = cleanDir(dir), file = docName(name);
@@ -258,12 +436,20 @@ async function writeDoc(uid, dir, name, html, opt = {}) {
     const imgDir = imageDirPath(uid, segs, file);
     const changes = plan.files.map((f) => ({ path: imgDir + '/' + f.name, content: mc.encryptBuffer(f.buffer) }));
     for (const n of plan.removed) changes.push({ path: imgDir + '/' + n, remove: true });
+    const msg = 'word: save ' + [segs.join('/'), file].filter(Boolean).join('/');
     if (changes.length) await gh.commitFiles(changes, 'word: images ' + [segs.join('/'), file].filter(Boolean).join('/'));
 
-    const enc = mc.encryptBuffer(Buffer.from(text, 'utf8'));
     const p = [rootPath(uid), ...segs, file].join('/');
-    const write = enc.length > 512 * 1024 && gh.writeBinaryFileBig ? gh.writeBinaryFileBig : gh.writeBinaryFile;
-    await write(p, enc, 'word: save ' + [segs.join('/'), file].filter(Boolean).join('/'));
+    const storeLimit = LANG.pageStoreBytes || 80 * 1024 * 1024;
+    let pageCount = 0;
+    if (size > storeLimit) {
+        pageCount = await writePagedDoc(uid, segs, file, text, size, imgDir, msg);
+    } else {
+        const enc = mc.encryptBuffer(Buffer.from(text, 'utf8'));
+        await writeFileSafe(p, enc, msg);
+        // trước đây là tài liệu lớn (có trang rời) → dọn các trang không còn dùng
+        if (old.pageCount) await removePageFiles(imgDir + '/', 'word: dọn trang cũ ' + file).catch(() => 0);
+    }
     const page = normalizePage(opt.page || old.page || {});
     const meta = {
         title: String(opt.title || old.title || titleOf(file)).slice(0, 200),
@@ -271,10 +457,11 @@ async function writeDoc(uid, dir, name, html, opt = {}) {
         page,
         size,
         images: plan.images,
+        pageCount,
         updatedAt: new Date().toISOString()
     };
     await patchEntry(uid, segs, file, meta);
-    return { ok: true, size, name: file, meta, images: Object.keys(plan.images).length };
+    return { ok: true, size, name: file, meta, images: Object.keys(plan.images).length, pages: pageCount };
 }
 
 async function createDoc(uid, dir, name, opt = {}) {
@@ -298,8 +485,8 @@ async function removeDoc(uid, dir, name) {
     const prefix = imageDirPath(uid, segs, file) + '/';
     const changes = [{ path: p, remove: true }];
     for (const q of tree.files.keys()) {
-        // chỉ xoá ảnh do hệ thống tạo (anh-NNN-...), không đụng file khác người dùng đặt trong thư mục
-        if (q.startsWith(prefix) && wi.isImageName(q.slice(prefix.length))) changes.push({ path: q, remove: true });
+        // chỉ xoá ảnh/trang do hệ thống tạo (anh-NNN-..., trang-...), không đụng file khác người dùng đặt trong thư mục
+        if (q.startsWith(prefix) && isAssetName(q.slice(prefix.length))) changes.push({ path: q, remove: true });
     }
     await gh.commitFiles(changes, 'word: delete ' + file);
     await patchEntry(uid, segs, file, null, true);
@@ -314,20 +501,19 @@ async function renameDoc(uid, dir, oldName, newName) {
     if (to === from) return { file: from, moved: 0 };
     const m = await readManifest(uid, segs);
     const old = m.docs[from] || null;
-    const hasImages = !!(old && old.images && Object.keys(old.images).length);
     const fromPath = [rootPath(uid), ...segs, from].join('/');
     const toPath = [rootPath(uid), ...segs, to].join('/');
     const tree = await gh.getRepoTree({ force: true });
     if (!tree.files.has(fromPath)) throw bad('Không tìm thấy tài liệu', 404);
     if (tree.files.has(toPath)) throw bad('Đã có tài liệu tên "' + to + '" ở đây — hãy chọn tên khác.', 409);
     const fromImg = imageDirPath(uid, segs, from), toImg = imageDirPath(uid, segs, to);
-    // 1 commit: chuyển tài liệu + cả thư mục ảnh sang tên mới (giữ nguyên sha, không tải nội dung)
+    // 1 commit: chuyển tài liệu + cả thư mục ảnh/trang sang tên mới (giữ nguyên sha, không tải nội dung)
     const changes = [{ path: toPath, sha: tree.files.get(fromPath) }, { path: fromPath, remove: true }];
     let moved = 1;
-    if (fromImg !== toImg && hasImages) {
+    const items = fromImg !== toImg ? [...tree.files.keys()].filter((q) => q.startsWith(fromImg + '/')) : [];
+    if (items.length) {
         if (tree.truncated) throw bad('Repo quá lớn để đổi tên tài liệu an toàn.');
-        const items = [...tree.files.keys()].filter((q) => q.startsWith(fromImg + '/'));
-        if (items.length > 1000) throw bad('Tài liệu có quá nhiều ảnh (>1000) để đổi tên.');
+        if (items.length > 1500) throw bad('Tài liệu có quá nhiều ảnh/trang (>1500) để đổi tên.');
         if ([...tree.files.keys()].some((q) => q.startsWith(toImg + '/'))) {
             throw bad('Đã có thư mục "' + stemOf(to) + '" ở đây — hãy chọn tên khác.', 409);
         }
@@ -360,13 +546,105 @@ async function getPublic(uid, dir, name) {
     return readDoc(uid, segs, file);
 }
 
-/** HTML → .docx thật để tải về (ảnh tách rời được nhúng lại dạng data: URI). */
-async function toDocx(uid, dir, name) {
-    const d = await readDoc(uid, dir, name);
+/** Gom các khúc HTML thành từng phần ≤ maxBytes (byte UTF-8). */
+function groupHtmlChunks(chunks, maxBytes) {
+    const limit = Math.max(64 * 1024, Number(maxBytes) || 48 * 1024 * 1024);
+    const out = [];
+    let cur = [], n = 0;
+    for (const c of chunks) {
+        const b = Buffer.byteLength(c, 'utf8');
+        if (cur.length && n + b > limit) { out.push(cur.join('')); cur = []; n = 0; }
+        cur.push(c); n += b;
+    }
+    if (cur.length) out.push(cur.join(''));
+    return out.length ? out : [''];
+}
+
+
+/**
+ * Mỗi phần HTML khi chuyển sang .docx phải là HTML HOÀN CHỈNH. Khối quá lớn (bảng/khung bọc cả tài liệu) bị cắt giữa chừng
+ * nên phần sau thiếu thẻ mở (<table><tbody>…) và bị mất dòng. Hàm này mở lại các thẻ đang dở ở đầu mỗi phần và đóng chúng ở cuối.
+ * Ghép các phần ĐÃ cân bằng không dùng để lưu — chỉ dùng khi xuất .docx.
+ */
+function balanceParts(parts) {
+    const list = Array.isArray(parts) ? parts : [];
+    if (list.length < 2) return list.slice();
+    const VOID = /^(?:br|hr|img|input|meta|link|source|track|wbr|area|base|col|embed)$/i;
+    const stack = [];                                   // [{ name, open }]
+    const out = [];
+    for (const part of list) {
+        const prefix = stack.map((t) => t.open).join('');
+        const re = /<(\/?)([a-zA-Z][a-zA-Z0-9:-]*)\b[^>]*>/g;
+        let m;
+        while ((m = re.exec(part))) {
+            const name = m[2].toLowerCase();
+            if (m[1]) {
+                for (let i = stack.length - 1; i >= 0; i--) {
+                    if (stack[i].name === name) { stack.length = i; break; }
+                }
+            } else if (!VOID.test(name) && !/\/\s*>$/.test(m[0])) {
+                stack.push({ name, open: m[0] });
+            }
+        }
+        const suffix = stack.slice().reverse().map((t) => '</' + t.name + '>').join('');
+        out.push(prefix + part + suffix);
+    }
+    return out;
+}
+
+async function convertToDocxPart(uid, meta, html) {
+    const inlined = await inlineImageData(uid, meta.dir, meta.name, html);
+    return htmlToDocx(inlined, { title: meta.title, page: meta.page });
+}
+
+/**
+ * HTML → nhiều file .docx thật (mỗi phần ≤ docxPartBytes nếu có thể).
+ * Tài liệu lớn KHÔNG bị giảm chất lượng: chỉ chia theo trang/khối, ảnh giữ nguyên độ phân giải.
+ * @returns {Promise<null|{meta:object, parts:Array<{name:string,buffer:Buffer}>, multi:boolean, zipName:string}>}
+ */
+async function toDocxParts(uid, dir, name) {
+    const d = await readDoc(uid, dir, name, { pagesOnly: true });
     if (!d) return null;
-    const html = await inlineImageData(uid, d.meta.dir, d.meta.name, d.html);
-    const buf = htmlToDocx(html, { title: d.meta.title, page: d.meta.page });
-    return { buffer: buf, meta: d.meta };
+    const meta = d.meta;
+    const limit = Math.max(192 * 1024, LANG.docxPartBytes || 48 * 1024 * 1024);
+    const chunks = d.paged && Array.isArray(d.pages) ? d.pages : splitHtmlChunks(d.html, limit);
+    const groups = balanceParts(groupHtmlChunks(chunks, limit));
+    const out = [];
+    const build = async (html, depth) => {
+        const buf = await convertToDocxPart(uid, meta, html);
+        if (buf.length > limit && depth < 6 && html.length > 200) {
+            const sub = balanceParts(splitHtmlChunks(html, Math.max(64 * 1024, Math.floor(limit / 2))));
+            if (sub.length > 1) {
+                for (const x of sub) await build(x, depth + 1);
+                return;
+            }
+        }
+        out.push(buf);
+    };
+    for (const g of groups) await build(g, 0);
+    const stem = stemOf(meta.name) || 'tai-lieu';
+    const multi = out.length > 1;
+    return {
+        meta,
+        multi,
+        zipName: stem + '.zip',
+        parts: out.map((buffer, i) => ({ name: stem + '-' + (i + 1) + '.docx', buffer }))
+    };
+}
+
+/** HTML → .docx thật để tải về. Nhiều phần → 1 file ZIP chứa ten-1.docx, ten-2.docx… */
+async function toDocx(uid, dir, name) {
+    const out = await toDocxParts(uid, dir, name);
+    if (!out) return null;
+    if (out.parts.length === 1) return { buffer: out.parts[0].buffer, meta: out.meta, multi: false };
+    const buf = writeZip(out.parts.map((p) => ({ name: p.name, data: p.buffer, store: true })));
+    return {
+        buffer: buf,
+        meta: out.meta,
+        multi: true,
+        zipName: out.zipName,
+        parts: out.parts.map((p) => ({ name: p.name, size: p.buffer.length }))
+    };
 }
 
 // ---------------------------------------------------------------- lưu/tải theo từng phần (≤ 3.2MB/request)
@@ -446,8 +724,9 @@ async function finishDocx(uid, b) {
 }
 
 module.exports = {
-    ROOT, MANIFEST, PART_MAX, PART_MAX_PARTS: PARTS_MAX,
-    normalizePage, readManifest, list, stat, readDoc, writeDoc, createDoc, saveHtml, removeDoc, renameDoc, setPublic, getPublic, toDocx,
-    readImage, imageDirPath, inlineMediaUrls, publicMediaUrls, inlineImageData,
+    ROOT, MANIFEST, PART_MAX, PART_MAX_PARTS: PARTS_MAX, PAGE_MAGIC,
+    normalizePage, readManifest, list, stat, readDoc, writeDoc, createDoc, saveHtml, removeDoc, renameDoc, setPublic, getPublic, toDocx, toDocxParts,
+    readImage, imageDirPath, pagePath, isPageName, isAssetName, inlineMediaUrls, publicMediaUrls, inlineImageData,
+    splitHtmlChunks, iterHtmlChunks, groupHtmlChunks, balanceParts,
     putPart, finishSave, finishDocx, docName, titleOf
 };

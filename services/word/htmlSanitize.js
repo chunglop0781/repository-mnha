@@ -8,16 +8,37 @@ const VOID = new Set(['br', 'hr', 'img', 'col', 'area', 'base', 'embed', 'input'
 const ALLOWED = new Set([
     'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del',
     'sub', 'sup', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'br', 'hr', 'a', 'img',
-    'blockquote', 'pre', 'code', 'mark'
+    'blockquote', 'pre', 'code', 'mark',
+    // MathML (công thức Word)
+    'math', 'mrow', 'mi', 'mn', 'mo', 'mtext', 'mspace', 'msub', 'msup', 'msubsup', 'mfrac', 'msqrt', 'mroot',
+    'mover', 'munder', 'munderover', 'mtable', 'mtr', 'mtd', 'mmultiscripts', 'mprescripts', 'mstyle', 'mpadded'
 ]);
-const DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form', 'input', 'button', 'select', 'textarea', 'svg', 'math', 'video', 'audio', 'canvas', 'template']);
+const MATH_ATTR = new Set(['display', 'mathvariant', 'stretchy', 'fence', 'separator', 'accent', 'accentunder', 'columnalign', 'linethickness', 'largeop', 'movablelimits']);
+const MATH_TAG = /^m(ath|row|i|n|o|text|space|sub|sup|subsup|frac|sqrt|root|over|under|underover|table|tr|td|multiscripts|prescripts|style|padded)$/;
+const DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form', 'input', 'button', 'select', 'textarea', 'svg', 'video', 'audio', 'canvas', 'template']);
 const RENAME = { b: 'strong', i: 'em', strike: 's', del: 's' };
-const ALLOWED_CLASS = new Set(['word-pagebreak', 'word-table', 'word-title', 'word-subtitle', 'word-pre', 'word-list']);
+const ALLOWED_CLASS = new Set([
+    'word-pagebreak', 'word-table', 'word-title', 'word-subtitle', 'word-pre', 'word-list', 'word-textbox',
+    'word-comment', 'word-toc', 'word-citation', 'word-header', 'word-footer', 'word-cover', 'word-caption',
+    'word-footnote', 'word-bookmark', 'word-shape', 'word-highlight'
+]);
+// Hình khối đặt tự do (div.word-shape): chỉ các thuộc tính này, và chỉ trên đúng thẻ đó (không cho position:fixed/overlay ở thẻ khác).
+const SHAPE_KINDS = new Set(['rect', 'round', 'ellipse', 'triangle', 'diamond', 'hexagon', 'arrow', 'star', 'plus', 'line']);
+const SHAPE_ONLY = new Set(['position', 'left', 'top', 'z-index', 'align-items', 'justify-content', 'flex-direction']);
+const SHAPE_NUM = {
+    left: /^-?\d{1,5}(?:\.\d{1,2})?(?:px)?$/, top: /^-?\d{1,6}(?:\.\d{1,2})?(?:px)?$/, 'z-index': /^-?\d{1,2}$/,
+    position: /^absolute$/i, 'align-items': /^(?:flex-start|center|flex-end)$/i,
+    'justify-content': /^(?:flex-start|center|flex-end)$/i, 'flex-direction': /^(?:row|column)$/i
+};
 const STYLE_PROPS = new Set([
-    'font-family', 'font-size', 'font-weight', 'font-style', 'text-decoration', 'color', 'background-color',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'text-decoration', 'text-decoration-color', 'color', 'background-color',
     'text-align', 'margin-left', 'margin-right', 'margin-top', 'margin-bottom', 'text-indent', 'line-height',
     'vertical-align', 'width', 'height', 'max-width', 'min-height', 'padding', 'padding-left', 'padding-right',
-    'border', 'border-collapse', 'border-bottom', 'border-top', 'white-space', 'list-style-type'
+    'border', 'border-collapse', 'border-bottom', 'border-top', 'border-left', 'border-right', 'border-style',
+    'border-width', 'border-color', 'border-radius', 'white-space', 'list-style-type',
+    'float', 'clear', 'transform', 'transform-origin', 'columns', 'column-count', 'column-gap', 'column-rule',
+    'letter-spacing', 'word-spacing', 'text-transform', 'box-shadow', 'opacity', 'overflow', 'object-fit', 'display',
+    'min-width', 'position', 'left', 'top', 'z-index', 'align-items', 'justify-content', 'flex-direction'
 ]);
 
 function tokenize(html) {
@@ -68,7 +89,7 @@ function parseHtml(html) {
     return root;
 }
 
-function safeStyle(style) {
+function safeStyle(style, isShape) {
     const out = [];
     for (const part of String(style || '').split(';')) {
         const i = part.indexOf(':');
@@ -76,6 +97,9 @@ function safeStyle(style) {
         const prop = part.slice(0, i).trim().toLowerCase();
         let value = part.slice(i + 1).trim();
         if (!STYLE_PROPS.has(prop) || !value || value.length > 500) continue;
+        if (SHAPE_ONLY.has(prop)) {
+            if (!isShape || !SHAPE_NUM[prop].test(value)) continue;       // chỉ hình khối, chỉ giá trị số/từ khoá an toàn
+        }
         if (/url\s*\(|expression|javascript:|@import|behavior|<|>/i.test(value)) continue;
         if (!/^[#a-zA-Z0-9(),.%\s'"/!-]+$/.test(value)) continue;
         out.push(prop + ':' + value);
@@ -108,10 +132,21 @@ function cleanNode(node, depth, out) {
     if (!ALLOWED.has(tag)) { for (const c of node.children) cleanNode(c, depth + 1, out); return; }
     const attrs = [];
     const a = node.attrs || {};
-    if (a.style) { const s = safeStyle(a.style); if (s) attrs.push(`style="${escapeAttr(s)}"`); }
+    const isShape = tag === 'div' && /(?:^|\s)word-shape(?:\s|$)/.test(String(a.class || ''));
+    if (a.style) { const s = safeStyle(a.style, isShape); if (s) attrs.push(`style="${escapeAttr(s)}"`); }
+    if (isShape) {
+        const kind = String(a['data-shape'] || '').toLowerCase();
+        if (SHAPE_KINDS.has(kind)) attrs.push(`data-shape="${kind}"`);
+        const oy = Number(a['data-oy']);
+        if (Number.isFinite(oy) && Math.abs(oy) < 1000000) attrs.push(`data-oy="${Math.round(oy)}"`);
+    }
+    if (a.id && /^[A-Za-z][\w:.-]{0,63}$/.test(String(a.id))) attrs.push(`id="${escapeAttr(a.id)}"`);
     if (a.class) {
         const cls = String(a.class).split(/\s+/).filter((c) => ALLOWED_CLASS.has(c));
         if (cls.length) attrs.push(`class="${escapeAttr(cls.join(' '))}"`);
+    }
+    if (MATH_TAG.test(tag)) {
+        for (const k of Object.keys(a)) if (MATH_ATTR.has(k) && /^[\w .\-]{0,20}$/.test(String(a[k]))) attrs.push(`${k}="${escapeAttr(a[k])}"`);
     }
     if (tag === 'a') {
         const href = safeHref(a.href);
