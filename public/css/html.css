@@ -22,7 +22,7 @@
 .hx-status{font-size:12px;color:#94a3b8}.hx-status .ok{color:#4ade80}.hx-status .bad{color:#f87171}
 
 .hx-code{flex:1;display:flex;min-height:0}
-.hx-gutter{padding:10px 8px;text-align:right;color:#64748b;font:13px/20px ui-monospace,Menlo,Consolas,monospace;background:#0b1220;user-select:none;overflow:hidden;white-space:pre}
+.hx-gutter{padding:10px 8px;text-align:right;color:#64748b;font:13px/20px ui-monospace,Menlo,Consolas,monospace;background:#0b1220;user-select:none;overflow:hidden;white-space:pre;cursor:default}
 #hxEditor{flex:1;min-width:0;background:#0f172a;color:#e2e8f0;border:0;outline:0;resize:none;padding:10px;font:13px/20px ui-monospace,Menlo,Consolas,monospace;tab-size:2;white-space:pre;overflow:auto}
 .hx-app.is-view .hx-code{display:none}
 .hx-app.is-code .hx-view{display:none}
@@ -72,3 +72,10 @@
 .pl-err{display:none;max-width:640px;background:#450a0a;color:#fecaca;border:1px solid #991b1b;border-radius:8px;padding:10px 14px;font-size:13px}
 .pl-empty{padding:60px 20px;text-align:center;color:#94a3b8}
 @media(max-width:820px){.pl-main{flex-direction:column}.pl-side{flex:0 0 auto;max-height:260px;border-left:0;border-top:1px solid #1e293b}}
+
+/* gấp/mở khối code (public/js/foldKit.js): mũi tên ▾ hiện khi rê chuột vào lề số dòng, ▸ (đã thu gọn) luôn hiện */
+.fg-r{position:relative;height:20px;padding-left:14px;white-space:pre}
+.fg-a{position:absolute;left:0;top:0;width:14px;height:20px;display:none;cursor:pointer;text-align:center;font-style:normal;font-size:11px;line-height:20px;color:#94a3b8}
+.fg-a::before{content:'\25BE'}.fg-a.c::before{content:'\25B8'}
+.fg-a.c{display:block;color:#38bdf8}.fg-a:hover{color:#fff}
+.hx-gutter:hover .fg-a.o{display:block}

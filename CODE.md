@@ -94,6 +94,13 @@ dạng mới chỉ cần thêm 1 nhánh trong `cfgFor()`: dấu chú thích, đ�
 - Không can thiệp khi đang gõ tiếng Việt bằng bộ gõ (IME), khi trang chỉ-xem (code trên mạng), hay phím có Ctrl/Alt (trừ Ctrl+/). File dữ liệu `.txt` của C++ không tự đóng ngoặc.
 - Logic là hàm thuần có test: `node test/run.js editor`.
 
+## Gấp / mở khối code (`public/js/foldKit.js`) — C++ và HTML
+- Rê chuột vào lề số dòng → hiện mũi tên ▾ cạnh các dòng mở khối (`{ }`, thẻ HTML, `<script>`/`<style>`, chú thích nhiều dòng); bấm để thu gọn, dòng đã thu gọn hiện ▸ và dạng `int main() { … }`. Bấm vào phần … cũng mở lại được.
+- Phím: Ctrl+Shift+[ thu gọn khối tại con trỏ, Ctrl+Shift+] mở khối tại con trỏ. Nút "Thu gọn tất cả" / "Mở rộng tất cả" trên thanh trên.
+- Số dòng luôn là số dòng thật. Lưu / chạy / so sánh "chưa lưu" đều dùng `fold.getText()` (code đầy đủ), KHÔNG đọc thẳng `ed.value`. Gõ/xoá đụng vào dòng thu gọn thì khối tự mở trước, không mất code ẩn.
+- Chỉ bật cho C++ (trừ `.txt`) và html/css/js/json/svg; emu8086 và file `.txt` không có. `FoldKit.attach` phải gắn TRƯỚC `EditorKit.attach`.
+- Test: `node test/run.js fold` (test/fold-kit.js, test/fold-kit-dom.js).
+
 ## File .txt trắng
 GitHub lưu được file rỗng nhưng Contents API trả `content` rỗng → trước đây `readBinaryFile` coi là "quá lớn" → **lỗi 500** khi mở/chạy (vd `/code/cpp/edit?...&file=input2.txt`). Đã sửa 2 lớp:
 1. `readBinaryFile` / `readBinaryFileLarge`: `size === 0` → trả Buffer rỗng.

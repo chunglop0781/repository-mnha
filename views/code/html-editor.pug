@@ -19,6 +19,8 @@ block content
                 if !online
                     button(type="button", id="btnSave", class="hx-btn") Lưu (Ctrl+S)
                     button(type="button", id="btnComment", class="hx-btn", title="Chú thích / bỏ chú thích các dòng đang chọn") Chú thích (Ctrl+/)
+                button(type="button", id="btnFoldAll", class="hx-btn", title="Thu gọn mọi khối (Ctrl+Shift+[ : thu gọn khối tại con trỏ)") Thu gọn tất cả
+                button(type="button", id="btnUnfoldAll", class="hx-btn", title="Mở lại mọi khối (Ctrl+Shift+] : mở khối tại con trỏ)") Mở rộng tất cả
                 if canView
                     span(id="viewTools", class="hx-actions hidden")
                         span(class="hx-seg", title="Độ rộng khung xem")
@@ -51,5 +53,6 @@ block content
                 button(type="button", id="btnCopyLink", class="hx-btn") Sao chép
     script#payload(type="application/json")!= payloadJson
     script(src="/js/mnhaMedia.js")
+    script(src="/js/foldKit.js")
     script(src="/js/editorKit.js")
     script(src="/js/htmlEditor.js")

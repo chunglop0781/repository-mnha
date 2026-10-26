@@ -5,21 +5,30 @@
     var info = $('termInfo'), dirty = $('dirty'), btnRun = $('btnRun'), btnStop = $('btnStop');
     var saved = P.content, sid = null, timer = null, since = 0, firstAuto = null;
     ed.value = P.content; ed.disabled = false;
+    // Gấp/mở khối code (C++): PHẢI gắn trước EditorKit. Khi đang gấp, ed.value chứa dòng thay thế → luôn lấy code thật bằng text().
+    var fold = window.FoldKit ? FoldKit.attach(ed, gutter, { lang: P.lang, file: P.file }) : null;
+    function text() { return fold ? fold.getText() : ed.value; }
     if (P.online) ed.readOnly = true;      // code lấy từ link trên mạng: chỉ xem, không sửa (vẫn chạy được)
     function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
     function api(method, url, body) {
         return fetch(url, { method: method, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: body ? JSON.stringify(body) : undefined })
             .then(function (r) { return r.json().then(function (j) { if (!r.ok) { var er = new Error(j.error || 'Lỗi'); er.wake = !!j.wake; throw er; } return j; }); });
     }
-    function lines() { var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gutter.textContent = s; }
-    ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', ed.value === saved); });
+    function lines() { if (fold) { fold.refresh(); return; } var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gutter.textContent = s; }
+    ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', text() === saved); });
     ed.addEventListener('scroll', function () { gutter.scrollTop = ed.scrollTop; });
     // Tab/Shift+Tab, tự đóng ngoặc, Enter giữ độ thụt, Ctrl+/ chú thích — dùng chung mọi ngôn ngữ (public/js/editorKit.js)
     var kit = window.EditorKit ? EditorKit.attach(ed, { lang: P.lang, file: P.file, readOnly: !!P.online }) : null;
     if ($('btnComment')) {
         if (!kit || !kit.canComment) $('btnComment').classList.add('hidden');
-        else { $('btnComment').onmousedown = function (e) { e.preventDefault(); }; $('btnComment').onclick = function () { ed.focus(); kit.comment(); }; }
+        else { $('btnComment').onmousedown = function (e) { e.preventDefault(); }; $('btnComment').onclick = function () { ed.focus(); if (fold) fold.beforeEdit(); kit.comment(); }; }
     }
+    ['btnFoldAll', 'btnUnfoldAll'].forEach(function (id) {
+        var b = $(id); if (!b) return;
+        if (!fold) { b.classList.add('hidden'); return; }
+        b.onmousedown = function (e) { e.preventDefault(); };
+        b.onclick = function () { if (id === 'btnFoldAll') fold.foldAll(); else fold.unfoldAll(); ed.focus(); };
+    });
     ed.addEventListener('keydown', function (e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }
         if (e.key === 'F5') { e.preventDefault(); run(); }
@@ -28,7 +37,7 @@
 
     function save() {
         if (P.online) return Promise.resolve();      // code trên mạng không lưu vào thư mục của tôi
-        return api('POST', '/code/' + P.lang + '/save', { dir: P.dir, file: P.file, content: ed.value }).then(function () { saved = ed.value; dirty.classList.add('hidden'); info.innerHTML = '<span class="ok">Đã lưu lên GitHub.</span>'; }).catch(function (e) { info.innerHTML = '<span class="bad">Lưu lỗi: ' + esc(e.message) + '</span>'; throw e; });
+        return api('POST', '/code/' + P.lang + '/save', { dir: P.dir, file: P.file, content: text() }).then(function () { saved = text(); dirty.classList.add('hidden'); info.innerHTML = '<span class="ok">Đã lưu lên GitHub.</span>'; }).catch(function (e) { info.innerHTML = '<span class="bad">Lưu lỗi: ' + esc(e.message) + '</span>'; throw e; });
     }
     if ($('btnSave')) $('btnSave').onclick = function () { save().catch(function () { }); };
 
@@ -56,11 +65,11 @@
         if (wasmRun) return;
         termOut.textContent = ''; $('outFiles').innerHTML = ''; wasmInputs = []; wasmConsole = ''; setRunning(true);
         info.textContent = 'Đang chuẩn bị...';
-        (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
+        (text() !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
             // file cùng thư mục: .txt + header #include (code của tôi: thư mục của tôi; code trên mạng: cùng thư mục trong repo GitHub/GitLab)
-            return api('POST', '/code/cpp/siblings', { dir: P.dir, file: P.file, code: ed.value, online: P.online || undefined }).catch(function (e) { info.innerHTML = '<span class="bad">Không nạp được file cùng thư mục: ' + esc(e.message) + '</span>'; return { files: [] }; });
+            return api('POST', '/code/cpp/siblings', { dir: P.dir, file: P.file, code: text(), online: P.online || undefined }).catch(function (e) { info.innerHTML = '<span class="bad">Không nạp được file cùng thư mục: ' + esc(e.message) + '</span>'; return { files: [] }; });
         }).then(function (j) {
-            var code = ed.value;
+            var code = text();
             warnMissing(j.missing);
             wasmRun = CppWasm.start({
                 code: code, files: j.files || [], onOut: wasmOut,
@@ -117,14 +126,14 @@
         termOut.textContent = ''; info.textContent = 'Đang khởi động...'; $('outFiles').innerHTML = ''; since = 0; showInput(false);
         setRunning(true);
         cancelWake = false;
-        (ed.value !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
-            return startWithWake(P.online ? { online: P.online } : { dir: P.dir, file: P.file, content: ed.value });
+        (text() !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
+            return startWithWake(P.online ? { online: P.online } : { dir: P.dir, file: P.file, content: text() });
         }).then(function (j) { sid = j.sid; poll(); if (isEmu) term.focus(); warnMissing(j.missing); }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; setRunning(false); });
     }
     if (btnRun) btnRun.onclick = run;
     if ($('btnCompile')) $('btnCompile').onclick = function () {
         info.textContent = 'Đang dịch...';
-        api('POST', '/code/emu8086/compile', { content: ed.value }).then(function (j) {
+        api('POST', '/code/emu8086/compile', { content: text() }).then(function (j) {
             if (j.ok) { termOut.textContent = ''; info.innerHTML = '<span class="ok">Compile thành công — không có lỗi' + (j.instructions != null ? ' (' + j.instructions + ' lệnh)' : '') + '. Bấm Emulate để chạy.</span>'; }
             else { termOut.innerHTML = j.errors.map(function (e) { return '<div class="t-err">Dòng ' + e.line + ': ' + esc(e.message) + '</div>'; }).join(''); info.innerHTML = '<span class="bad">Có ' + j.errors.length + ' lỗi.</span>'; }
         }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; });
@@ -254,6 +263,6 @@
         }).catch(function () { });
     }
     loadHistory();
-    window.addEventListener('beforeunload', function (e) { if (ed.value !== saved) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('beforeunload', function (e) { if (text() !== saved) { e.preventDefault(); e.returnValue = ''; } });
     if (window.lucide) lucide.createIcons();
 })();

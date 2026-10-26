@@ -18,29 +18,38 @@
 
     // ---- soạn code
     ed.value = loading ? 'Đang tải file lớn…' : saved;
-    function lines() { var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gut.textContent = s; }
+    // Gấp/mở khối code: PHẢI gắn trước EditorKit. Khi đang gấp, ed.value chứa dòng thay thế → luôn lấy code thật bằng text().
+    var fold = window.FoldKit ? FoldKit.attach(ed, gut, { lang: 'html', file: P.file }) : null;
+    function text() { return fold ? fold.getText() : ed.value; }
+    function lines() { if (fold) { fold.refresh(); return; } var n = ed.value.split('\n').length, s = ''; for (var i = 1; i <= n; i++) s += i + '\n'; gut.textContent = s; }
     lines();
     if (loading) {
         ed.disabled = true; say('Đang tải file lớn…');
         fetch(P.contentUrl, { headers: { Accept: 'text/plain' } })
             .then(function (r) { if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('Lỗi ' + r.status)); }, function () { throw new Error('Lỗi ' + r.status); }); return r.text(); })
-            .then(function (t) { saved = t; ed.value = t; ed.disabled = false; loading = false; lines(); say(''); })
+            .then(function (t) { saved = t; ed.value = t; ed.disabled = false; loading = false; if (fold) fold.reset(); else lines(); say(''); })
             .catch(function (e) { say('<span class="bad">Không tải được file: ' + esc(e.message) + ' — tải lại trang để thử lại.</span>'); });
     }
-    ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', ed.value === saved); });
+    ed.addEventListener('input', function () { lines(); dirty.classList.toggle('hidden', text() === saved); });
     ed.addEventListener('scroll', function () { gut.scrollTop = ed.scrollTop; });
     // Tab/Shift+Tab, tự đóng ngoặc/thẻ, Enter giữ độ thụt, Ctrl+/ chú thích — dùng chung mọi ngôn ngữ (public/js/editorKit.js)
     var kit = window.EditorKit ? EditorKit.attach(ed, { lang: 'html', file: P.file, readOnly: !!P.readOnly }) : null;
     var bc = $('btnComment');
     if (bc) {
         if (!kit || !kit.canComment || P.readOnly) bc.classList.add('hidden');
-        else { bc.onmousedown = function (e) { e.preventDefault(); }; bc.onclick = function () { ed.focus(); kit.comment(); }; }
+        else { bc.onmousedown = function (e) { e.preventDefault(); }; bc.onclick = function () { ed.focus(); if (fold) fold.beforeEdit(); kit.comment(); }; }
     }
+    ['btnFoldAll', 'btnUnfoldAll'].forEach(function (id) {
+        var b = $(id); if (!b) return;
+        if (!fold) { b.classList.add('hidden'); return; }
+        b.onmousedown = function (e) { e.preventDefault(); };
+        b.onclick = function () { if (id === 'btnFoldAll') fold.foldAll(); else fold.unfoldAll(); ed.focus(); };
+    });
     ed.addEventListener('keydown', function (e) {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!P.readOnly) save().catch(function () { }); }
     });
     document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !P.readOnly) { e.preventDefault(); save().catch(function () { }); } });
-    window.addEventListener('beforeunload', function (e) { if (!P.readOnly && !loading && ed.value !== saved) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('beforeunload', function (e) { if (!P.readOnly && !loading && text() !== saved) { e.preventDefault(); e.returnValue = ''; } });
 
     // file lớn: cắt thành các phần ≤ ~1 triệu ký tự (≤ 3MB) gửi lần lượt (Vercel chặn request > 4.5MB), rồi gộp lại ở máy chủ
     var CHUNK = 1000000;
@@ -63,11 +72,11 @@
         return next(0);
     }
     function save() {
-        if (P.readOnly || loading || ed.value === saved) return Promise.resolve();
+        if (P.readOnly || loading || text() === saved) return Promise.resolve();
         say('Đang lưu…');
-        var text = ed.value;
-        return (text.length > CHUNK ? saveBig(text) : api('POST', '/code/html/save', { dir: P.dir, file: P.file, content: text }))
-            .then(function () { saved = text; dirty.classList.toggle('hidden', ed.value === saved); say('<span class="ok">Đã lưu lên GitHub.</span>'); })
+        var code = text();
+        return (code.length > CHUNK ? saveBig(code) : api('POST', '/code/html/save', { dir: P.dir, file: P.file, content: code }))
+            .then(function () { saved = code; dirty.classList.toggle('hidden', text() === saved); say('<span class="ok">Đã lưu lên GitHub.</span>'); })
             .catch(function (e) { say('<span class="bad">Lưu lỗi: ' + esc(e.message) + '</span>'); throw e; });
     }
     var bs = $('btnSave'); if (bs) bs.onclick = function () { save().catch(function () { }); };

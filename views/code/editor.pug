@@ -14,6 +14,9 @@ block content
                 if !online
                     button(id="btnSave", class="code-btn") Lưu (Ctrl+S)
                     button(id="btnComment", type="button", class="code-btn", title="Chú thích / bỏ chú thích các dòng đang chọn") Chú thích (Ctrl+/)
+                if lang.key === "cpp"
+                    button(id="btnFoldAll", type="button", class="code-btn", title="Thu gọn mọi khối { } (Ctrl+Shift+[ : thu gọn khối tại con trỏ)") Thu gọn tất cả
+                    button(id="btnUnfoldAll", type="button", class="code-btn", title="Mở lại mọi khối (Ctrl+Shift+] : mở khối tại con trỏ)") Mở rộng tất cả
                 if folderUrl
                     a(href=folderUrl, class="code-btn", style="text-decoration:none", title="Đọc các file cùng thư mục này trên mạng") Đọc thư mục
                 if lang.key === "emu8086"
@@ -57,5 +60,6 @@ block content
     if cppMode === "browser"
         script(src="/js/cppShims.js")
         script(src="/js/cppWasm.js")
+    script(src="/js/foldKit.js")
     script(src="/js/editorKit.js")
     script(src="/js/codeEditor.js")
