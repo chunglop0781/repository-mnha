@@ -35,6 +35,12 @@ if (ON_VERCEL) app.use((req, res, next) => (req.path === '/api/node/health' ? ne
 app.use(morgan('dev'));
 // Xem trước trang HTML (iframe sandbox, KHÔNG cookie): quyền đọc nằm trong token ký → gắn TRƯỚC cookie/session để khỏi chạm session store (GitHub)
 app.use('/preview', require('./services/code/previewServer').createHandler({ mount: '/preview' }));
+// Tài liệu Word công khai (không đăng nhập): quyền xem kiểm tra trong mnha-word.json. Gắn TRƯỚC cookie/session.
+const wordCtrl = require('./controllers/word.controller');
+app.get('/w', wordCtrl.publicView);
+app.get('/w/raw', wordCtrl.publicRaw);
+app.get('/w/media', wordCtrl.publicMedia);
+app.get('/w/download', wordCtrl.publicDownload);
 app.use(cookieParser());
 app.use(express.json({ limit: '4.4mb' }));      // html lưu tối đa 3MB (xem LANGS.html.maxFileBytes); Vercel chặn request > 4.5MB
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));

@@ -1,0 +1,17 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/word.css")
+    link(rel="stylesheet", href="/css/word-doc.css")
+    div(class="wd-pub")
+        div(class="wd-pubbar")
+            div(class="wd-pubtitle")
+                b= publicTitle
+                span Đọc trực tuyến · #{name}
+            a(href=downloadUrl, class="wd-btn wd-btn-primary")
+                i(data-lucide="download", class="w-4 h-4")
+                span Tải .docx
+            a(href=rawUrl, target="_blank", rel="noopener", class="wd-btn wd-btn-ghost")
+                i(data-lucide="external-link", class="w-4 h-4")
+                span Mở tab mới
+        iframe(id="wpFrame", class="wd-pubframe", src=rawUrl, sandbox="allow-same-origin", title=publicTitle)

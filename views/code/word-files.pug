@@ -1,0 +1,95 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/html.css")
+    link(rel="stylesheet", href="/css/word.css")
+    - var base = "/code/word"
+    - var parts = dir ? dir.split("/") : []
+    div(class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8", id="wordFiles", data-dir=dir, data-lang="word")
+        a(href="/", class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
+            i(data-lucide="arrow-left", class="w-4 h-4")
+            | Chọn ngôn ngữ
+        h1(class="mt-3 text-2xl font-bold text-gray-900 flex items-center gap-2")
+            i(data-lucide="file-text", class="w-6 h-6 text-blue-700")
+            | Word (DOCX)
+            span(class="wd-enc-badge") 🔒 HTML mã hoá
+        p(class="mt-1 text-sm text-gray-600") Soạn như Word trên web · tải lên .docx tự chuyển thành bản soạn thảo · tải về lại thành .docx thật.
+        nav(class="mt-2 text-sm text-gray-600 flex flex-wrap items-center gap-1")
+            a(href=base, class="text-indigo-600 hover:underline") file-word
+            each p, i in parts
+                span /
+                a(href=base + "?dir=" + encodeURIComponent(parts.slice(0, i + 1).join("/")), class="text-indigo-600 hover:underline")= p
+        div(class="mt-5 flex flex-wrap gap-3")
+            button(type="button", id="btnNewDoc", class="px-4 py-2 rounded-lg bg-blue-700 text-white text-sm font-medium hover:bg-blue-800 inline-flex items-center gap-1")
+                i(data-lucide="file-plus-2", class="w-4 h-4")
+                | Tài liệu mới
+            button(type="button", id="btnNewFolder", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50 inline-flex items-center gap-1")
+                i(data-lucide="folder-plus", class="w-4 h-4")
+                | Thư mục mới
+            if dir
+                button(type="button", id="btnRenFolder", data-rename=dir, class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") Đổi tên thư mục
+                button(type="button", id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
+        if shareUrl
+            div(class="mt-4 flex items-center gap-2 text-sm bg-white border border-gray-200 rounded-xl px-3 py-2")
+                i(data-lucide="github", class="w-4 h-4 shrink-0 text-gray-600")
+                span(class="text-gray-600 whitespace-nowrap hidden sm:inline") Link GitHub của thư mục:
+                a(id="ghFolderLink", href=shareUrl, target="_blank", rel="noopener noreferrer", class="flex-1 min-w-0 truncate text-indigo-600 hover:underline font-mono text-xs")= shareUrl
+                button(type="button", id="btnCopyFolderLink", class="px-3 py-1 rounded-lg bg-gray-100 text-xs font-medium hover:bg-gray-200 whitespace-nowrap") Sao chép
+
+        //- danh sách
+        div(class="mt-5 bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100 overflow-hidden")
+            if dir
+                - var up = parts.slice(0, -1).join("/")
+                a(href=base + (up ? "?dir=" + encodeURIComponent(up) : ""), class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-gray-600")
+                    i(data-lucide="corner-left-up", class="w-4 h-4")
+                    | ..
+            each f in folders
+                div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide="folder", class="w-4 h-4 text-amber-500")
+                    a(href=base + "?dir=" + encodeURIComponent((dir ? dir + "/" : "") + f), class="flex-1 font-medium text-gray-900 hover:text-blue-700")= f
+                    button(type="button", class="text-xs text-indigo-600 hover:underline", data-rename=(dir ? dir + "/" : "") + f) Đổi tên
+            each d in docs
+                div(class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 hover:bg-gray-50")
+                    i(data-lucide="file-text", class="w-4 h-4 text-blue-600")
+                    div(class="flex-1 min-w-0")
+                        a(href=d.editUrl, class="font-medium text-gray-900 hover:text-blue-700 break-all")= d.title
+                        div(class="text-xs text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-0.5")
+                            span= d.name
+                            span ·
+                            span #{d.size ? (d.size / 1024).toFixed(0) + " KB" : "0 KB"}
+                            if d.updatedAt
+                                span ·
+                                span= new Date(d.updatedAt).toLocaleString("vi-VN")
+                            span ·
+                            span(class=d.public ? "text-emerald-600 font-medium" : "text-gray-500")= d.public ? "Công khai" : "Riêng tư"
+                    a(href=d.editUrl, class="text-xs px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100") Mở
+                    a(href=d.downloadUrl, title="Tải Word (.docx) về máy", class="text-xs px-3 py-1.5 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200") Tải .docx
+                    button(type="button", class="btn-pub text-xs px-3 py-1.5 rounded-lg border font-medium " + (d.public ? "border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100" : "border-gray-300 text-gray-700 bg-white hover:bg-gray-50"), data-file=d.name, data-public=d.public ? "1" : "0")= d.public ? "Tắt công khai" : "Công khai"
+                    if d.public
+                        button(type="button", class="btn-copy-pub text-xs px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 font-medium hover:bg-indigo-100", data-path=d.publicPath) Sao chép link
+                    button(type="button", class="btn-rename-doc text-xs text-indigo-600 hover:underline", data-file=d.name) Đổi tên
+                    button(type="button", class="btn-del-doc text-xs text-red-500 hover:underline", data-file=d.name) Xoá
+            if !folders.length && !docs.length
+                div(class="px-4 py-12 text-center text-gray-500 text-sm") Thư mục trống. Bấm “Tài liệu mới” hoặc kéo thả file .docx vào khung bên dưới.
+
+        //- tải lên
+        h2(class="mt-8 text-lg font-semibold text-gray-900 flex items-center gap-2")
+            i(data-lucide="upload-cloud", class="w-5 h-5 text-blue-700")
+            | Tải tài liệu Word lên
+        div(id="upNotice", class="mt-3 hidden rounded-xl border border-amber-300 bg-amber-50 text-amber-900 text-xs px-3 py-2")
+        div(id="upDrop", class="up-drop mt-3")
+            div(class="text-2xl") 📄
+            div(class="mt-1 font-medium") Kéo thả file .docx vào đây
+            div(class="text-xs mt-1") hoặc
+                label(class="ml-1 underline cursor-pointer")
+                    | chọn file .docx
+                    input(type="file", id="upInput", multiple, class="hidden", accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        ul(class="mt-2 text-xs text-gray-500 list-disc pl-5 space-y-1")
+            li Chỉ nhận <b>.docx</b> (Word 2007 trở lên). File <b>.doc</b> hãy mở bằng Word rồi “Save As” → .docx.
+            li Tối đa #{Math.round(lang.maxFileBytes / 1048576)}MB mỗi file; gửi theo từng phần ≤ 3.2MB nên vượt được giới hạn 4.5MB của Vercel.
+            li File được chuyển sang HTML ngay khi tải lên; HTML lưu trên GitHub dưới dạng <b>mã hoá AES-256-GCM</b>.
+            li Ảnh trong tài liệu được tách thành file riêng <b>anh-001-…</b> trong thư mục cùng tên tài liệu, cũng mã hoá; tải .docx về vẫn đủ ảnh.
+        div(id="upList", class="mt-3 grid gap-2")
+    script#payload(type="application/json")!= payloadJson
+    script(src="/js/wordFiles.js")
+    script(src="/js/folderTools.js")

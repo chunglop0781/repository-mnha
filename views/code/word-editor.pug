@@ -1,0 +1,148 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/word.css")
+    link(rel="stylesheet", href="/css/word-doc.css")
+    div(class="wd-app", id="wdApp")
+        div(class="wd-topbar")
+            a(href="/code/word", id="wdBack", class="wd-back", title="Quay lại danh sách tài liệu")
+                i(data-lucide="arrow-left", class="w-4 h-4")
+            div(class="wd-fileinfo")
+                i(data-lucide="file-text", class="w-4 h-4 text-blue-700")
+                span(class="wd-filename", id="wdTitle") #{file}
+                span(class="wd-dirty hidden", id="wdDirty") ● chưa lưu
+                span(class="wd-enc") 🔒 mã hoá
+            div(class="wd-topactions")
+                span(class="wd-status", id="wdStatus")
+                button(type="button", id="wdPublicBtn", class="wd-btn wd-btn-ghost", data-public=isPublic ? "1" : "0", title="Bật/tắt xem công khai bằng link /w")
+                    i(data-lucide=isPublic ? "globe" : "lock", class="w-4 h-4")
+                    span(id="wdPublicText")= isPublic ? "Công khai" : "Riêng tư"
+                button(type="button", id="wdCopyLink", class="wd-btn wd-btn-ghost " + (isPublic ? "" : "hidden"), title="Sao chép link công khai")
+                    i(data-lucide="link", class="w-4 h-4")
+                    span Sao chép link
+                button(type="button", id="wdDownload", class="wd-btn wd-btn-ghost", title="Lưu rồi tải Word (.docx) về máy")
+                    i(data-lucide="download", class="w-4 h-4")
+                    span Tải về máy
+                button(type="button", id="wdPrint", class="wd-btn wd-btn-ghost", title="In (Ctrl+P)")
+                    i(data-lucide="printer", class="w-4 h-4")
+                button(type="button", id="wdSave", class="wd-btn wd-btn-primary", title="Lưu (Ctrl+S)")
+                    i(data-lucide="save", class="w-4 h-4")
+                    span Lưu
+        div(class="wd-ribbon", role="toolbar", aria-label="Thanh công cụ Word")
+            div(class="wd-group")
+                div(class="wd-group-label") Tệp
+                div(class="wd-row")
+                    button(type="button", class="wd-ic", data-cmd="undo", title="Hoàn tác (Ctrl+Z)")
+                        i(data-lucide="undo-2", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="redo", title="Làm lại (Ctrl+Y)")
+                        i(data-lucide="redo-2", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="removeFormat", id="wdClear", title="Xoá định dạng")
+                        i(data-lucide="eraser", class="w-4 h-4")
+                    button(type="button", class="wd-ic", id="wdDownload2", title="Tải Word (.docx) về máy")
+                        i(data-lucide="download", class="w-4 h-4")
+            div(class="wd-group wd-group-font")
+                div(class="wd-group-label") Phông chữ
+                div(class="wd-row")
+                    select(id="wdFont", class="wd-select wd-font-select", title="Phông chữ")
+                        option(value="Calibri") Calibri
+                        option(value="Arial") Arial
+                        option(value="'Times New Roman'") Times New Roman
+                        option(value="Cambria") Cambria
+                        option(value="'Courier New'") Courier New
+                        option(value="Georgia") Georgia
+                        option(value="Verdana") Verdana
+                        option(value="Tahoma") Tahoma
+                    select(id="wdSize", class="wd-select wd-size-select", title="Cỡ chữ (pt)")
+                        each s in [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72]
+                            option(value=s, selected=(s === 11))= s
+                div(class="wd-row")
+                    button(type="button", class="wd-ic wd-strong", data-cmd="bold", title="Đậm (Ctrl+B)")
+                        i(data-lucide="bold", class="w-4 h-4")
+                    button(type="button", class="wd-ic wd-italic", data-cmd="italic", title="Nghiêng (Ctrl+I)")
+                        i(data-lucide="italic", class="w-4 h-4")
+                    button(type="button", class="wd-ic wd-underline", data-cmd="underline", title="Gạch chân (Ctrl+U)")
+                        i(data-lucide="underline", class="w-4 h-4")
+                    button(type="button", class="wd-ic wd-strike", data-cmd="strikeThrough", title="Gạch ngang")
+                        i(data-lucide="strikethrough", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="superscript", title="Chỉ số trên")
+                        i(data-lucide="superscript", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="subscript", title="Chỉ số dưới")
+                        i(data-lucide="subscript", class="w-4 h-4")
+                    label(class="wd-color", title="Màu chữ")
+                        span A
+                        input(type="color", id="wdColor", value="#1f2937")
+                    label(class="wd-color wd-hilite", title="Tô nền")
+                        span ▮
+                        input(type="color", id="wdHilite", value="#fff59d")
+            div(class="wd-group")
+                div(class="wd-group-label") Đoạn văn
+                div(class="wd-row")
+                    select(id="wdBlock", class="wd-select wd-block-select", title="Kiểu đoạn")
+                        option(value="P") Văn bản
+                        option(value="H1") Tiêu đề 1
+                        option(value="H2") Tiêu đề 2
+                        option(value="H3") Tiêu đề 3
+                        option(value="H4") Tiêu đề 4
+                        option(value="BLOCKQUOTE") Trích dẫn
+                        option(value="PRE") Đoạn mã
+                div(class="wd-row")
+                    button(type="button", class="wd-ic", data-cmd="justifyLeft", title="Căn trái")
+                        i(data-lucide="align-left", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="justifyCenter", title="Căn giữa")
+                        i(data-lucide="align-center", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="justifyRight", title="Căn phải")
+                        i(data-lucide="align-right", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="justifyFull", title="Căn đều")
+                        i(data-lucide="align-justify", class="w-4 h-4")
+                div(class="wd-row")
+                    button(type="button", class="wd-ic", data-cmd="insertUnorderedList", title="Danh sách chấm")
+                        i(data-lucide="list", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="insertOrderedList", title="Danh sách số")
+                        i(data-lucide="list-ordered", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="outdent", title="Giảm thụt lề")
+                        i(data-lucide="outdent", class="w-4 h-4")
+                    button(type="button", class="wd-ic", data-cmd="indent", title="Tăng thụt lề")
+                        i(data-lucide="indent", class="w-4 h-4")
+            div(class="wd-group")
+                div(class="wd-group-label") Chèn
+                div(class="wd-row")
+                    button(type="button", class="wd-ic", id="wdTable", title="Chèn bảng")
+                        i(data-lucide="table", class="w-4 h-4")
+                    button(type="button", class="wd-ic", id="wdImage", title="Chèn ảnh")
+                        i(data-lucide="image-plus", class="w-4 h-4")
+                    button(type="button", class="wd-ic", id="wdLink", title="Chèn liên kết")
+                        i(data-lucide="link-2", class="w-4 h-4")
+                    button(type="button", class="wd-ic", id="wdRule", title="Đường kẻ ngang")
+                        i(data-lucide="minus", class="w-4 h-4")
+                    button(type="button", class="wd-ic", id="wdPageBreak", title="Ngắt trang")
+                        i(data-lucide="file-minus-2", class="w-4 h-4")
+            div(class="wd-group")
+                div(class="wd-group-label") Trang
+                div(class="wd-row")
+                    select(id="wdPageSize", class="wd-select", title="Khổ giấy")
+                        option(value="A4") A4
+                        option(value="Letter") Letter
+                    select(id="wdOrient", class="wd-select", title="Hướng giấy")
+                        option(value="portrait") Dọc
+                        option(value="landscape") Ngang
+                    select(id="wdMargin", class="wd-select", title="Lề")
+                        option(value="normal") Lề thường
+                        option(value="narrow") Lề hẹp
+                        option(value="wide") Lề rộng
+        div(class="wd-canvas", id="wdCanvas")
+            div(class="wd-page", id="wdPage")
+                div(class="wd-content", id="wdBody", contenteditable="true", spellcheck="true", role="textbox", aria-multiline="true")
+        div(class="wd-statusbar")
+            span(id="wdWords") 0 từ
+            span(id="wdPages") 1 trang
+            span(class="wd-status-sep")
+            span(id="wdSaveState") Chưa có thay đổi
+            span(class="wd-spacer")
+            span(class="wd-zoom-label") Thu phóng
+            input(type="range", id="wdZoom", min="60", max="150", step="10", value="100", class="wd-zoom")
+            span(id="wdZoomText") 100%
+        input(type="file", id="wdImageInput", accept="image/png,image/jpeg,image/gif,image/webp,image/bmp", class="hidden")
+    script#payload(type="application/json")!= payloadJson
+    script.
+        (function(){ var p=document.getElementById('payload'); var d=JSON.parse(p.textContent); var b=document.getElementById('wdBack'); if(b&&d.backUrl) b.href=d.backUrl; })();
+    script(src="/js/wordEditor.js")

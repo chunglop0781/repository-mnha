@@ -1,0 +1,81 @@
+/* public/css/word-doc.css — nội dung tài liệu Word (dùng chung cho trình soạn và trang công khai) */
+.wd-content {
+    font-family: Calibri, Carlito, "Segoe UI", Arial, Helvetica, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    color: #1f2937;
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+.wd-content p { margin: 0 0 10px; }
+.wd-content h1, .wd-content h2, .wd-content h3, .wd-content h4, .wd-content h5, .wd-content h6 {
+    font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
+    color: #1f3864;
+    line-height: 1.25;
+    margin: 18px 0 10px;
+    font-weight: 700;
+}
+.wd-content h1 { font-size: 26px; }
+.wd-content h2 { font-size: 21px; }
+.wd-content h3 { font-size: 18px; }
+.wd-content h4 { font-size: 16px; }
+.wd-content h5 { font-size: 15px; }
+.wd-content h6 { font-size: 14px; }
+.wd-content strong, .wd-content b { font-weight: 700; }
+.wd-content em, .wd-content i { font-style: italic; }
+.wd-content u { text-decoration: underline; }
+.wd-content s, .wd-content strike, .wd-content del { text-decoration: line-through; }
+.wd-content ul, .wd-content ol { margin: 8px 0 10px; padding-left: 30px; }
+.wd-content ul { list-style: disc; }
+.wd-content ol { list-style: decimal; }
+.wd-content li { margin: 3px 0; }
+.wd-content li > ul, .wd-content li > ol { margin: 3px 0; }
+.wd-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    table-layout: auto;
+    font-size: 14px;
+}
+.wd-content th, .wd-content td {
+    border: 1px solid #9aa7b4;
+    padding: 6px 8px;
+    vertical-align: top;
+    min-width: 40px;
+}
+.wd-content th { background: #f1f5f9; font-weight: 700; text-align: left; }
+.wd-content img { max-width: 100%; height: auto; }
+.wd-content a { color: #1d4ed8; text-decoration: underline; }
+.wd-content blockquote {
+    margin: 10px 0;
+    padding: 8px 14px;
+    border-left: 4px solid #93c5fd;
+    background: #f8fafc;
+    color: #475569;
+}
+.wd-content pre {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font: 13px/1.45 Consolas, "Courier New", monospace;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+.wd-content code { font-family: Consolas, "Courier New", monospace; font-size: .95em; }
+.wd-content hr { border: 0; border-top: 1px solid #cbd5e1; margin: 16px 0; }
+.wd-content hr.word-pagebreak { border: 0; border-top: 2px dashed #cbd5e1; margin: 26px 0; page-break-after: always; }
+.wd-content mark { background: #fff59d; color: inherit; }
+.wd-content sup { font-size: .75em; vertical-align: super; }
+.wd-content sub { font-size: .75em; vertical-align: sub; }
+.wd-content .word-title { font-size: 26px; font-weight: 700; color: #1f3864; margin: 0 0 6px; }
+.wd-content .word-subtitle { font-size: 16px; color: #595959; margin: 0 0 12px; }
+.wd-content .word-table { border-collapse: collapse; }
+.wd-content .word-pagebreak { border: 0; border-top: 2px dashed #cbd5e1; }
+
+@media print {
+    .wd-content { font-size: 11pt; color: #000; }
+    .wd-content h1, .wd-content h2, .wd-content h3 { color: #1f3864; }
+    .wd-content a { color: #1d4ed8; }
+    .wd-content hr.word-pagebreak { visibility: hidden; border: 0; margin: 0; page-break-after: always; }
+}

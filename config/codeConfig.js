@@ -29,6 +29,16 @@ const LANGS = {
         exts: ['html', 'htm', 'css', 'js', 'json', 'svg', 'txt'], editorMode: 'html',
         assetExts: ASSET_EXTS,
         template: ['<!DOCTYPE html>', '<html lang="vi">', '<head>', '  <meta charset="UTF-8">', '  <meta name="viewport" content="width=device-width, initial-scale=1">', '  <title>Trang của tôi</title>', '  <!-- CSS riêng: tạo file style.css cùng thư mục rồi bỏ comment dòng dưới -->', '  <!-- <link rel="stylesheet" href="style.css"> -->', '  <style>', '    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }', '    h1 { color: #4f46e5; }', '  </style>', '</head>', '<body>', '  <h1>Xin chào, MNHA!</h1>', '  <p>Sửa code ở tab Code, bấm View để xem trang.</p>', '  <!-- Ảnh đã tải lên (cùng thư mục) nhúng như bình thường: -->', '  <!-- <img src="anh.png" alt="" width="300"> -->', '</body>', '</html>', ''].join('\n')
+    },
+    word: {
+        key: 'word', name: 'Word (DOCX)', icon: 'file-text', kind: 'word',
+        description: 'Soạn tài liệu như Word, tải lên .docx để tự chuyển thành bản soạn thảo đẹp; tải về lại thành .docx thật. HTML của tài liệu được mã hoá khi lưu.',
+        root: 'file-word',                 // lưu tại {user_id}/file-word/... (không phải {user_id}/codes/word)
+        runExt: 'docx', exts: ['docx'], editorMode: 'word',
+        maxFileBytes: 80 * 1024 * 1024,    // .docx tải lên: 80MB (GitHub 100MB/file; Vercel 60s cho bước chuyển đổi)
+        maxHtmlBytes: 40 * 1024 * 1024,    // HTML sau khi chuyển: 40MB (gửi/nhận theo từng phần ≤ 3.2MB)
+        manifest: 'mnha-word.json',        // tiêu đề / khổ giấy / công khai — KHÔNG chứa nội dung
+        template: '<p><br></p>'
     }
 };
 

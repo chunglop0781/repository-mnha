@@ -10,7 +10,10 @@ const mc = require('./mediaCrypto');
 const KEEP = '.keep';
 const bad = (m) => Object.assign(new Error(m), { status: 400 });
 
-function root(uid, lang) { return `${uid}/codes/${lang}`; }
+function root(uid, lang) {
+    const cfg = LANGS[lang];
+    return `${uid}/${cfg && cfg.root ? cfg.root : 'codes/' + lang}`;
+}
 function assertLang(lang) { if (!LANGS[lang]) throw bad('Dạng code không hợp lệ'); return LANGS[lang]; }
 
 // "a/b/c" → ['a','b','c'] (kiểm tra chặt: không .., không ký tự lạ)
@@ -33,7 +36,7 @@ function cleanFileName(lang, name, allowAssets = false) {
         throw bad(`Tên file không hợp lệ (chữ, số, "-", "_" và dấu cách; đuôi cho phép: ${cfg.exts.map((e) => '.' + e).join(', ')})`);
     }
     const out = m[1] + '.' + m[2].toLowerCase();
-    if (out.toLowerCase() === MEDIA.MANIFEST) throw bad('Tên file "' + MEDIA.MANIFEST + '" dành riêng cho hệ thống.');
+    if (out.toLowerCase() === MEDIA.MANIFEST || (cfg.manifest && out.toLowerCase() === String(cfg.manifest).toLowerCase())) throw bad('Tên file "' + (cfg.manifest && out.toLowerCase() === String(cfg.manifest).toLowerCase() ? cfg.manifest : MEDIA.MANIFEST) + '" dành riêng cho hệ thống.');
     return out;
 }
 function filePath(uid, lang, dir, name, allowAssets = false) {
@@ -59,6 +62,7 @@ function githubFolderUrl(uid, lang, dir) {
 async function list(uid, lang, dir) {
     const cfg = assertLang(lang);
     const web = cfg.kind === 'web';
+    const hidden = web ? MEDIA.MANIFEST : (cfg.manifest || null);
     const segs = cleanDir(dir);
     const prefix = [root(uid, lang), ...segs].join('/') + '/';
     const tree = await gh.getRepoTree();
@@ -68,7 +72,7 @@ async function list(uid, lang, dir) {
         const rest = p.slice(prefix.length);
         const i = rest.indexOf('/');
         if (i >= 0) { const f = rest.slice(0, i); if (!(web && f === MEDIA.HIDDEN_DIR)) folders.add(f); }
-        else if (rest !== KEEP && !(web && rest === MEDIA.MANIFEST)) files.push(rest);
+        else if (rest !== KEEP && !(hidden && rest === hidden)) files.push(rest);
     }
     return { dir: segs.join('/'), folders: [...folders].sort(), files: files.sort() };
 }
