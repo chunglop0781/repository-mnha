@@ -262,3 +262,12 @@ node test/html-upload-client.js  # riêng phần chọn web / phiếu tải ở 
 ```
 Test dùng `githubService` giả qua `require.cache`, không gọi GitHub thật. Các test cũ vẫn chạy với
 `MEDIA_REPO_POOL` tắt để giữ nguyên hành vi mặc định.
+
+### 10. Dữ liệu chỉ đi qua web kết nối (web chính chỉ lo giao diện + backend)
+- Web chính trên mạng (vd `https://repository-mnha.vercel.app`) **không nhận và không phát dữ liệu** ảnh / âm thanh / video: tải lên đi thẳng tới web kết nối (mục 5); **xem và tải xuống** cũng dùng địa chỉ `<web-kết-nối>/preview/<token>/…` (cùng khoá `.env`, nên token của web chính dùng được).
+- Không có web kết nối nào hoạt động → lỗi `NO_NODE` rõ ràng (trang trình phát báo lỗi, tab View báo lỗi). **Không còn tự lùi về web chính**; `CONNECT_FALLBACK_LOCAL` không còn tác dụng với web chính.
+- Các route ghi dữ liệu trực tiếp lên máy chủ (`/code/html/upload/local/init|part|finish|seg|commit`) chỉ mở ở **localhost** và **web dữ liệu**; ở web chính trả 403 `DATA_ON_NODE` (`services/connect/locality.js`).
+- **localhost** (không phải Vercel) tự nối dữ liệu với chính localhost, không cần web kết nối.
+- Mọi trang có nhãn `Web kết nối: <tên> (<id>)` trên thanh đầu (`GET /api/connect-info`, `public/js/connectBadge.js`); trình phát và nút Tải ghi rõ đang xem / tải qua web nào.
+- Chưa đổi: xoá media đã cắt và bật/tắt công khai (`/code/html/media/delete|visibility`) vẫn gọi web chính (chỉ sửa danh sách mnha-media.json, không chuyển file).
+

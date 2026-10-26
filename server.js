@@ -85,6 +85,18 @@ if (DATA_NODE) {
     });
 }
 
+// Hiện "đang kết nối web kết nối nào" ở mọi trang (public/js/connectBadge.js) — chỉ cho người đã đăng nhập.
+app.get('/api/connect-info', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!req.user) return res.status(401).json({ error: 'Chưa đăng nhập' });
+    const loc = require('./services/connect/locality'), mode = loc.dataMode(req);
+    if (mode === 'self') return res.json({ mode, name: connectVercel.nodeName(), id: connectVercel.nodeId(), ok: true });
+    if (mode === 'local') return res.json({ mode, name: 'localhost', id: 'localhost', ok: true });
+    try {
+        const r = await require('./services/connect/nodes').currentNode();
+        res.json(r.node ? { mode, ok: true, name: r.node.name, id: r.node.id, url: r.node.url } : { mode, ok: false, error: r.error });
+    } catch (e) { res.json({ mode, ok: false, error: e.message }); }
+});
 app.use('/auth', require('./routes/auth'));
 if (DATA_NODE) {
     // /api/node/health|status|media/* + /connect (chỉ admin mặc định) của web dữ liệu

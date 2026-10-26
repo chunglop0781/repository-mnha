@@ -163,9 +163,25 @@ async function pickForUpload(info = null) {
     };
 }
 
+/** Web kết nối đang được dùng (web đầu tiên sống + đúng khoá), không ký phiếu — để hiện ở mọi trang. */
+async function currentNode() {
+    const list = await registry.list({ enabledOnly: true });
+    if (!list.length) return { node: null, error: 'Chưa có web kết nối nào (vào /connect để thêm).' };
+    const tried = [];
+    for (const node of list) {
+        if ((cooldown.get(node.id) || 0) > now()) { tried.push((node.name || node.id) + ': tạm nghỉ'); continue; }
+        const h = await probe(node);
+        let ok = h.ok, why = h.error;
+        if (ok) { const k = await verifyKey(node); if (!k.ok) { ok = false; why = k.error; } }
+        if (ok) return { node: { id: node.id, name: node.name || node.id, url: node.url }, error: null };
+        tried.push((node.name || node.id) + ': ' + why);
+    }
+    return { node: null, error: 'Không web kết nối nào hoạt động (' + tried.join('; ') + ').' };
+}
+
 /** Trình duyệt báo web đang dùng lỗi → cho web đó nghỉ, lần sau chuyển sang web kế tiếp. */
 function markFailed(id) { if (id) cooldown.set(String(id), now() + COOLDOWN_MS); }
 function clearFailed(id) { if (id) cooldown.delete(String(id)); }
 function cooldownLeft(id) { return Math.max(0, (cooldown.get(String(id)) || 0) - now()); }
 
-module.exports = { probe, verifyKey, status, checkAll, pickForUpload, markFailed, clearFailed, cooldownLeft, signatureHeaders, fetchJson, COOLDOWN_MS };
+module.exports = { probe, verifyKey, status, checkAll, pickForUpload, currentNode, markFailed, clearFailed, cooldownLeft, signatureHeaders, fetchJson, COOLDOWN_MS };

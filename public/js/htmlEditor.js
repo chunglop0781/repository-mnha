@@ -85,7 +85,7 @@
     function freshUrl() {
         if (Date.now() - P.tokenAt < 6 * 3600 * 1000) return Promise.resolve(P.previewUrl);
         return api('POST', '/code/html/preview-token', P.online ? { online: P.online } : {}).then(function (j) {
-            P.previewUrl = P.previewUrl.replace(/^\/preview\/[^/]+\//, '/preview/' + j.token + '/'); P.tokenAt = Date.now(); return P.previewUrl;
+            P.previewUrl = P.previewUrl.replace(/^((?:https?:)?\/\/[^/]+)?\/preview\/[^/]+\//, '$1/preview/' + j.token + '/'); P.tokenAt = Date.now(); return P.previewUrl;
         });
     }
     function clearErrs() { errs = {}; errList.innerHTML = ''; errBox.classList.add('hidden'); }
@@ -99,6 +99,7 @@
     $('hxErrClear').onclick = clearErrs;
     function loadView() {
         if (!P.canView) return;
+        if (!P.previewUrl) { say('<span class="bad">' + esc((P.data && P.data.error) || 'Chưa có web kết nối nào hoạt động — dữ liệu phải đi qua web kết nối.') + '</span>'); return; }
         clearErrs(); say('Đang tải trang…');
         var p = P.readOnly ? Promise.resolve() : save().catch(function () { say('<span class="bad">Chưa lưu được — đang xem bản đã lưu trước đó.</span>'); });
         p.then(freshUrl).then(function (url) {
@@ -113,7 +114,8 @@
         if (navigator.userActivation && !navigator.userActivation.isActive) return;      // chỉ khi người dùng vừa bấm (trang trong khung không tự tải được)
         if (dlBusy) return;
         var u; try { u = new URL(String(d.url), location.href); } catch (e) { return; }
-        if (u.origin !== location.origin || !/^\/preview\/[^/]+\/./.test(u.pathname)) return;
+        var dataOrigin = location.origin; try { if (P.previewUrl) dataOrigin = new URL(P.previewUrl, location.href).origin; } catch (e) { /* */ }      // web kết nối (hoặc chính web này khi chạy localhost)
+        if (u.origin !== dataOrigin || !/^\/preview\/[^/]+\/./.test(u.pathname)) return;
         var plain = u.origin + u.pathname, name = String(d.name || '').slice(0, 200) || 'media';
         function viaServer() {
             var a = document.createElement('a'); a.href = plain + '?dl=1'; a.setAttribute('download', name); a.style.display = 'none';
@@ -121,7 +123,9 @@
         }
         if (!(window.MnhaMedia && MnhaMedia.supported())) return viaServer();
         dlBusy = true;
-        MnhaMedia.download(plain, name, { onProgress: function (f, t) { say('⬇ ' + esc(name) + ' — ' + Math.round(f * 100) + '% (' + esc(t) + ')'); } })
+        var via = '';
+        if (window.MnhaConnect) MnhaConnect.get().then(function (i) { if (i && i.ok) via = 'qua web kết nối: ' + MnhaConnect.label(i) + ' — '; });
+        MnhaMedia.download(plain, name, { onProgress: function (f, t) { say('⬇ ' + esc(name) + ' — ' + esc(via) + Math.round(f * 100) + '% (' + esc(t) + ')'); } })
             .then(function () { say(''); }, function () { say(''); viaServer(); })
             .then(function () { dlBusy = false; });
     }

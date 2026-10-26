@@ -5,6 +5,8 @@
     var P = JSON.parse(document.getElementById('payload').textContent);
     var items = P.items || [], stage = document.getElementById('plStage'), side = document.getElementById('plSide');
     var cur = -1, hls = null, auto = true, curBlob = null;
+    // web kết nối đang giữ dữ liệu: xem và tải ảnh / âm thanh / video đều đi qua đây (không qua web chính)
+    (function () { var d = P.data, b = document.getElementById('plNode'); if (!d || !d.node || !b) return; b.textContent = 'Xem / tải xuống qua web kết nối: ' + d.node.name + (d.node.id && d.node.id !== d.node.name ? ' (' + d.node.id + ')' : ''); })();
     // Trình duyệt TỰ giải mã (mnhaMedia.js): tải file mã hoá thẳng từ GitHub raw, chỉ xin khoá nhỏ ở máy chủ → không tốn băng thông Vercel. Không được thì quay về đường cũ.
     var direct = !!(P.direct && window.MnhaMedia && MnhaMedia.supported());
     if (direct) MnhaMedia.bindDownloads(document, {});

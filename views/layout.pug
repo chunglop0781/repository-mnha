@@ -15,11 +15,14 @@ html(lang="vi")
                 div(class="flex items-center gap-4 text-sm")
                     if dataNode
                         span(class="hidden sm:inline rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-xs", title="Web dữ liệu") #{nodeName || 'data node'}
+                    span(id="connBadge", class="hidden sm:inline rounded-full bg-gray-100 text-gray-600 px-2 py-0.5 text-xs", title="Web kết nối đang giữ dữ liệu (ảnh / âm thanh / video)") Web kết nối: …
                     if user.role === 'admin' && !user.userKey
                         a(href="/connect", class="text-indigo-600 hover:underline") Web kết nối
                     span(class="text-gray-600")= user.name
                     form(method="post", action="/auth/logout")
                         button(type="submit", class="text-gray-500 hover:text-red-600") Đăng xuất
         block content
+        if user
+            script(src="/js/connectBadge.js")
         script.
             if (window.lucide) lucide.createIcons();

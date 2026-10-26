@@ -51,7 +51,15 @@ const ownToken = (uid) => token.sign({ k: 'own', uid });
 const webPayload = (f, req) => ({ k: 'web', host: f.host, base: f.base, ref: f.ref, uid: (f.pathSegs || f.dirSegs || [])[0], viewer: uidOf(req) });
 const webToken = (f, req) => token.sign(webPayload(f, req));
 const directFlag = async (payload) => { try { return await keys.canDirect(payload, require('../services/githubService')); } catch (_) { return false; } };
-const previewUrl = (tok, segs) => `/preview/${tok}/${enc(segs)}`;
+// base = '' (localhost / web dữ liệu) hoặc URL gốc của WEB KẾT NỐI: xem & tải ảnh / âm thanh / video đi qua web kết nối, không qua web chính.
+const previewUrl = (tok, segs, base) => `${base || ''}/preview/${tok}/${enc(segs)}`;
+// Nơi giữ dữ liệu của request này; không có web kết nối nào (và không phải localhost) → lỗi rõ ràng, KHÔNG lùi về web chính.
+async function dataFor(req, strict) {
+    const t = await require('../services/connect/locality').dataTarget(req);
+    if (strict && t.mode === 'none') throw Object.assign(new Error(t.error), { status: 503, code: 'NO_NODE' });
+    return t;
+}
+const nodeInfo = (t) => ({ mode: t.mode, node: t.node, error: t.error });
 
 const TEMPLATES = {
     html: () => LANG.template,
@@ -103,7 +111,7 @@ function renderEditor(req, res, o) {
     const canView = isPage(o.file);
     const payload = {
         dir: o.dir, file: o.file, content: o.content, canView, readOnly: !!o.online, online: o.online || null,
-        contentUrl: o.contentUrl || null, previewUrl: o.previewUrl, tokenAt: Date.now(), startView: canView && o.startView, hlsjs: MEDIA.HLSJS_URL, mode: extOf(o.file)
+        contentUrl: o.contentUrl || null, previewUrl: o.previewUrl, tokenAt: Date.now(), startView: canView && o.startView, hlsjs: MEDIA.HLSJS_URL, mode: extOf(o.file), data: o.data ? nodeInfo(o.data) : null
     };
     res.render('code/html-editor', {
         title: o.file, user: req.user, lang: LANG, dir: o.dir, file: o.file, canView, online: o.online || null,
@@ -121,8 +129,9 @@ exports.edit = wrap(async (req, res) => {
     if (content === null) throw httpErr('Không tìm thấy file', 404);
     content = store.displayText(file, content);      // .txt trắng → hiện dòng gợi ý
     const big = Buffer.byteLength(content) > BIG_INLINE;      // file lớn: không nhúng vào trang (Vercel chặn response > 4.5MB) → trình soạn tải riêng qua /code/html/raw
+    const data = await dataFor(req);
     renderEditor(req, res, {
-        dir, file, content: big ? '' : content, contentUrl: big ? '/code/html/raw?dir=' + encodeURIComponent(dir) + '&file=' + encodeURIComponent(file) : null, previewUrl: previewUrl(ownToken(uid), [...dirSegs, file]), startView: req.query.view === '1',
+        data, dir, file, content: big ? '' : content, contentUrl: big ? '/code/html/raw?dir=' + encodeURIComponent(dir) + '&file=' + encodeURIComponent(file) : null, previewUrl: data.mode === 'none' ? '' : previewUrl(ownToken(uid), [...dirSegs, file], data.base), startView: req.query.view === '1',
         githubUrl: store.githubUrl(uid, 'html', dir, file), playerUrl: '/code/html/player?dir=' + encodeURIComponent(dir)
     });
 });
@@ -173,14 +182,15 @@ exports.player = wrap(async (req, res) => {
     const m = await media.readManifest(uid, dirSegs).catch(() => null);
     const hls = m ? media.listFrom(m) : [];
     const priv = new Set(m && Array.isArray(m.private) ? m.private : []);
+    const dt = await dataFor(req, true);
     const tok = ownToken(uid);
-    const base = (n) => previewUrl(tok, [...dirSegs, n]);
+    const base = (n) => previewUrl(tok, [...dirSegs, n], dt.base);
     const names = new Set();
     const items = [];
     for (const f of data.files) { const k = mediaKind(f); if (k) { names.add(f); items.push({ name: f, kind: k, url: base(f), dl: base(f) + '?dl=1', pub: !priv.has(f) }); } }
     for (const x of hls) if (!names.has(x.name)) items.push({ name: x.name, kind: x.kind, url: base(x.name), dl: base(x.name) + '?dl=1', cut: true, pending: x.state !== 'ready', pub: !priv.has(x.name) });
     const direct = await directFlag({ k: 'own', uid });
-    const payload = { items: sortItems(items), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct, own: true, dir: dirSegs.join('/'), visUrl: '/code/html/media/visibility' };
+    const payload = { items: sortItems(items), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct, own: true, dir: dirSegs.join('/'), visUrl: '/code/html/media/visibility', data: nodeInfo(dt) };
     res.render('code/html-player', {
         title: 'Trình phát' + (dirSegs.length ? ' — ' + dirSegs.join('/') : ''), user: req.user, lang: LANG,
         backUrl: '/code/html' + (dirSegs.length ? '?dir=' + encodeURIComponent(dirSegs.join('/')) : ''), heading: 'Thư mục: ' + (dirSegs.join('/') || 'gốc'),
@@ -193,11 +203,10 @@ exports.mediaVisibility = wrap(async (req, res) => res.json(await media.setPubli
 //
 // Web chính KHÔNG tự nhận file nữa: /upload/init chỉ chọn web dữ liệu (kiểm tra
 // LẦN LƯỢT cũ → mới), ký phiếu tải lên rồi trả địa chỉ web cho trình duyệt gửi
-// thẳng. Không có web nào / tất cả lỗi → tuỳ CONNECT_FALLBACK_LOCAL mà báo lỗi
-// hoặc tải lên máy chủ chính (kèm thông báo rõ).
+// thẳng. Không có web nào / tất cả lỗi → báo lỗi (web chính trên mạng
+// KHÔNG nhận dữ liệu; chỉ localhost mới tự nối dữ liệu với localhost).
 const asBuf = (b) => (Buffer.isBuffer(b) ? b : Buffer.alloc(0));
-const allowLocalFallback = () => String(process.env.CONNECT_FALLBACK_LOCAL || 'on').toLowerCase() !== 'off'
-    && String(process.env.CONNECT_REQUIRED || '').toLowerCase() !== 'on';
+const locality = require('../services/connect/locality');
 
 exports.uploadInit = wrap(async (req, res) => {
     const uid = uidOf(req);
@@ -206,9 +215,10 @@ exports.uploadInit = wrap(async (req, res) => {
     const name = media.cleanAssetName(body.name);
     const base = { dir, name, lastModified: body.lastModified, srcName: body.srcName, size: body.size, encrypt: body.encrypt };
 
-    // Web dữ liệu tự đăng nhập admin mặc định: dùng luôn máy chủ đó.
-    if (String(process.env.DATA_NODE || '').toLowerCase() === 'on') {
-        return res.json({ ok: true, mode: 'local', ...(await media.init(uid, base)) });
+    // Web dữ liệu (tự là nơi giữ dữ liệu) hoặc localhost (tự kết nối dữ liệu với localhost): dùng luôn máy chủ này.
+    const dm = locality.dataMode(req);
+    if (dm === 'self' || dm === 'local') {
+        return res.json({ ok: true, mode: 'local', where: dm === 'self' ? 'self' : 'localhost', ...(await media.init(uid, base)) });
     }
 
     const uploadId = crypto.randomBytes(16).toString('hex');
@@ -220,17 +230,12 @@ exports.uploadInit = wrap(async (req, res) => {
             token: plan.tokens[plan.primary.id], tokens: plan.tokens, uploadId, dir, name, ttl: uploadToken.TTL_MS, checks: plan.checks
         });
     }
+    // Web chính trên mạng KHÔNG giữ dữ liệu: không có web kết nối nào thì báo lỗi, không tải lên máy chủ chính.
     const error = plan.error || 'Không có web kết nối nào để tải lên.';
-    if (!allowLocalFallback()) {
-        throw Object.assign(new Error(error), { status: 503, code: 'NO_NODE' });
-    }
-    return res.json({
-        ok: true, mode: 'local', notice: error + ' Tạm thời tải lên máy chủ chính.',
-        checks: plan.checks || []
-    });
+    throw Object.assign(new Error(error), { status: 503, code: 'NO_NODE' });
 });
 
-// Tải lên máy chủ chính (fallback / web dữ liệu).
+// Tải lên máy chủ này (chỉ localhost / web dữ liệu — route có requireLocalData).
 exports.uploadLocalInit = wrap(async (req, res) => res.json(await media.init(uidOf(req), req.body || {})));
 exports.uploadPart = wrap(async (req, res) => res.json(await media.putPart(uidOf(req), req.query, asBuf(req.body))));
 exports.uploadFinish = wrap(async (req, res) => res.json(await media.finish(uidOf(req), req.body || {})));
@@ -262,8 +267,9 @@ exports.online = wrap(async (req, res) => {
     const dirSegs = parsed.pathSegs.slice(0, -1);
     const folderUrl = '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(parsed, dirSegs));
     const big = Buffer.byteLength(content) > BIG_INLINE;
+    const data = await dataFor(req);
     renderEditor(req, res, {
-        dir: '', file: parsed.last, content: big ? '' : content, contentUrl: big ? '/code/html/online/raw?url=' + encodeURIComponent(url) : null, online: parsed.web, previewUrl: previewUrl(webToken(parsed, req), parsed.pathSegs),
+        data, dir: '', file: parsed.last, content: big ? '' : content, contentUrl: big ? '/code/html/online/raw?url=' + encodeURIComponent(url) : null, online: parsed.web, previewUrl: data.mode === 'none' ? '' : previewUrl(webToken(parsed, req), parsed.pathSegs, data.base),
         githubUrl: parsed.web, shareLabel: parsed.host === 'gitlab' ? 'Nguồn (GitLab):' : 'Nguồn (GitHub):', folderUrl
     });
 });
@@ -317,13 +323,14 @@ exports.onlinePlayer = wrap(async (req, res) => {
     try { d = await loadFolder(url); }
     catch (e) { if (isUserErr(e)) return onlineForm(req, res, { folderUrl: url, error: e.message, errorFor: 'folder', status: e.status === 404 ? 404 : 400 }); throw e; }
     const { f, items, manifest } = d;
+    const data = await dataFor(req, true);
     const tok = webToken(f, req);
-    const mk = (name, extra) => ({ name, kind: mediaKind(name), url: previewUrl(tok, [...f.dirSegs, name]), dl: previewUrl(tok, [...f.dirSegs, name]) + '?dl=1', ...extra });
+    const mk = (name, extra) => ({ name, kind: mediaKind(name), url: previewUrl(tok, [...f.dirSegs, name], data.base), dl: previewUrl(tok, [...f.dirSegs, name], data.base) + '?dl=1', ...extra });
     const out = [], have = new Set();
     const priv = privateSet(manifest);
     for (const x of items) if (x.type === 'file' && mediaKind(x.name) && !priv.has(x.name)) { out.push(mk(x.name)); have.add(x.name); }
     if (manifest && manifest.files) for (const [name, e] of Object.entries(manifest.files)) if (!have.has(name) && !priv.has(name) && e && e.state === 'ready' && mediaKind(name)) out.push(mk(name, { cut: true }));
-    const payload = { items: sortItems(out), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct: await directFlag(webPayload(f, req)) };
+    const payload = { items: sortItems(out), start: String(req.query.file || ''), hlsjs: MEDIA.HLSJS_URL, direct: await directFlag(webPayload(f, req)), data: nodeInfo(data) };
     res.render('code/html-player', {
         title: 'Trình phát trên mạng', user: req.user, lang: LANG,
         backUrl: '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(f, f.dirSegs)), heading: f.base.join('/') + (f.dirSegs.length ? ' / ' + f.dirSegs.join('/') : ''),

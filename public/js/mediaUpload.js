@@ -147,8 +147,9 @@
         for (var i = 0; i < candidates.length; i++) {
             var node = candidates[i];
             var local = !node;
-            var label = node ? (node.name || node.id || node.url) : 'máy chủ chính';
-            opt.onNode(node || null);
+            var localNode = plan.where === 'localhost' ? { id: 'localhost', name: 'localhost' } : null;
+            var label = node ? (node.name || node.id || node.url) : (localNode ? 'localhost' : 'máy chủ này');
+            opt.onNode(node || localNode);
             try {
                 var init;
                 if (local && plan.uploadId && plan.name) {
