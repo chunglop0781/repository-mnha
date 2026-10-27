@@ -241,7 +241,7 @@ const SAMPLE = '<h1>Báo cáo tháng 10</h1>' +
         const count = (x, t) => (x.match(new RegExp('<' + t + '[ >]', 'g')) || []).length;
         assert(count(h, 'math') > 200 && count(h, 'msub') > 300 && count(h, 'mfrac') === 21 && count(h, 'mtable') === 5 && count(h, 'mover') === 9, 'giữ công thức: chỉ số, phân số, ma trận, vector');
         assert(/<msup><mrow><mi[^>]*>R<\/mi><\/mrow><mrow><mn>4<\/mn><\/mrow><\/msup>/.test(h), 'R^4 là chỉ số trên thật, không phải chữ "R4"');
-        assert((h.match(/class="word-textbox"/g) || []).length === 19, 'giữ đủ 19 hộp văn bản (mc:Choice, không nhân đôi bằng Fallback)');
+        assert((h.match(/class="word-(?:textbox|float)"[^>]*>(?!<img)/g) || []).length === 19, 'giữ đủ 19 hộp văn bản (mc:Choice, không nhân đôi bằng Fallback)');
         const back = htmlToDocx(h, { title: c.title, page: c.page });
         const zip = readZip(back), xml = zip.text('word/document.xml');
         assert(/xmlns:m="http:\/\/schemas\.openxmlformats\.org\/officeDocument\/2006\/math"/.test(xml), 'khai báo namespace m:');
@@ -260,6 +260,27 @@ const SAMPLE = '<h1>Báo cáo tháng 10</h1>' +
         assert.strictEqual(norm(again), norm(h), 'đi vòng không mất chữ nào (kể cả nội dung hộp văn bản)');
         // MathML vào từ trình soạn không được mang script/onclick
         assert(!/onclick|<script/i.test(sanitizeHtml('<p><math onclick="x()"><mi>x</mi><script>1</script></math></p>')), 'sanitize MathML');
+    }
+
+    // ---- công thức MathType (.wmf) → SVG; hộp văn bản nổi / nét ink; danh sách a) b) c); xuất lại docx
+    {
+        const fs = require('fs'), path = require('path');
+        const { htmlToDocx } = require('../services/word/htmlToDocx');
+        const hust = convertDocx(fs.readFileSync(path.join(__dirname, 'fixtures', 'hust-wmf-equations.docx')));
+        const hh = sanitizeHtml(hust.html);
+        const svgs = hh.match(/<img [^>]*src="data:image\/svg\+xml;base64,/g) || [];
+        assert.strictEqual(svgs.length, 26, 'đủ 26 công thức MathType (ảnh .wmf) sau khi lọc HTML');
+        const svg0 = Buffer.from(/data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)/.exec(hh)[1], 'base64').toString('utf8');
+        assert(/<text[^>]*>[^<]*α/.test(svg0) || /<text[^>]*>[^<]*β/.test(svg0), 'ký tự Hy Lạp (phông Symbol) được đổi sang Unicode');
+        assert(/list-style-type:wd-alpha-paren/.test(hust.html), 'danh sách a) b) c) giữ đúng kiểu đánh số');
+        assert(!/<svg/i.test(sanitizeHtml('<p><img src="data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>').toString('base64') + '"></p>')) &&
+            !/svg\+xml/.test(sanitizeHtml('<p><img src="data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>').toString('base64') + '"></p>')), 'SVG có script bị loại');
+        const out = readZip(htmlToDocx(hh, { title: 't', page: hust.page }));
+        assert.strictEqual(out.names.filter((n) => /^word\/media\/.*\.wmf$/.test(n)).length, 26, 'xuất lại .docx nhúng nguyên bản 26 WMF');
+        const bt = sanitizeHtml(convertDocx(fs.readFileSync(path.join(__dirname, 'fixtures', 'floating-textbox-ink.docx'))).html);
+        assert((bt.match(/class="word-anchor"/g) || []).length >= 10 && /<div style="position:absolute;left:[^"]*" class="word-float">/.test(bt), 'hộp văn bản nổi được đặt tuyệt đối theo đoạn neo');
+        assert((bt.match(/<math[ >]/g) || []).length === 244, 'giữ đủ 244 công thức OMML');
+        assert(/<img [^>]*src="data:image\/png;base64,/.test(bt), 'nét ink dùng ảnh dự phòng của Word');
     }
 
     // ---- tách HTML theo trang/khối: ghép lại phải ĐÚNG NGUYÊN VĂN (không mất byte nào)

@@ -277,7 +277,8 @@ function sendImage(res, img, cache) {
         'Content-Type': img.mime,
         'Content-Length': String(img.buffer.length),
         'Cache-Control': cache,
-        'X-Content-Type-Options': 'nosniff'
+        'X-Content-Type-Options': 'nosniff',
+        ...(/svg/i.test(String(img.mime)) ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } : {})
     });
     res.end(img.buffer);
 }

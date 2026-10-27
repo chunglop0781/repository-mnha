@@ -5,9 +5,9 @@
 const crypto = require('crypto');
 const { decodeEntities, escapeAttr } = require('./xml');
 
-const NAME_RE = /^anh-\d{3,}(?:-[A-Za-z0-9_]+)*\.(png|jpe?g|gif|webp|bmp)$/i;
-const DATA_RE = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,([\s\S]+)$/i;
-const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' };
+const NAME_RE = /^anh-\d{3,}(?:-[A-Za-z0-9_]+)*\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+const DATA_RE = /^data:image\/(png|jpe?g|gif|webp|bmp|svg\+xml);base64,([\s\S]+)$/i;
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
 const MAX_IMAGES = 200;                              // quá số này thì giữ inline (vẫn nằm trong HTML đã mã hoá)
 
 const isImageName = (v) => NAME_RE.test(String(v || ''));
@@ -16,6 +16,19 @@ const mimeOf = (name) => MIME[extOf(name)] || 'application/octet-stream';
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const dataUriOf = (ext, buf) => 'data:' + mimeOf('x.' + ext) + ';base64,' + Buffer.from(buf).toString('base64');
 
+const SVG_TAGS = new Set(['svg', 'g', 'path', 'line', 'rect', 'ellipse', 'circle', 'polygon', 'polyline', 'text', 'tspan', 'defs', 'marker', 'metadata']);
+/** SVG do hệ thống tự sinh (công thức WMF, mũi tên/đường nối): chỉ cho phép thẻ vẽ cơ bản, không script/liên kết ngoài. */
+function isSafeSvg(str) {
+    const raw = String(str || '');
+    const t = raw.replace(/\sdata-wmf="[A-Za-z0-9+/=]*"/g, '');          // WMF gốc (base64) chỉ là dữ liệu, không kiểm như mã
+    if (raw.length > 600 * 1024 || !/^\s*(?:<\?xml[^>]*\?>\s*)?<svg[\s>]/i.test(t)) return false;
+    if (/<!|<\?(?!xml)|javascript:|\bon\w+\s*=|href\s*=|<\s*(?:script|foreignObject|iframe|image|use|style|animate|set)/i.test(t)) return false;
+    const re = /<\s*\/?\s*([A-Za-z][\w:-]*)/g;
+    let m;
+    while ((m = re.exec(t))) if (!SVG_TAGS.has(m[1].toLowerCase())) return false;
+    return true;
+}
+
 /** Kiểm tra nhanh chữ ký file để không ghi nhầm nội dung lạ thành ảnh. */
 function magicOk(buf, ext) {
     if (!buf || !buf.length) return false;
@@ -23,13 +36,14 @@ function magicOk(buf, ext) {
     if (ext === 'jpg' || ext === 'jpeg') return buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
     if (ext === 'gif') return buf.length > 6 && buf.toString('latin1', 0, 4) === 'GIF8';
     if (ext === 'bmp') return buf.length > 2 && buf.toString('latin1', 0, 2) === 'BM';
+    if (ext === 'svg') return isSafeSvg(buf.toString('utf8'));
     if (ext === 'webp') return buf.length > 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP';
     return false;
 }
 function parseDataUri(src) {
     const m = DATA_RE.exec(String(src || ''));
     if (!m) return null;
-    const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase();
+    const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase() === 'svg+xml' ? 'svg' : m[1].toLowerCase();
     let buf;
     try { buf = Buffer.from(m[2].replace(/\s+/g, ''), 'base64'); } catch (_) { return null; }
     if (!magicOk(buf, ext)) return null;
@@ -145,6 +159,6 @@ function planImages(html, prevImages, maxImages = MAX_IMAGES) {
 
 module.exports = {
     NAME_RE, MIME, MAX_IMAGES,
-    isImageName, extOf, mimeOf, sha256, dataUriOf, parseDataUri, slugOf, nameFromSrc, magicOk,
+    isImageName, isSafeSvg, extOf, mimeOf, sha256, dataUriOf, parseDataUri, slugOf, nameFromSrc, magicOk,
     mapImageSrc, imageNames, planImages
 };

@@ -161,3 +161,16 @@
 /* hình cắt bằng clip-path: viền bị cắt thành các vạch lẻ → bỏ viền, hình chỉ có màu tô */
 .wd-content .word-shape[data-shape="triangle"], .wd-content .word-shape[data-shape="diamond"], .wd-content .word-shape[data-shape="hexagon"],
 .wd-content .word-shape[data-shape="arrow"], .wd-content .word-shape[data-shape="star"], .wd-content .word-shape[data-shape="plus"] { border-width: 0 !important; }
+
+/* ---- hình/hộp văn bản đặt tự do khi nhập từ Word: khối neo cao 0 đặt trước đoạn, hộp con tính toạ độ từ đỉnh đoạn */
+.wd-content .word-anchor { position: relative; height: 0; margin: 0; padding: 0; }
+.wd-content .word-float { position: absolute; box-sizing: border-box; margin: 0; line-height: 1.3; }
+.wd-content .word-float p { margin: 0; }
+.wd-content .word-float img { max-width: none; }
+.wd-content .word-tab { white-space: pre; tab-size: 48px; -moz-tab-size: 48px; }
+/* kiểu đánh số "a)" "1)" "i)" của danh sách Word */
+@counter-style wd-decimal-paren { system: extends decimal; suffix: ") "; }
+@counter-style wd-alpha-paren { system: extends lower-alpha; suffix: ") "; }
+@counter-style wd-upper-alpha-paren { system: extends upper-alpha; suffix: ") "; }
+@counter-style wd-roman-paren { system: extends lower-roman; suffix: ") "; }
+@counter-style wd-upper-roman-paren { system: extends upper-roman; suffix: ") "; }

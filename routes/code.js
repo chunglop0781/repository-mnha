@@ -3,7 +3,6 @@ const express = require('express');
 const router = express.Router();
 const ctrl = require('../controllers/code.controller');
 const html = require('../controllers/html.controller');
-const word = require('../controllers/word.controller');
 const { attachUser, requireAuth } = require('../middleware/auth');
 const { requireMediaUploader } = require('../middleware/uploadAuth');
 const { requireLocalData } = require('../services/connect/locality');
@@ -39,21 +38,6 @@ router.get('/html/raw', html.raw);
 router.get('/html/online/raw', html.onlineRaw);
 router.post('/html/media/delete', html.mediaDelete);
 router.post('/html/media/visibility', html.mediaVisibility);
-
-// Word (DOCX) — cũng đặt TRƯỚC /:lang; thao tác thư mục dùng route chung bên dưới
-router.get('/word', word.files);
-router.get('/word/edit', word.edit);
-router.get('/word/raw', word.raw);
-router.get('/word/media', word.media);
-router.post('/word/file', word.createFile);
-router.post('/word/delete', word.remove);
-router.post('/word/rename-file', word.renameFile);
-router.post('/word/visibility', word.visibility);
-router.put('/word/save/part', raw, word.savePart);
-router.post('/word/save/finish', word.saveFinish);
-router.put('/word/upload/part', raw, word.uploadPart);
-router.post('/word/upload/finish', word.uploadFinish);
-router.get('/word/download', word.download);
 
 router.get('/:lang', ctrl.files);
 router.get('/:lang/edit', ctrl.edit);

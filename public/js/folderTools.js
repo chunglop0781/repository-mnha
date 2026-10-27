@@ -1,7 +1,7 @@
 // public/js/folderTools.js — trang thư mục code (mọi dạng, kể cả html): nút "Đổi tên" thư mục + sao chép link GitHub của thư mục
 (function () {
     'use strict';
-    var root = document.getElementById('codeFiles') || document.getElementById('htmlFiles') || document.getElementById('wordFiles'); if (!root) return;
+    var root = document.getElementById('codeFiles') || document.getElementById('htmlFiles'); if (!root) return;
     var lang = root.dataset.lang || 'html', dir = root.dataset.dir || '';
     function post(url, body) {
         return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) })

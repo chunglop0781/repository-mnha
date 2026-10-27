@@ -35,12 +35,6 @@ if (ON_VERCEL) app.use((req, res, next) => (req.path === '/api/node/health' ? ne
 app.use(morgan('dev'));
 // Xem trước trang HTML (iframe sandbox, KHÔNG cookie): quyền đọc nằm trong token ký → gắn TRƯỚC cookie/session để khỏi chạm session store (GitHub)
 app.use('/preview', require('./services/code/previewServer').createHandler({ mount: '/preview' }));
-// Tài liệu Word công khai (không đăng nhập): quyền xem kiểm tra trong mnha-word.json. Gắn TRƯỚC cookie/session.
-const wordCtrl = require('./controllers/word.controller');
-app.get('/w', wordCtrl.publicView);
-app.get('/w/raw', wordCtrl.publicRaw);
-app.get('/w/media', wordCtrl.publicMedia);
-app.get('/w/download', wordCtrl.publicDownload);
 // Webhook GitHub (sự kiện push) → cập nhật DUNG LƯỢNG từng repo dữ liệu (services/githubPool.js). Cần body GỐC để kiểm tra chữ ký
 // HMAC (GITHUB_WEBHOOK_SECRET) nên gắn TRƯỚC express.json; dung lượng chỉ giữ trong RAM, không lưu JSON.
 app.post('/api/github/webhook', express.raw({ type: () => true, limit: '5mb' }), (req, res) => {

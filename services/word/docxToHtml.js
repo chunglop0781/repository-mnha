@@ -2,12 +2,13 @@
 //
 //  Hỗ trợ: đoạn văn + Heading/Title, chữ đậm/nghiêng/gạch chân/gạch ngang, màu chữ, tô nền,
 //  phông + cỡ chữ, căn lề, thụt dòng, danh sách (bullet/số), bảng (gộp cột cơ bản), ảnh nhúng,
-//  liên kết ngoài, ngắt trang, khổ giấy + lề. Không hỗ trợ: SmartArt, chart, macro, text box phức tạp…
+//  liên kết ngoài, công thức MathType (.wmf → SVG), hộp văn bản/đường nối/nét ink đặt tự do, ngắt trang, khổ giấy + lề. Không hỗ trợ: SmartArt, chart, macro, text box phức tạp…
 //  Không dùng thư viện ngoài — tự đọc ZIP + XML của OOXML.
 'use strict';
 const { readZip } = require('./zip');
 const { parseXml, local, escapeText, escapeAttr } = require('./xml');
 const { ommlToMathml } = require('./omml');
+const { wmfToSvg } = require('./wmf');
 
 const { LANGS } = require('../../config/codeConfig');
 const EMU_PER_PX = 9525;          // 1 px CSS = 9525 EMU
@@ -66,6 +67,7 @@ function parseRunProps(rPr) {
     if (shd) { const c = hex(attr(shd, 'fill')); if (c && c !== 'FFFFFF') p.fill = c; }
     const va = child(rPr, 'vertAlign');
     if (va) { const v = String(valOf(va) || ''); if (v === 'superscript' || v === 'subscript') p.vertAlign = v; }
+    const pos = child(rPr, 'position'); if (pos) { const n = num(valOf(pos)); if (n) p.position = n / 2; }
     const caps = child(rPr, 'caps'); if (caps && truthy(valOf(caps))) p.caps = true;
     const smallCaps = child(rPr, 'smallCaps'); if (smallCaps && truthy(valOf(smallCaps))) p.smallCaps = true;
     return p;
@@ -146,7 +148,7 @@ function readStyles(zip) {
 
 function readNumbering(zip) {
     const xml = zip.text('word/numbering.xml');
-    if (!xml) return { fmt: () => 'decimal', levels: () => [] };
+    if (!xml) return { fmt: () => 'decimal', levels: () => [], level: () => ({ fmt: 'decimal', text: '', start: 1 }) };
     const root = parseXml(xml);
     const abstracts = new Map();
     for (const a of descendants(root, 'abstractNum')) {
@@ -172,7 +174,8 @@ function readNumbering(zip) {
             const levels = nums.get(String(numId));
             return (levels && levels[ilvl] && levels[ilvl].fmt) || 'decimal';
         },
-        levels: (numId) => nums.get(String(numId)) || []
+        levels: (numId) => nums.get(String(numId)) || [],
+        level: (numId, ilvl = 0) => { const l = nums.get(String(numId)); return (l && l[ilvl]) || { fmt: 'decimal', text: '', start: 1 }; }
     };
 }
 
@@ -205,35 +208,69 @@ const IMAGE_MIME = {
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
     bmp: 'image/bmp', webp: 'image/webp'
 };
-function imageFrom(xmlNode, ctx) {
-    let rid = null, cx = 0, cy = 0;
+const LEN_PX = { pt: 96 / 72, px: 1, in: 96, cm: 96 / 2.54, mm: 96 / 25.4, pc: 16 };
+function cssLenPx(v) {
+    const m = /^\s*(-?[\d.]+)\s*(pt|px|in|cm|mm|pc)?\s*$/i.exec(String(v || ''));
+    return m ? Number(m[1]) * LEN_PX[(m[2] || 'px').toLowerCase()] : 0;
+}
+function styleMap(str) {
+    const o = {};
+    for (const part of String(str || '').split(';')) { const i = part.indexOf(':'); if (i > 0) o[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).trim(); }
+    return o;
+}
+const textOf = (n) => ((n && n.children) || []).map((x) => x.text || '').join('');
+const toB64Svg = (svg) => 'data:image/svg+xml;base64,' + Buffer.from(svg, 'utf8').toString('base64');
+
+/** Kích thước ảnh (px): DrawingML extent → VML style (đối tượng OLE/MathType) → dxaOrig/dyaOrig. */
+function imageSize(xmlNode) {
+    const extent = firstDesc(xmlNode, 'extent') || firstDesc(xmlNode, 'ext');
+    if (extent && num(attr(extent, 'cx')) > 0) return { w: num(attr(extent, 'cx')) / EMU_PER_PX, h: num(attr(extent, 'cy')) / EMU_PER_PX };
+    const shape = firstDesc(xmlNode, 'shape');
+    if (shape) {
+        const st = styleMap(attr(shape, 'style'));
+        const w = cssLenPx(st.width), h = cssLenPx(st.height);
+        if (w > 0) return { w, h };
+    }
+    const dx = num(attr(xmlNode, 'dxaOrig')), dy = num(attr(xmlNode, 'dyaOrig'));
+    if (dx > 0) return { w: dx / TWIPS_PER_PX, h: dy / TWIPS_PER_PX };
+    return { w: 0, h: 0 };
+}
+
+function imageSrc(xmlNode, ctx) {
+    let rid = null;
     const blip = firstDesc(xmlNode, 'blip');
     if (blip) rid = attr(blip, 'embed') || attr(blip, 'link') || null;
     if (!rid) {
         const imagedata = firstDesc(xmlNode, 'imagedata');
         if (imagedata) rid = attr(imagedata, 'id') || null;
     }
-    const extent = firstDesc(xmlNode, 'extent') || firstDesc(xmlNode, 'ext');
-    if (extent) { cx = num(attr(extent, 'cx')); cy = num(attr(extent, 'cy')); }
     if (!rid) return null;
-    const rel = ctx.rels.get(String(rid));
-    const part = relTargetPath(rel);
+    const part = relTargetPath(ctx.rels.get(String(rid)));
     if (!part) return null;
     let cached = ctx.images.get(part);
     if (cached === undefined) {
         const buf = ctx.zip.get(part);
         const ext = String(part).split('.').pop().toLowerCase();
-        const mime = IMAGE_MIME[ext];
-        cached = buf && mime && buf.length <= 6 * 1024 * 1024 ? `data:${mime};base64,${buf.toString('base64')}` : null;
+        cached = null;
+        if (buf && buf.length <= 6 * 1024 * 1024) {
+            if (IMAGE_MIME[ext]) cached = `data:${IMAGE_MIME[ext]};base64,${buf.toString('base64')}`;
+            else if (ext === 'wmf') { const svg = wmfToSvg(buf); if (svg) cached = toB64Svg(svg); }   // công thức MathType, hình vẽ cũ
+        }
         ctx.images.set(part, cached);
     }
-    if (!cached) return null;
-    const w = cx > 0 ? Math.max(16, Math.round(cx / EMU_PER_PX)) : 480;
-    const h = cy > 0 ? Math.max(16, Math.round(cy / EMU_PER_PX)) : 0;
+    return cached;
+}
+
+function imageFrom(xmlNode, ctx) {
+    const src = imageSrc(xmlNode, ctx);
+    if (!src) return null;
+    const { w: cw, h: ch } = imageSize(xmlNode);
+    const w = cw > 0 ? Math.max(4, Math.round(cw)) : 480;
+    const h = ch > 0 ? Math.max(4, Math.round(ch)) : 0;
     // mô tả ảnh (nếu Word có) → alt; khi tách ảnh sẽ thành phần tên file anh-001-<mô-tả>
     const docPr = firstDesc(xmlNode, 'docPr');
     const alt = docPr ? String(attr(docPr, 'descr') || '').replace(/\s+/g, ' ').trim().slice(0, 200) : '';
-    return `<img src="${cached}" alt="${escapeAttr(alt)}" style="width:${w}px${h ? ';height:' + h + 'px' : ''};max-width:100%;height:auto">`;
+    return `<img src="${src}" alt="${escapeAttr(alt)}" style="width:${w}px${h ? ';height:' + h + 'px' : ''};max-width:100%;height:auto">`;
 }
 
 // ---------------------------------------------------------------- render
@@ -259,6 +296,7 @@ function wrapRun(inner, p) {
     if (p.font) st.push('font-family:' + cssFont(p.font));
     if (p.sizePt) st.push('font-size:' + Math.round(p.sizePt * 100) / 100 + 'pt');
     if (p.color) st.push('color:#' + p.color);
+    if (p.position) st.push('vertical-align:' + Math.round(p.position * 100) / 100 + 'pt');
     if (p.highlight) st.push('background-color:' + (HIGHLIGHT[p.highlight] || p.highlight));
     else if (p.fill) st.push('background-color:#' + p.fill);
     if (st.length) html = `<span style="${escapeAttr(st.join(';'))}">${html}</span>`;
@@ -271,8 +309,91 @@ function wrapRun(inner, p) {
     return html;
 }
 
-/** Hình trong run: ảnh → <img>; hộp văn bản (w:txbxContent) → khối .word-textbox, chèn ngay sau đoạn chứa nó (xem renderBlocks). */
-function drawingHtml(node, ctx) {
+// ---------------------------------------------------------------- hình đặt tự do (hộp văn bản, đường nối, ink)
+const SCHEME = { tx1: '000000', dk1: '000000', bg1: 'FFFFFF', lt1: 'FFFFFF', tx2: '44546A', bg2: 'E7E6E6', accent1: '4472C4', accent2: 'ED7D31', accent3: 'A5A5A5', accent4: 'FFC000', accent5: '5B9BD5', accent6: '70AD47' };
+function colorOf(n) {
+    if (!n) return null;
+    const c = firstDesc(n, 'srgbClr') || firstDesc(n, 'scrgbClr') || firstDesc(n, 'schemeClr') || firstDesc(n, 'sysClr');
+    if (!c) return null;
+    const ln = local(c.name);
+    if (ln === 'srgbClr') return hex(attr(c, 'val'));
+    if (ln === 'scrgbClr') return [attr(c, 'r'), attr(c, 'g'), attr(c, 'b')].map((v) => ('0' + Math.max(0, Math.min(255, Math.round(num(v) / 100000 * 255))).toString(16)).slice(-2)).join('').toUpperCase();
+    if (ln === 'sysClr') return hex(attr(c, 'lastClr')) || '000000';
+    return SCHEME[attr(c, 'val')] || '000000';
+}
+const emuPx = (v) => Math.round(num(v) / EMU_PER_PX * 10) / 10;
+
+/** Vị trí neo của hình (wp:anchor). float=true khi có thể đặt tuyệt đối theo đoạn văn (không bọc chữ). */
+function anchorInfo(node, ctx) {
+    const a = firstDesc(node, 'anchor');
+    if (!a) return null;
+    const ext = child(a, 'extent');
+    const info = { w: ext ? emuPx(attr(ext, 'cx')) : 0, h: ext ? emuPx(attr(ext, 'cy')) : 0, float: false };
+    const ph = child(a, 'positionH'), pv = child(a, 'positionV');
+    const hOff = ph && child(ph, 'posOffset'), vOff = pv && child(pv, 'posOffset');
+    const hRel = (ph && attr(ph, 'relativeFrom')) || 'column', vRel = (pv && attr(pv, 'relativeFrom')) || 'paragraph';
+    if (!child(a, 'wrapNone') || !hOff || !vOff || !(vRel === 'paragraph' || vRel === 'line')) return info;
+    let left = emuPx(textOf(hOff));
+    if (hRel === 'page') left -= (ctx.page && ctx.page.marginsPx.left) || 0;
+    else if (!/^(column|margin|leftMargin|insideMargin|character)$/.test(hRel)) return info;
+    info.left = left; info.top = emuPx(textOf(vOff));
+    info.z = attr(a, 'behindDoc') === '1' ? -1 : 1;
+    info.float = info.w > 0 && info.h > 0;
+    return info;
+}
+function floatDiv(info, inner, box, extraStyle, pad) {
+    const st = ['position:absolute', `left:${Math.round((info.left - (pad || 0)) * 10) / 10}px`, `top:${Math.round((info.top - (pad || 0)) * 10) / 10}px`, `z-index:${info.z}`];
+    if (box) st.push(`width:${Math.round(info.w)}px`, `min-height:${Math.round(info.h)}px`);
+    if (extraStyle) st.push(extraStyle);
+    return `<div class="word-float" style="${escapeAttr(st.join(';'))}">${inner}</div>`;
+}
+
+/** Hình khối/đường nối (wps:wsp không chứa chữ) → SVG. */
+function shapeSvg(wsp, w, h) {
+    const spPr = child(wsp, 'spPr');
+    if (!spPr) return null;
+    const geom = child(spPr, 'prstGeom');
+    const prst = geom ? attr(geom, 'prst') : '';
+    if (!prst) return null;
+    const xfrm = child(spPr, 'xfrm');
+    const flipH = xfrm && attr(xfrm, 'flipH') === '1', flipV = xfrm && attr(xfrm, 'flipV') === '1';
+    const ln = child(spPr, 'ln'), styleEl = child(wsp, 'style');
+    let color = null, lw = 1, drawn = true;
+    if (ln && child(ln, 'noFill')) drawn = false;
+    else {
+        if (ln) { const sf = child(ln, 'solidFill'); color = sf ? colorOf(sf) : null; if (attr(ln, 'w') != null) lw = Math.max(0.75, emuPx(attr(ln, 'w'))); }
+        if (!color) { const ref = styleEl && firstDesc(styleEl, 'lnRef'); color = (ref && colorOf(ref)) || '000000'; }
+    }
+    const sfill = child(spPr, 'solidFill'), fillC = sfill ? colorOf(sfill) : null;
+    const pad = 8, W = Math.max(w, 0.1), H = Math.max(h, 0.1);
+    const adj = (() => { const g = geom && firstDesc(geom, 'gd'); const m = g && /(-?\d+)/.exec(String(attr(g, 'fmla') || '')); return m ? num(m[1]) / 100000 : 0.5; })();
+    let d = '', shape = '';
+    if (/^(line|straightConnector1)$/.test(prst)) d = `M0,0L${W},${H}`;
+    else if (/^bentConnector2$/.test(prst)) d = `M0,0H${W}V${H}`;
+    else if (/^bentConnector\d$/.test(prst)) { const x1 = W * adj; d = `M0,0H${x1}V${H}H${W}`; }
+    else if (/^curvedConnector\d$/.test(prst)) d = `M0,0C${W * adj},0 ${W * adj},${H} ${W},${H}`;
+    else if (prst === 'ellipse') shape = `<ellipse cx="${W / 2}" cy="${H / 2}" rx="${W / 2}" ry="${H / 2}"`;
+    else if (prst === 'roundRect') shape = `<rect width="${W}" height="${H}" rx="${Math.min(W, H) * 0.16}"`;
+    else if (/^(rect|flowChartProcess)$/.test(prst)) shape = `<rect width="${W}" height="${H}"`;
+    else if (prst === 'rightArrow') shape = `<polygon points="0,${H * 0.25} ${W * 0.6},${H * 0.25} ${W * 0.6},0 ${W},${H / 2} ${W * 0.6},${H} ${W * 0.6},${H * 0.75} 0,${H * 0.75}"`;
+    else return null;
+    const head = ln && child(ln, 'headEnd'), tail = ln && child(ln, 'tailEnd');
+    const hasArrow = (e) => e && attr(e, 'type') && attr(e, 'type') !== 'none';
+    const col = '#' + (color || '000000');
+    let defs = '', ends = '';
+    const mk = (id, rev) => `<marker id="${id}" viewBox="0 0 10 10" refX="${rev ? 1 : 9}" refY="5" markerWidth="${4 + lw}" markerHeight="${4 + lw}" markerUnits="userSpaceOnUse" orient="auto"><path d="${rev ? 'M10,0L0,5L10,10Z' : 'M0,0L10,5L0,10Z'}" fill="${col}"/></marker>`;
+    if (hasArrow(head)) { defs += mk('s', true); ends += ' marker-start="url(#s)"'; }
+    if (hasArrow(tail)) { defs += mk('e', false); ends += ' marker-end="url(#e)"'; }
+    const paint = `fill="${fillC && !d ? '#' + fillC : 'none'}" stroke="${drawn ? col : 'none'}" stroke-width="${lw}"`;
+    const body = d ? `<path d="${d}" ${paint}${ends}/>` : `${shape} ${paint}/>`;
+    const tr = `translate(${pad} ${pad})` + (flipH || flipV ? ` translate(${flipH ? W : 0} ${flipV ? H : 0}) scale(${flipH ? -1 : 1} ${flipV ? -1 : 1})` : '');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W + pad * 2} ${H + pad * 2}" width="${W + pad * 2}" height="${H + pad * 2}">${defs ? '<defs>' + defs + '</defs>' : ''}<g transform="${tr}">${body}</g></svg>`;
+    return { src: toB64Svg(svg), pad, w: W + pad * 2, h: H + pad * 2, rot: xfrm ? num(attr(xfrm, 'rot')) / 60000 : 0 };
+}
+
+/** Hình trong run: ảnh → <img>; hộp văn bản (w:txbxContent) → khối đặt tự do hoặc .word-textbox; đường nối/ink → SVG/ảnh.
+ *  fb = nhánh Fallback của mc:AlternateContent (dùng khi nhánh chính là ink/đối tượng không dựng được). */
+function drawingHtml(node, ctx, fb) {
     const boxes = [];
     (function find(n) {
         for (const c of elementChildren(n)) {
@@ -280,17 +401,56 @@ function drawingHtml(node, ctx) {
             else find(c);
         }
     })(node);
+    const info = anchorInfo(node, ctx);
     if (boxes.length) {
-        if (!ctx.boxes) ctx.boxes = [];
+        const rendered = [];
         for (const b of boxes) {
-            const saved = ctx.boxes; ctx.boxes = [];
+            const sb = ctx.boxes, sf = ctx.floats; ctx.boxes = []; ctx.floats = [];
             const inner = renderBlocks(elementChildren(b), ctx);
-            ctx.boxes = saved;
-            if (inner) ctx.boxes.push('<div class="word-textbox">' + inner + '</div>');
+            ctx.boxes = sb; ctx.floats = sf;
+            if (inner) rendered.push(inner);
+        }
+        if (!rendered.length) return '';
+        const wsp = firstDesc(node, 'wsp');
+        if (info && info.float && rendered.length === 1 && wsp) {
+            const spPr = child(wsp, 'spPr'), body = child(wsp, 'bodyPr'), ln = spPr && child(spPr, 'ln');
+            const ins = (k, d) => emuPx(body && attr(body, k) != null ? attr(body, k) : d);
+            const x = [];
+            x.push(`padding:${ins('tIns', 45720)}px ${ins('rIns', 91440)}px ${ins('bIns', 45720)}px ${ins('lIns', 91440)}px`);
+            const sf = spPr && child(spPr, 'solidFill'); if (sf && colorOf(sf)) x.push('background-color:#' + colorOf(sf));
+            if (ln && !child(ln, 'noFill') && child(ln, 'solidFill')) x.push(`border:${Math.max(1, emuPx(attr(ln, 'w') || 9525))}px solid #${colorOf(child(ln, 'solidFill')) || '000000'}`);
+            ctx.floats.push(floatDiv(info, rendered[0], true, x.join(';')));
+        } else {
+            for (const r of rendered) ctx.boxes.push('<div class="word-textbox">' + r + '</div>');
         }
         return '';
     }
-    return imageFrom(node, ctx);
+    const wsp = firstDesc(node, 'wsp');
+    if (wsp && !firstDesc(node, 'blip')) {
+        const w = info ? info.w : imageSize(node).w, h = info ? info.h : imageSize(node).h;
+        const sh = shapeSvg(wsp, w, h);
+        if (!sh) return '';
+        const img = `<img src="${sh.src}" alt="" style="width:${Math.round(sh.w)}px;height:${Math.round(sh.h)}px;max-width:none">`;
+        if (info && info.float) {
+            ctx.floats.push(floatDiv(info, img, false, sh.rot ? `transform:rotate(${Math.round(sh.rot * 10) / 10}deg)` : '', sh.pad));
+            return '';
+        }
+        return img;
+    }
+    let img = imageFrom(node, ctx);
+    if (!img && fb) img = imageFrom(fb, ctx);                 // ink (nét viết tay): Word kèm sẵn ảnh dự phòng
+    if (!img) return '';
+    if (info && info.float) { ctx.floats.push(floatDiv(info, img.replace(/;max-width:100%;height:auto/, ';max-width:none'), false, '')); return ''; }
+    return img;
+}
+
+// Wingdings/Symbol: mã PUA (F0xx) → ký tự Unicode thường gặp (mũi tên, tương đương…)
+const WINGDINGS = { 0xe7: '←', 0xe8: '→', 0xe9: '↑', 0xea: '↓', 0xf0: '⇨', 0xf1: '⇦', 0xf3: '⇔', 0xfb: '✗', 0xfc: '✓', 0x6c: '●', 0x6e: '■', 0xa7: '▪', 0xd8: '➢', 0xfe: '☑', 0x71: '❑' };
+function symChar(font, code) {
+    const lo = code & 0xff;
+    if (/wingdings/i.test(String(font || ''))) return WINGDINGS[lo] || (lo >= 0x20 && lo < 0x7f && code < 0x100 ? String.fromCharCode(code) : '•');
+    if (/^symbol$/i.test(String(font || ''))) { const m = require('./wmf').SYMBOL[lo]; if (m) return m; }
+    return String.fromCharCode(code);
 }
 
 function renderRun(run, ctx, baseProps) {
@@ -302,20 +462,32 @@ function renderRun(run, ctx, baseProps) {
     for (const c of elementChildren(run)) {
         const ln = local(c.name);
         if (ln === 't') parts.push(preserveSpaces(c.children.map((x) => x.text || '').join('')));
-        else if (ln === 'tab') parts.push('\u00a0\u00a0\u00a0\u00a0');
+        else if (ln === 'tab') parts.push('<span class="word-tab">\t</span>');
         else if (ln === 'br') parts.push(attr(c, 'type') === 'page' ? '<hr class="word-pagebreak">' : '<br>');
         else if (ln === 'cr') parts.push('<br>');
         else if (ln === 'noBreakHyphen') parts.push('-');
         else if (ln === 'sym') {
-            let code = attr(c, 'char'); if (code) { try { parts.push(escapeText(String.fromCharCode(parseInt(code, 16)))); } catch (_) { } }
+            const code = parseInt(attr(c, 'char') || '', 16);
+            if (Number.isFinite(code)) parts.push(escapeText(symChar(attr(c, 'font'), code)));
         } else if (ln === 'drawing' || ln === 'pict' || ln === 'object') {
             const img = drawingHtml(c, ctx); if (img) parts.push(img);
         } else if (ln === 'AlternateContent') {
-            // Word ghi cùng một hình 2 lần: Choice (DrawingML) + Fallback (VML) → chỉ lấy một nhánh để khỏi nhân đôi
-            const pick = elementChildren(c).find((x) => local(x.name) === 'Choice') || elementChildren(c).find((x) => local(x.name) === 'Fallback');
+            // Word ghi cùng một hình 2 lần: Choice (DrawingML) + Fallback (VML) → chỉ lấy một nhánh để khỏi nhân đôi;
+            // nếu Choice không dựng được (vd. ink, SmartArt) thì dùng Fallback.
+            const choice = elementChildren(c).find((x) => local(x.name) === 'Choice');
+            const fallback = elementChildren(c).find((x) => local(x.name) === 'Fallback');
+            const pick = choice || fallback;
+            const before = parts.length + ctx.floats.length + ctx.boxes.length;
+            const fbShape = fallback ? firstDesc(fallback, 'pict') || firstDesc(fallback, 'object') : null;
             if (pick) for (const d of elementChildren(pick)) {
                 const l2 = local(d.name);
-                if (l2 === 'drawing' || l2 === 'pict' || l2 === 'object') { const img = drawingHtml(d, ctx); if (img) parts.push(img); }
+                if (l2 === 'drawing' || l2 === 'pict' || l2 === 'object') { const img = drawingHtml(d, ctx, choice ? fbShape : null); if (img) parts.push(img); }
+            }
+            if (choice && fallback && before === parts.length + ctx.floats.length + ctx.boxes.length) {
+                for (const d of elementChildren(fallback)) {
+                    const l2 = local(d.name);
+                    if (l2 === 'drawing' || l2 === 'pict' || l2 === 'object') { const img = drawingHtml(d, ctx); if (img) parts.push(img); }
+                }
             }
         }
     }
@@ -386,7 +558,7 @@ function paraStyleAttr(info) {
 
 function renderParagraph(p, ctx) {
     const info = paragraphInfo(p, ctx);
-    if (info.own.numId != null) return { list: true, info };
+    if (info.own.numId != null && info.own.numId !== '0') return { list: true, info };
     const inner = renderInline(p, ctx, info.run);
     const empty = !inner || !inner.replace(/<[^>]*>/g, '').replace(/&nbsp;|\u00a0/g, '').trim() && !/<(img|br|hr|math)\b/i.test(inner);
     const body = empty ? '<br>' : inner;
@@ -408,9 +580,13 @@ function renderTable(tbl, ctx) {
     const rows = kids(tbl, 'tr');
     let maxCols = 0;
     for (const tr of rows) maxCols = Math.max(maxCols, kids(tr, 'tc').reduce((n, tc) => n + Math.max(1, num(attr(child(tc, 'tcPr') ? child(child(tc, 'tcPr'), 'gridSpan') : null, 'val'), 1)), 0));
-    const pct = maxCols ? Math.max(4, Math.floor(100 / maxCols)) : 100;
-    const out = ['<table class="word-table" style="border-collapse:collapse;width:100%;table-layout:auto">'];
+    // độ rộng cột theo w:tblGrid → bảng nhiều cột vẫn vừa khổ giấy, tỉ lệ cột giống Word
+    const grid = kids(child(tbl, 'tblGrid') || tbl, 'gridCol').map((g) => num(attr(g, 'w')));
+    const gridTotal = grid.reduce((a, v) => a + v, 0);
+    const fixed = gridTotal > 0 && grid.length === maxCols;
+    const out = [`<table class="word-table" style="border-collapse:collapse;width:100%;table-layout:${fixed ? 'fixed' : 'auto'}">`];
     for (const tr of rows) {
+        let gi = 0;
         const trPr = child(tr, 'trPr');
         const isHeader = !!(trPr && child(trPr, 'tblHeader') && truthy(valOf(child(trPr, 'tblHeader'))));
         out.push('<tr>');
@@ -418,9 +594,11 @@ function renderTable(tbl, ctx) {
             const tcPr = child(tc, 'tcPr');
             const span = Math.max(1, num(valOf(child(tcPr || tc, 'gridSpan')), 1));
             const vMerge = child(tcPr || tc, 'vMerge');
+            const startCol = gi; gi += span;
             if (vMerge && /continue/i.test(String(valOf(vMerge) || ''))) continue;
             const tag = isHeader ? 'th' : 'td';
             const st = ['border:1px solid #94a3b8', 'padding:4px 7px', 'vertical-align:top'];
+            if (fixed) { const w = grid.slice(startCol, startCol + span).reduce((a, v) => a + v, 0); st.push('width:' + Math.round(w / gridTotal * 1000) / 10 + '%', 'min-width:0'); }
             const fill = tcPr && hex(attr(child(tcPr, 'shd') || {}, 'fill'));
             if (fill) st.push('background-color:#' + fill);
             if (tag === 'th') st.push('font-weight:700', 'background-color:#f1f5f9');
@@ -433,27 +611,57 @@ function renderTable(tbl, ctx) {
     return out.join('');
 }
 
+const LIST_CSS = { decimal: 'decimal', lowerLetter: 'lower-alpha', upperLetter: 'upper-alpha', lowerRoman: 'lower-roman', upperRoman: 'upper-roman', decimalZero: 'decimal-leading-zero' };
+const LIST_PAREN = { decimal: 'wd-decimal-paren', lowerLetter: 'wd-alpha-paren', upperLetter: 'wd-upper-alpha-paren', lowerRoman: 'wd-roman-paren', upperRoman: 'wd-upper-roman-paren' };
+/** Kiểu đánh số của mức danh sách: bullet / số / chữ / La Mã, kể cả dạng "a)" "1)" "i)". */
+function listKind(ctx, numId, lvl) {
+    const L = ctx.numbering.level(numId, lvl);
+    if (/^bullet$/i.test(L.fmt)) return { tag: 'ul', css: ['disc', 'circle', 'square'][lvl % 3] };
+    const paren = /\)\s*$/.test(String(L.text || '')) && LIST_PAREN[L.fmt];
+    return { tag: 'ol', css: paren || LIST_CSS[L.fmt] || 'decimal' };
+}
+/** Số thứ tự của mục kế tiếp (nối tiếp qua các đoạn xen giữa, đặt lại khi sang mức nông hơn). */
+function nextListNumber(ctx, numId, lvl) {
+    const key = String(numId);
+    const c = ctx.counters.get(key) || [];
+    const start = ctx.numbering.level(numId, lvl).start;
+    c[lvl] = c[lvl] == null ? start : c[lvl] + 1;
+    c.length = lvl + 1;
+    ctx.counters.set(key, c);
+    return c[lvl];
+}
+
 function renderBlocks(nodes, ctx) {
     const out = [];
     let listOpen = null, listNumId = null;
     const closeList = () => { if (listOpen) { out.push('</' + listOpen + '>'); listOpen = null; listNumId = null; } };
+    // hình nổi (wrapNone) neo vào đoạn văn: khối cao 0 đặt ngay trước đoạn, toạ độ tính từ đỉnh đoạn → đúng vị trí như trong Word
+    const flushFloats = () => { if (ctx.floats && ctx.floats.length) out.push('<div class="word-anchor">' + ctx.floats.splice(0).join('') + '</div>'); };
     for (const n of nodes) {
         const ln = local(n.name);
         if (ln === 'p') {
             const info = paragraphInfo(n, ctx);
-            if (info.own.numId != null) {
-                const isOrdered = !/^bullet$/i.test(ctx.numbering.fmt(info.own.numId, info.own.ilvl || 0));
-                const tag = isOrdered ? 'ol' : 'ul';
-                if (listOpen !== tag || listNumId !== info.own.numId) { closeList(); listOpen = tag; listNumId = info.own.numId; out.push(`<${tag}>`); }
-                const inner = renderInline(n, ctx, info.run);
+            if (info.own.numId != null && info.own.numId !== '0') {
                 const lvl = info.own.ilvl || 0;
-                const st = lvl > 0 ? ` style="margin-left:${lvl * 24}px;list-style-type:${tag === 'ul' ? ['disc', 'circle', 'square'][lvl % 3] : ['decimal', 'lower-alpha', 'lower-roman'][lvl % 3]}"` : '';
+                const kind = listKind(ctx, info.own.numId, lvl);
+                const num0 = nextListNumber(ctx, info.own.numId, lvl);
+                if (listOpen !== kind.tag || listNumId !== info.own.numId) {
+                    closeList(); listOpen = kind.tag; listNumId = info.own.numId;
+                    const base = lvl === 0 && kind.css !== 'decimal' && kind.css !== 'disc' ? ` style="list-style-type:${kind.css}"` : '';
+                    out.push(`<${kind.tag}${kind.tag === 'ol' && num0 > 1 ? ` start="${num0}"` : ''}${base}>`);
+                }
+                const inner = renderInline(n, ctx, info.run);
+                const st = lvl > 0 ? ` style="margin-left:${lvl * 24}px;list-style-type:${kind.css}"` : '';
                 out.push(`<li${st}>${inner || '<br>'}</li>`);
-                if (ctx.boxes && ctx.boxes.length) { closeList(); out.push(ctx.boxes.splice(0).join('')); }
+                if ((ctx.boxes && ctx.boxes.length) || (ctx.floats && ctx.floats.length)) {
+                    closeList(); flushFloats();
+                    if (ctx.boxes.length) out.push(ctx.boxes.splice(0).join(''));
+                }
                 continue;
             }
             closeList();
             const r = renderParagraph(n, ctx);
+            flushFloats();
             if (r.html) out.push(r.html);
             if (ctx.boxes && ctx.boxes.length) out.push(ctx.boxes.splice(0).join(''));
         } else if (ln === 'tbl') { closeList(); out.push(renderTable(n, ctx)); }
@@ -496,12 +704,12 @@ function convertDocx(buf) {
     const root = parseXml(zip.text('word/document.xml'));
     const body = firstDesc(root, 'body');
     if (!body) throw Object.assign(new Error('File Word không có nội dung (thiếu w:body).'), { status: 400 });
+    const page = pageSettings(body);
     const ctx = {
         zip, rels: readRels(zip), styles: readStyles(zip), numbering: readNumbering(zip),
-        images: new Map()
+        images: new Map(), boxes: [], floats: [], counters: new Map(), page
     };
     const html = renderBlocks(elementChildren(body), ctx);
-    const page = pageSettings(body);
     let title = '';
     try {
         const core = parseXml(zip.text('docProps/core.xml') || '');

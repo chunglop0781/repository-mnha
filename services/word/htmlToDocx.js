@@ -92,6 +92,7 @@ function alignOf(v) {
 
 function imageSize(buf) {
     try {
+        if (buf.length > 22 && buf.readUInt32LE(0) === 0x9ac6cdd7) return { w: Math.abs(buf.readInt16LE(10) - buf.readInt16LE(6)), h: Math.abs(buf.readInt16LE(12) - buf.readInt16LE(8)) };   // WMF
         if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504E47) return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
         if (buf.length > 10 && /^GIF8/.test(buf.toString('latin1', 0, 4))) return { w: buf.readUInt16LE(6), h: buf.readUInt16LE(8) };
         if (buf.length > 26 && buf.toString('latin1', 0, 2) === 'BM') return { w: Math.abs(buf.readInt32LE(18)), h: Math.abs(buf.readInt32LE(22)) };
@@ -191,16 +192,28 @@ function collectRuns(node, props, ctx, out, pre) {
 
 function imageRun(node, props, ctx) {
     const src = String((node.attrs && node.attrs.src) || '');
-    const m = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,([\s\S]+)$/i.exec(src);
-    if (!m) return null;
-    let buf;
-    try { buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64'); } catch (_) { return null; }
+    let m = /^data:image\/(png|jpe?g|gif|webp|bmp);base64,([\s\S]+)$/i.exec(src);
+    let buf, ext;
+    if (m) {
+        try { buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64'); } catch (_) { return null; }
+        ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase();
+    } else {
+        // SVG sinh từ công thức .wmf: mang theo WMF gốc (data-wmf) → nhúng lại nguyên bản để Word hiển thị y như file đầu vào
+        m = /^data:image\/svg\+xml;base64,([\s\S]+)$/i.exec(src);
+        if (!m) return null;
+        let svg;
+        try { svg = Buffer.from(m[1].replace(/\s/g, ''), 'base64').toString('utf8'); } catch (_) { return null; }
+        const w = /\bdata-wmf="([A-Za-z0-9+/=]+)"/.exec(svg);
+        if (!w) return null;
+        buf = Buffer.from(w[1], 'base64'); ext = 'wmf';
+        if (buf.length < 30 || buf.readUInt32LE(0) !== 0x9ac6cdd7) return null;
+    }
     if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
-    const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase();
     const size = imageSize(buf);
     const style = cssStyle(node);
-    let w = toPx(style.width) || (node.attrs && toPx(node.attrs.width)) || (size && size.w) || 480;
-    let h = toPx(style.height) || (node.attrs && toPx(node.attrs.height)) || (size && size.h) || Math.round(w * 0.66);
+    let w = toPx(style.width) || (node.attrs && toPx(node.attrs.width)) || (ext !== 'wmf' && size && size.w) || 480;
+    let h = toPx(style.height) || (node.attrs && toPx(node.attrs.height)) || 0;
+    if (!h) h = size && size.w > 0 && size.h > 0 ? Math.round(w * size.h / size.w) : Math.round(w * 0.66);
     perspective: {
         if (size && size.w > 0 && size.h > 0) {
             if (!style.height && !(node.attrs && node.attrs.height)) h = Math.round(w * size.h / size.w);
@@ -215,6 +228,13 @@ function imageRun(node, props, ctx) {
 
 function runXml(run, ctx) {
     if (run.omml) return run.omml;          // công thức: m:oMath / m:oMathPara nằm cùng cấp với w:r
+    if (run.image && /\.wmf$/i.test(run.image.name)) {
+        // WMF (công thức MathType): dùng VML như Word vẫn ghi — Word/LibreOffice đều hiển thị đúng
+        const wpt = Math.round(run.wPx * 0.75 * 100) / 100, hpt = Math.round(run.hPx * 0.75 * 100) / 100;
+        return '<w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">' +
+            `<v:shape type="#_x0000_t75" style="width:${wpt}pt;height:${hpt}pt" stroked="f" filled="f">` +
+            `<v:imagedata r:id="${run.image.rId}" o:title=""/></v:shape></w:pict></w:r>`;
+    }
     if (run.image) {
         const rel = run.image;
         const cx = run.wPx * EMU_PER_PX, cy = run.hPx * EMU_PER_PX;
@@ -606,7 +626,7 @@ function htmlToDocx(html, opt = {}) {
         '</Relationships>';
     const exts = [...new Set(ctx.media.map((x) => x.ext))];
     const imageDefaults = exts.map((e) => {
-        const mime = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' }[e] || 'application/octet-stream';
+        const mime = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', wmf: 'image/x-wmf' }[e] || 'application/octet-stream';
         return `<Default Extension="${e}" ContentType="${mime}"/>`;
     }).join('');
     const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +

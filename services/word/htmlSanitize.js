@@ -2,7 +2,7 @@
 // Chỉ giữ các thẻ và thuộc tính cần cho văn bản Word; bỏ script/iframe/style/event handler/javascript: ...
 'use strict';
 const { decodeEntities, escapeText, escapeAttr } = require('./xml');
-const { isImageName, nameFromSrc } = require('./wordImages');
+const { isImageName, nameFromSrc, isSafeSvg } = require('./wordImages');
 
 const VOID = new Set(['br', 'hr', 'img', 'col', 'area', 'base', 'embed', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 const ALLOWED = new Set([
@@ -20,7 +20,7 @@ const RENAME = { b: 'strong', i: 'em', strike: 's', del: 's' };
 const ALLOWED_CLASS = new Set([
     'word-pagebreak', 'word-table', 'word-title', 'word-subtitle', 'word-pre', 'word-list', 'word-textbox',
     'word-comment', 'word-toc', 'word-citation', 'word-header', 'word-footer', 'word-cover', 'word-caption',
-    'word-footnote', 'word-bookmark', 'word-shape', 'word-highlight'
+    'word-footnote', 'word-bookmark', 'word-shape', 'word-highlight', 'word-anchor', 'word-float', 'word-tab'
 ]);
 // Hình khối đặt tự do (div.word-shape): chỉ các thuộc tính này, và chỉ trên đúng thẻ đó (không cho position:fixed/overlay ở thẻ khác).
 const SHAPE_KINDS = new Set(['rect', 'round', 'ellipse', 'triangle', 'diamond', 'hexagon', 'arrow', 'star', 'plus', 'line']);
@@ -119,6 +119,9 @@ function safeSrc(v) {
     // trình soạn có thể gửi lại URL media nội bộ → vẫn nhận rồi đổi về tên file khi lưu
     if (/^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/]+)?\/(?:code\/word|w)\/media\?/i.test(s) && nameFromSrc(s)) return s;
     if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/=\s]+$/i.test(s)) return s;
+    if (/^data:image\/svg\+xml;base64,[a-z0-9+/=\s]+$/i.test(s)) {            // SVG tự sinh (công thức WMF, mũi tên) — kiểm tra nội dung
+        try { return isSafeSvg(Buffer.from(s.slice(s.indexOf(',') + 1).replace(/\s+/g, ''), 'base64').toString('utf8')) ? s : null; } catch (_) { return null; }
+    }
     if (/^https:\/\/[^\s"'<>]+$/i.test(s)) return s;
     return null;
 }
@@ -132,9 +135,10 @@ function cleanNode(node, depth, out) {
     if (!ALLOWED.has(tag)) { for (const c of node.children) cleanNode(c, depth + 1, out); return; }
     const attrs = [];
     const a = node.attrs || {};
-    const isShape = tag === 'div' && /(?:^|\s)word-shape(?:\s|$)/.test(String(a.class || ''));
+    const isShape = tag === 'div' && /(?:^|\s)word-(?:shape|float)(?:\s|$)/.test(String(a.class || ''));
+    const isShapeKind = isShape && /(?:^|\s)word-shape(?:\s|$)/.test(String(a.class || ''));
     if (a.style) { const s = safeStyle(a.style, isShape); if (s) attrs.push(`style="${escapeAttr(s)}"`); }
-    if (isShape) {
+    if (isShapeKind) {
         const kind = String(a['data-shape'] || '').toLowerCase();
         if (SHAPE_KINDS.has(kind)) attrs.push(`data-shape="${kind}"`);
         const oy = Number(a['data-oy']);
@@ -161,6 +165,7 @@ function cleanNode(node, depth, out) {
             if (a[k] && /^\d{1,5}(%|px)?$/.test(String(a[k]))) attrs.push(`${k}="${escapeAttr(a[k])}"`);
         }
     }
+    if (tag === 'ol') { const st0 = Number(a.start); if (Number.isInteger(st0) && st0 > 1 && st0 < 10000) attrs.push(`start="${st0}"`); }
     if (tag === 'td' || tag === 'th') {
         for (const k of ['colspan', 'rowspan']) {
             const n = Number(a[k]);
