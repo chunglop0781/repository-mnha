@@ -160,10 +160,11 @@ exports.onlineFolder = wrap(async (req, res) => {
     const here = (segs) => base + '/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(f, segs));
     const list = []; let hidden = 0;
     for (const x of items) {
-        if (x.type === 'dir') { list.push({ name: x.name, type: 'dir', href: here([...f.dirSegs, x.name]) }); continue; }
+        const o = remoteSource.otherRepo(f, x), fx = o ? remoteSource.withRepo(f, o) : f, other = o ? o.repo : null;     // mục nằm ở repo khác của app → link repo đó
+        if (x.type === 'dir') { list.push({ name: x.name, type: 'dir', href: base + '/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(fx, [...f.dirSegs, x.name])), other }); continue; }
         if (!lang.exts.includes(extOf(x.name))) { hidden++; continue; }
-        const web = remoteSource.fromParts(f, [...f.dirSegs, x.name]).web;
-        list.push({ name: x.name, type: 'file', size: x.size, runnable: extOf(x.name) === lang.runExt, href: base + '/online?url=' + encodeURIComponent(web), web });
+        const web = remoteSource.fromParts(fx, [...f.dirSegs, x.name]).web;
+        list.push({ name: x.name, type: 'file', size: x.size, runnable: extOf(x.name) === lang.runExt, href: base + '/online?url=' + encodeURIComponent(web), web, other });
     }
     const crumbs = [{ name: f.base.join('/') + ' @ ' + f.ref, href: here([]) }];
     f.dirSegs.forEach((s, i) => crumbs.push({ name: s, href: here(f.dirSegs.slice(0, i + 1)) }));

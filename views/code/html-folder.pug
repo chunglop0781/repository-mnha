@@ -27,6 +27,8 @@ block content
                     a(href=x.href, class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
                         i(data-lucide="folder", class="w-4 h-4 text-amber-500")
                         span(class="font-medium text-gray-900 break-all")= x.name
+                        if x.other
+                            span(class="text-xs text-sky-600 whitespace-nowrap", title="Thư mục này nằm ở repo khác của web") repo: #{x.other}
                 else
                     div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
                         i(data-lucide=x.kind === "page" ? "layout-template" : x.kind === "text" ? "file-code-2" : x.kind === "image" ? "image" : x.kind === "audio" ? "music" : x.kind === "video" ? "film" : "file", class="w-4 h-4 text-gray-500")
@@ -34,6 +36,8 @@ block content
                             a(href=x.href, class="flex-1 text-gray-900 hover:text-indigo-600 break-all")= x.name
                         else
                             span(class="flex-1 text-gray-400 break-all", title="File này không xem được ở đây")= x.name
+                        if x.other
+                            span(class="text-xs text-sky-600 whitespace-nowrap", title="File này nằm ở repo khác của web") repo: #{x.other}
                         if x.kind === "page"
                             a(href=x.href + "#view", class="text-xs text-emerald-600 hover:underline") Xem trang
                         if x.kind === "image" || x.kind === "audio" || x.kind === "video"

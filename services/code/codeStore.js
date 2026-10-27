@@ -50,6 +50,12 @@ function repoOfSync(p) {
     return { owner: ghCfg.owner, repo: ghCfg.repo, branch: ghCfg.branch };
 }
 
+/** Repo đang chứa phần lớn file của THƯ MỤC (link chia sẻ thư mục); chưa biết thì repo chính. */
+function repoOfDirSync(p) {
+    try { if (gh.repoForDirSync) return gh.repoForDirSync(p); } catch (_) { /* dùng repo chính */ }
+    return repoOfSync(p + '/x');
+}
+
 /** Link trang GitHub (blob, KHÔNG phải raw) của 1 file code để chia sẻ: https://github.com/<owner>/<repo>/blob/<branch>/<đường dẫn>. Thiếu cấu hình → null. */
 function githubUrl(uid, lang, dir, name) {
     if (!ghCfg.owner || !ghCfg.repo) return null;
@@ -62,7 +68,7 @@ function githubUrl(uid, lang, dir, name) {
 function githubFolderUrl(uid, lang, dir) {
     if (!ghCfg.owner || !ghCfg.repo) return null;
     const enc = (p) => String(p).split('/').map(encodeURIComponent).join('/');
-    const p = [root(uid, lang), ...cleanDir(dir)].join('/'), r = repoOfSync(p + '/x');
+    const p = [root(uid, lang), ...cleanDir(dir)].join('/'), r = repoOfDirSync(p);
     return `https://github.com/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.repo)}/tree/${enc(r.branch || 'main')}/${enc(p)}`;
 }
 

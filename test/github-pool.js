@@ -105,6 +105,28 @@ const P = (name, fn) => fn().then(() => console.log('✓ ' + name), (e) => { con
         assert.strictEqual(await gh.readJsonFile('khong/co.json'), null);
         assert.deepStrictEqual(gh.repoForSync('u1/codes/b.docx'), { owner: 'me', repo: 'repository-mnha-database-1', branch: 'main' });
         assert.strictEqual(gh.repoForSync('u1/codes/a.json').repo, 'repository-mnha-database');
+        // link chia sẻ THƯ MỤC: lấy repo chứa nhiều file nhất (file .json ghim ở repo chính không tính)
+        const inMain = [...repos.get('repository-mnha-database').keys()].filter((k) => k.startsWith('u1/codes/') && !/\.json$/.test(k)).length;
+        const in1 = [...repos.get('repository-mnha-database-1').keys()].filter((k) => k.startsWith('u1/codes/') && !/\.json$/.test(k)).length;
+        assert.strictEqual(gh.repoForDirSync('u1/codes').repo, in1 > inMain ? 'repository-mnha-database-1' : 'repository-mnha-database');
+        await gh.writeBinaryFile('u1/anh/x/p.png', Buffer.from('p'), 'm');
+        const where = gh.repoForSync('u1/anh/x/p.png').repo;
+        assert.strictEqual(gh.repoForDirSync('u1/anh/x').repo, where);
+        assert.strictEqual(gh.repoForDirSync('u1/anh/x/').repo, where);
+        assert.strictEqual(gh.repoForDirSync('u1/khong-co').repo, 'repository-mnha-database');
+        // liệt kê GỘP: file ở repo nào vẫn hiện đủ; thư mục con trỏ về repo chứa nhiều file nhất
+        await gh.writeBinaryFile('u1/codes/html/d/a.png', Buffer.from('a'), 'm');
+        await gh.writeJsonFile('u1/codes/html/d/mnha-media.json', { files: {} }, 'm');
+        await gh.getRepoTree({ force: true });
+        const ld = await gh.listDir('u1/codes/html/d');
+        assert.deepStrictEqual(ld.files.map((x) => x.name).sort(), ['a.png', 'mnha-media.json']);
+        assert.strictEqual(ld.files.find((x) => x.name === 'mnha-media.json').rec.repo, 'repository-mnha-database');   // json luôn ở repo chính
+        assert.strictEqual(ld.files.find((x) => x.name === 'a.png').rec.repo, gh.repoForSync('u1/codes/html/d/a.png').repo);
+        const lu = await gh.listDir('u1/codes/html');
+        assert.deepStrictEqual(lu.dirs.map((x) => x.name), ['d']);
+        assert.strictEqual(lu.dirs[0].rec.repo, gh.repoForSync('u1/codes/html/d/a.png').repo);
+        assert.strictEqual((await gh.repoIfKnown('u1/codes/html/d/mnha-media.json')).repo, 'repository-mnha-database');
+        assert.strictEqual(await gh.repoIfKnown('u1/codes/html/khong/co.png'), null);
     });
 
     await P('sửa file đã có → ghi đúng repo đang chứa nó (không nhân đôi sang repo mới)', async () => {

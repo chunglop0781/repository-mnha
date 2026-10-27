@@ -263,16 +263,53 @@ function treeWeb(f, dirSegs) {
     const r = encodeURIComponent(f.ref), d = dirSegs && dirSegs.length ? '/' + enc(dirSegs) : '';
     return f.host === 'github' ? `https://github.com/${enc(f.base)}/tree/${r}${d}` : `https://gitlab.com/${enc(f.base)}/-/tree/${r}${d}`;
 }
+// ---- Nhóm repo dữ liệu của chính app (repository-mnha-database, -1, -2…): 1 thư mục có thể nằm rải rác trên nhiều repo ----
+let _poolProvider = () => { try { const g = require('../githubService'); return g && g.pooled ? g : null; } catch (_) { return null; } };
+function setPoolProvider(fn) { _poolProvider = fn; }       // dùng cho test
+function poolOf(f) {
+    if (!f || f.host !== 'github' || !Array.isArray(f.base) || f.base.length !== 2) return null;
+    let g = null; try { g = _poolProvider(); } catch (_) { g = null; }
+    return g && typeof g.isPoolRepo === 'function' && g.isPoolRepo(f.base[0], f.base[1]) ? g : null;
+}
+const sameRepo = (a, b) => String(a.owner).toLowerCase() === String(b.owner).toLowerCase() && String(a.repo).toLowerCase() === String(b.repo).toLowerCase();
+/** Đổi nguồn sang repo khác trong nhóm (giữ host/đường dẫn) — dùng dựng link của file/thư mục nằm ở repo khác. */
+function withRepo(f, r) { return r ? { ...f, base: [r.owner, r.repo], ref: r.branch || f.ref } : f; }
+/** Repo (trong nhóm) của 1 mục trả từ listFolder; null nếu cùng repo đang xem. */
+function otherRepo(f, x) { return x && x.repo && !sameRepo({ owner: f.base[0], repo: f.base[1] }, x.repo) ? x.repo : null; }
+/** Như fromParts nhưng nếu nguồn là repo của app thì tự tìm đúng repo đang chứa file (ảnh/manifest/css… có thể ở repo khác cùng nhóm). */
+async function locateLink(parts, segs) {
+    const link = fromParts(parts, segs);
+    const g = poolOf(parts);
+    if (!g || typeof g.repoIfKnown !== 'function') return link;
+    let r = null; try { r = await g.repoIfKnown(segs.join('/')); } catch (_) { r = null; }
+    if (!r || sameRepo({ owner: parts.base[0], repo: parts.base[1] }, r)) return link;
+    return fromParts(withRepo(parts, r), segs);
+}
+/** Thư mục trong repo của app → liệt kê GỘP mọi repo trong nhóm (chỉ dưới <uid>/codes/…). Không áp dụng được → null (dùng API công khai như cũ). */
+async function poolList(f) {
+    if (f.dirSegs.length < 2 || f.dirSegs[1] !== 'codes') return null;
+    const g = poolOf(f);
+    if (!g || typeof g.listDir !== 'function') return null;
+    let r = null; try { r = await g.listDir(f.dirSegs.join('/')); } catch (_) { r = null; }
+    if (!r || (!r.files.length && !r.dirs.length)) return null;
+    return [
+        ...r.dirs.map((d) => ({ name: d.name, type: 'dir', size: null, repo: d.rec })),
+        ...r.files.map((x) => ({ name: x.name, type: 'file', size: null, repo: x.rec }))
+    ];
+}
 /** Liệt kê thư mục → [{name, type:'dir'|'file', size|null}] (thư mục trước, tên A→Z). Ẩn _media và mnha-media.json (hệ thống). */
 async function listFolder(f) {
     if (!f.ref) throw bad('Thiếu nhánh.');
-    let items = [];
-    if (f.host === 'github') {
+    let items = await poolList(f);
+    if (items) { /* gộp từ cây các repo của app */ }
+    else if (f.host === 'github') {
+        items = [];
         const p = f.dirSegs.length ? '/' + enc(f.dirSegs) : '';
         const j = await fetchJson(`https://api.github.com/repos/${enc(f.base)}/contents${p}?ref=${encodeURIComponent(f.ref)}`);
         if (!Array.isArray(j)) throw bad('Link này là file, không phải thư mục.');
         items = j.map((x) => ({ name: String(x.name), type: x.type === 'dir' ? 'dir' : 'file', size: x.type === 'dir' ? null : (Number(x.size) || 0) }));
     } else {
+        items = [];
         const id = encodeURIComponent(f.base.join('/'));
         for (let page = 1; page <= 3; page++) {
             const j = await fetchJson(`https://gitlab.com/api/v4/projects/${id}/repository/tree?ref=${encodeURIComponent(f.ref)}&path=${encodeURIComponent(f.dirSegs.join('/'))}&per_page=100&page=${page}`);
@@ -289,4 +326,4 @@ async function listFolder(f) {
     return items;
 }
 
-module.exports = { parseSourceUrl, parseFolderUrl, resolveRef, listFolder, treeWeb, siblingOf, fromParts, fetchText, fetchBuffer, MAX_BYTES, MAX_ASSET_BYTES };
+module.exports = { parseSourceUrl, parseFolderUrl, resolveRef, listFolder, treeWeb, siblingOf, fromParts, locateLink, withRepo, otherRepo, setPoolProvider, fetchText, fetchBuffer, MAX_BYTES, MAX_ASSET_BYTES };

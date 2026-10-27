@@ -422,6 +422,53 @@ function createPool(deps) {
                 const rec = (!isPinned(p) && ((_tree && _tree.owner.get(String(p))) || recent.get(String(p)))) || mainRec();
                 return { owner: rec.owner, repo: rec.repo, branch: rec.branch };
             },
+            // Repo chứa file nếu BIẾT chắc (cây thư mục / file ghim .json ở repo chính); không biết → null (để nơi gọi giữ repo cũ)
+            repoIfKnown: async (p) => {
+                const { rec } = await locate(String(p));
+                return rec ? { owner: rec.owner, repo: rec.repo, branch: rec.branch } : null;
+            },
+            // Liệt kê 1 thư mục GỘP mọi repo: file nào ở repo nào vẫn hiện đủ. dir = đường dẫn đầy đủ trong repo (vd uid/codes/html/a).
+            //   → { files:[{name, rec}], dirs:[{name, rec}] } ; thư mục con: rec = repo chứa nhiều file nhất bên trong. Cây bị cắt → null.
+            listDir: async (dir) => {
+                const pre = String(dir || '').replace(/^\/+|\/+$/g, '') + '/';
+                const t = await mergedTree();
+                if (t.truncated) return null;
+                const files = new Map(), dirs = new Map();
+                for (const [p, rec] of t.owner) {
+                    if (!p.startsWith(pre)) continue;
+                    const rest = p.slice(pre.length), i = rest.indexOf('/');
+                    if (i < 0) { if (rest) files.set(rest, rec); continue; }
+                    const n = rest.slice(0, i);
+                    let d = dirs.get(n);
+                    if (!d) dirs.set(n, d = { any: rec, by: new Map() });
+                    if (!isPinned(p) && !/(^|\/)\.keep$/.test(p)) { const c = d.by.get(rec.repo) || { rec, n: 0 }; c.n++; d.by.set(rec.repo, c); }
+                }
+                const pick = (d) => { let b = null; for (const c of d.by.values()) if (!b || c.n > b.n) b = c; return b ? b.rec : d.any; };
+                const cut = (r) => ({ owner: r.owner, repo: r.repo, branch: r.branch });
+                return {
+                    files: [...files].map(([name, rec]) => ({ name, rec: cut(rec) })),
+                    dirs: [...dirs].map(([name, d]) => ({ name, rec: cut(pick(d)) }))
+                };
+            },
+            // Repo đang chứa THƯ MỤC (link chia sẻ): đếm file (không tính file ghim ở repo chính như .json/.keep) theo từng repo,
+            // repo nào có nhiều file nhất thì lấy; thư mục chưa có file nào (hoặc chưa nạp cây) → repo chính.
+            repoForDirSync: (dir) => {
+                const pre = String(dir || '').replace(/^\/+|\/+$/g, '') + '/';
+                const count = new Map();
+                const bump = (rec) => { const k = rec.repo; const c = count.get(k) || { rec, n: 0 }; c.n++; count.set(k, c); };
+                if (_tree) {
+                    for (const [p, rec] of _tree.owner) {
+                        if (p.length > pre.length && p.startsWith(pre) && !isPinned(p) && !/(^|\/)\.keep$/.test(p)) bump(rec);
+                    }
+                }
+                for (const [p, rec] of recent) {
+                    if (p.startsWith(pre) && !isPinned(p) && !(_tree && _tree.owner.has(p))) bump(rec);
+                }
+                let best = null;
+                for (const c of count.values()) if (!best || c.n > best.n) best = c;
+                const rec = best ? best.rec : mainRec();
+                return { owner: rec.owner, repo: rec.repo, branch: rec.branch };
+            },
             isPoolRepo: (o, r) => {
                 const s = (x) => String(x || '').toLowerCase();
                 if (s(o) !== s(owner())) return false;

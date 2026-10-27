@@ -281,7 +281,7 @@ async function loadFolder(url) {
     let manifest = null;
     // Có mnha-media.json (kể cả khi thư mục chỉ có media đã cắt m3u8 → danh sách file rỗng) thì phải đọc để hiện video/âm thanh gốc
     if (items.hasManifest || items.some((x) => x.type === 'file' || x.type === 'dir')) {
-        try { manifest = JSON.parse(await remoteSource.fetchText(remoteSource.fromParts(f, [...f.dirSegs, MEDIA.MANIFEST]), { maxBytes: 4 * 1024 * 1024 })); } catch (_) { manifest = null; }
+        try { manifest = JSON.parse(await remoteSource.fetchText(await remoteSource.locateLink(f, [...f.dirSegs, MEDIA.MANIFEST]), { maxBytes: 4 * 1024 * 1024 })); } catch (_) { manifest = null; }
     }
     return { f, items, manifest };
 }
@@ -295,12 +295,16 @@ exports.onlineFolder = wrap(async (req, res) => {
     try { d = await loadFolder(url); }
     catch (e) { if (isUserErr(e)) return onlineForm(req, res, { folderUrl: url, error: e.message, errorFor: 'folder', status: e.status === 404 ? 404 : e.status === 429 ? 429 : 400 }); throw e; }
     const { f, items, manifest } = d;
-    const here = (segs) => '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(f, segs));
-    const fileLink = (name) => remoteSource.fromParts(f, [...f.dirSegs, name]).web;
+    const here = (segs, fx) => '/code/html/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(fx || f, segs));
+    const fileLink = (name, fx) => remoteSource.fromParts(fx || f, [...f.dirSegs, name]).web;
     const priv = privateSet(manifest);           // file chủ sở hữu đã tắt công khai: không hiện, các file còn lại hiện bình thường
-    const list = items.filter((x) => !(x.type === 'file' && priv.has(x.name))).map((x) => x.type === 'dir'
-        ? { name: x.name, type: 'dir', href: here([...f.dirSegs, x.name]) }
-        : { name: x.name, type: 'file', kind: kindOfItem(x.name), size: x.size, href: '/code/html/online?url=' + encodeURIComponent(fileLink(x.name)), web: fileLink(x.name) });
+    // Thư mục có thể nằm rải rác trên nhiều repo của app: hiện đủ, mục ở repo khác dùng link repo đó (+ nhãn tên repo)
+    const list = items.filter((x) => !(x.type === 'file' && priv.has(x.name))).map((x) => {
+        const o = remoteSource.otherRepo(f, x), fx = o ? remoteSource.withRepo(f, o) : f, other = o ? o.repo : null;
+        return x.type === 'dir'
+            ? { name: x.name, type: 'dir', href: here([...f.dirSegs, x.name], fx), other }
+            : { name: x.name, type: 'file', kind: kindOfItem(x.name), size: x.size, href: '/code/html/online?url=' + encodeURIComponent(fileLink(x.name, fx)), web: fileLink(x.name, fx), other };
+    });
     const have = new Set(items.map((x) => x.name));
     if (manifest && manifest.files) for (const [name, e] of Object.entries(manifest.files)) {
         if (!have.has(name) && !priv.has(name) && e && e.state === 'ready' && mediaKind(name)) list.push({ name, type: 'file', kind: mediaKind(name), size: e.size, cut: true });

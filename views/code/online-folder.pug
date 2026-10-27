@@ -24,10 +24,14 @@ block content
                     a(href=x.href, class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
                         i(data-lucide="folder", class="w-4 h-4 text-amber-500")
                         span(class="font-medium text-gray-900 break-all")= x.name
+                        if x.other
+                            span(class="text-xs text-sky-600 whitespace-nowrap", title="Thư mục này nằm ở repo khác của web") repo: #{x.other}
                 else
                     div(class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50")
                         i(data-lucide="file-code-2", class="w-4 h-4 " + (x.runnable ? "text-indigo-500" : "text-gray-400"))
                         a(href=x.href, class="flex-1 text-gray-900 hover:text-indigo-600 break-all")= x.name
+                        if x.other
+                            span(class="text-xs text-sky-600 whitespace-nowrap", title="File này nằm ở repo khác của web") repo: #{x.other}
                         if x.runnable
                             span(class="text-xs text-emerald-600") chạy được
                         span(class="text-xs text-gray-400 whitespace-nowrap")= fmt(x.size)

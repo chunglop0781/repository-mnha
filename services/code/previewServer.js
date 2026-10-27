@@ -109,7 +109,7 @@ function webSource(payload) {
     return {
         kind: 'web',
         async read(segs) {
-            const link = remoteSource.fromParts(payload, segs);
+            const link = await remoteSource.locateLink(payload, segs);       // repo của app: tự tìm đúng repo chứa file (ảnh/manifest có thể ở repo -1, -2…)
             try { return await remoteSource.fetchBuffer(link); }
             catch (e) { if (e.status === 404) return null; throw e; }
         }
