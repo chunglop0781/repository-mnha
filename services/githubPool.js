@@ -8,8 +8,9 @@
 //         "repos": [ { "id": "1", "repo": "repository-mnha-database-1", "createdAt": "…" } ] }
 //     Dung lượng KHÔNG lưu trong JSON: lấy từ WEBHOOK push của GitHub (payload.repository.size, KB) và giữ trong RAM.
 //     Instance mới chưa nhận webhook nào → hỏi API GitHub 1 lần cho repo đó rồi nhớ (webhook sau đó ghi đè số mới).
-//   • JSON (*.json) luôn ở repo CHÍNH. File khác (docx, pdf, ảnh, âm thanh, video, html…): MỚI → repo đang dùng (repo mới nhất chưa đầy);
-//     ĐÃ CÓ → ghi đè đúng repo đang chứa nó.
+//   • FILE CHỮ (code: asm cpp h txt html css js json svg md … — xem isText) luôn GHI vào repo CHÍNH, kể cả html/css/js. [ĐÃ CHỐT — đừng đổi, xem CODE.md "Quy tắc chọn repo"]
+//   • Chỉ file TẢI LÊN (ảnh, âm thanh, video, docx, pdf…): MỚI → repo đang dùng (repo mới nhất chưa đầy); ĐÃ CÓ → ghi đè đúng repo đang chứa nó.
+//   • File chữ cũ đang nằm ở repo -1, -2… (từ trước khi sửa) vẫn đọc được; lần lưu kế tiếp sẽ ghi sang repo chính (bản ở repo chính được ưu tiên).
 //   • ĐỌC: gộp cây thư mục của mọi repo → file nằm ở repo nào cũng đọc được như cũ.
 //   • Tắt hẳn: GITHUB_REPO_POOL=off → hành vi y như trước (một repo).
 //
@@ -228,17 +229,18 @@ function createPool(deps) {
         _treePromise = (async () => {
             const recs = await allRecs();
             const trees = await Promise.all(recs.map((r) => clientFor(r).getRepoTree({ force })));
-            const files = new Map(), ownerOf = new Map(), shaOf = new Map();
+            const files = new Map(), ownerOf = new Map(), shaOf = new Map(), dupsOf = new Map();
             let truncated = false;
             trees.forEach((t, i) => {
                 const rec = recs[i];
                 if (t.truncated) truncated = true;
                 for (const [p, sha] of t.files) {
                     if (!files.has(p)) { files.set(p, sha); ownerOf.set(p, rec); }      // trùng đường dẫn: repo cũ hơn thắng
+                    else { const a = dupsOf.get(p) || []; a.push(rec); dupsOf.set(p, a); }
                     if (!shaOf.has(sha)) shaOf.set(sha, rec);
                 }
             });
-            _tree = { at: now(), files, owner: ownerOf, shaRepo: shaOf, truncated, repos: recs.length };
+            _tree = { at: now(), files, owner: ownerOf, dups: dupsOf, shaRepo: shaOf, truncated, repos: recs.length };
             _treeAt = now();
             return _tree;
         })();
@@ -262,6 +264,16 @@ function createPool(deps) {
         }
         return false;
     }
+
+    // File CHỮ (code do người dùng soạn) → luôn ghi vào repo CHÍNH. Chỉ file tải lên (ảnh, âm thanh, video, docx, pdf…) mới sang repo phụ -1, -2…
+    // Loại trừ thư mục _media (đoạn/m3u8 của media đã cắt) — đó là media, không phải code.
+    const TEXT_EXT_RE = /\.(asm|inc|c|cc|cpp|cxx|h|hh|hpp|hxx|inl|ipp|tpp|txt|html?|css|js|mjs|json|svg|md|xml|csv)$/i;
+    function isText(path) {
+        const p = String(path || '').replace(/^\/+/, '');
+        if (/(^|\/)_media\//.test(p)) return false;
+        return TEXT_EXT_RE.test(p) || /(^|\/)\.keep$/.test(p);
+    }
+    const keepsInMain = (p) => isPinned(p) || isText(p);
 
     /** Repo đang chứa file (null = không thấy). Không thấy → làm mới cây 1 lần nếu cây đã cũ > 2s. */
     async function locate(path) {
@@ -287,7 +299,7 @@ function createPool(deps) {
     }
 
     async function writeRec(path) {
-        if (isPinned(path)) return mainRec();
+        if (keepsInMain(path)) { noteWrite(path, mainRec()); return mainRec(); }
         const { rec } = await locate(path);
         const r = rec || (await active());
         noteWrite(path, r);
@@ -315,8 +327,13 @@ function createPool(deps) {
         let act = null;
         for (const c of changes) {
             if (!c || !c.path) throw new Error('commitFiles: thiếu path');
-            if (c.remove) { add((await locate(c.path)).rec || mainRec(), c); continue; }
-            const rec = isPinned(c.path) ? mainRec() : ((await locate(c.path)).rec || (act || (act = await active())));
+            if (c.remove) {
+                const loc = await locate(c.path);
+                add(loc.rec || mainRec(), c);
+                if (isText(c.path) && loc.tree) for (const r of (loc.tree.dups.get(c.path) || [])) add(r, c);      // bản chữ cũ còn sót ở repo phụ cũng xoá luôn
+                continue;
+            }
+            const rec = keepsInMain(c.path) ? mainRec() : ((await locate(c.path)).rec || (act || (act = await active())));
             add(rec, c);
         }
         let first = null;
@@ -404,8 +421,10 @@ function createPool(deps) {
                 return r;
             },
             deleteFile: async (p, m) => {
-                const rec = (await locate(p)).rec || mainRec();
+                const loc = await locate(p);
+                const rec = loc.rec || mainRec();
                 const r = await clientFor(rec).deleteFile(p, m);
+                if (isText(p) && loc.tree) for (const x of (loc.tree.dups.get(p) || [])) { try { await clientFor(x).deleteFile(p, m); } catch (_) { /* bản sót */ } }
                 invalidateTree();
                 return r;
             },
@@ -440,10 +459,13 @@ function createPool(deps) {
                     if (i < 0) { if (rest) files.set(rest, rec); continue; }
                     const n = rest.slice(0, i);
                     let d = dirs.get(n);
-                    if (!d) dirs.set(n, d = { any: rec, by: new Map() });
-                    if (!isPinned(p) && !/(^|\/)\.keep$/.test(p)) { const c = d.by.get(rec.repo) || { rec, n: 0 }; c.n++; d.by.set(rec.repo, c); }
+                    if (!d) dirs.set(n, d = { any: rec, by: new Map(), text: new Map() });
+                    if (!isPinned(p) && !/(^|\/)\.keep$/.test(p)) {
+                        const m = isText(p) ? d.text : d.by;           // file chữ (repo chính) ưu tiên hơn file tải lên khi chọn repo cho link thư mục
+                        const c = m.get(rec.repo) || { rec, n: 0 }; c.n++; m.set(rec.repo, c);
+                    }
                 }
-                const pick = (d) => { let b = null; for (const c of d.by.values()) if (!b || c.n > b.n) b = c; return b ? b.rec : d.any; };
+                const pick = (d) => { let b = null; for (const m of [d.text, d.by]) { for (const c of m.values()) if (!b || c.n > b.n) b = c; if (b) break; } return b ? b.rec : d.any; };
                 const cut = (r) => ({ owner: r.owner, repo: r.repo, branch: r.branch });
                 return {
                     files: [...files].map(([name, rec]) => ({ name, rec: cut(rec) })),
@@ -454,18 +476,18 @@ function createPool(deps) {
             // repo nào có nhiều file nhất thì lấy; thư mục chưa có file nào (hoặc chưa nạp cây) → repo chính.
             repoForDirSync: (dir) => {
                 const pre = String(dir || '').replace(/^\/+|\/+$/g, '') + '/';
-                const count = new Map();
-                const bump = (rec) => { const k = rec.repo; const c = count.get(k) || { rec, n: 0 }; c.n++; count.set(k, c); };
+                const count = new Map(), countText = new Map();          // file chữ (repo chính) đếm riêng: có file chữ thì link thư mục trỏ theo đó
+                const bump = (rec, p) => { const m = isText(p) ? countText : count; const k = rec.repo; const c = m.get(k) || { rec, n: 0 }; c.n++; m.set(k, c); };
                 if (_tree) {
                     for (const [p, rec] of _tree.owner) {
-                        if (p.length > pre.length && p.startsWith(pre) && !isPinned(p) && !/(^|\/)\.keep$/.test(p)) bump(rec);
+                        if (p.length > pre.length && p.startsWith(pre) && !isPinned(p) && !/(^|\/)\.keep$/.test(p)) bump(rec, p);
                     }
                 }
                 for (const [p, rec] of recent) {
-                    if (p.startsWith(pre) && !isPinned(p) && !(_tree && _tree.owner.has(p))) bump(rec);
+                    if (p.startsWith(pre) && !isPinned(p) && !(_tree && _tree.owner.has(p))) bump(rec, p);
                 }
                 let best = null;
-                for (const c of count.values()) if (!best || c.n > best.n) best = c;
+                for (const m of [countText, count]) { for (const c of m.values()) if (!best || c.n > best.n) best = c; if (best) break; }
                 const rec = best ? best.rec : mainRec();
                 return { owner: rec.owner, repo: rec.repo, branch: rec.branch };
             },
@@ -571,7 +593,7 @@ function createPool(deps) {
 
     return {
         autoSetup, webhookSecret,
-        enabled, LIMIT, INDEX_PATH, facade, active, createNext, mergedTree, invalidateTree, isPinned, loadDoc, allRecs,
+        enabled, LIMIT, INDEX_PATH, facade, active, createNext, mergedTree, invalidateTree, isPinned, isText, loadDoc, allRecs,
         noteSize, sizeOf, addBytes, handleWebhook, noteFromPayload, verifySignature, summary, registerWebhooks, webhookUrl
     };
 }

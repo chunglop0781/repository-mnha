@@ -276,7 +276,14 @@ Test dùng `githubService` giả qua `require.cache`, không gọi GitHub thật
 ## Nhiều repo GitHub dữ liệu (services/githubPool.js)
 
 - `GITHUB_REPO=repository-mnha-database` là repo chính. Khi đạt `GITHUB_REPO_LIMIT_MB` (mặc định 200MB), server tự tạo `repository-mnha-database-1`, rồi `-2`, `-3`… và ghi tiếp vào repo mới nhất.
-- **File `.json` luôn ở repo chính.** Chỉ file khác (docx, pdf, ảnh, âm thanh, video, html…) mới sang repo `-1`, `-2`…; file đã có thì ghi đè đúng repo đang chứa nó. Đọc thì gộp mọi repo.
+- **Quy tắc chọn repo (ĐÃ CHỐT — Claude sau này KHÔNG sửa lại quy tắc này):**
+  - **File CHỮ (code) luôn ở repo chính**: `.asm .inc .c .cc .cpp .cxx .h .hh .hpp .hxx .inl .ipp .tpp .txt .html .htm .css .js .mjs .json .svg .md .xml .csv` và `.keep` — kể cả html/css/js của dạng HTML. Danh sách nằm ở `isText()` trong `services/githubPool.js`; dạng code mới có đuôi chữ khác thì thêm vào `TEXT_EXT_RE` ở đó.
+  - **Chỉ file TẢI LÊN** (ảnh, âm thanh, video, docx, pdf…) và đoạn media đã cắt trong `_media/` mới sang repo phụ `-1`, `-2`… (file mới → repo đang dùng; file đã có → ghi đè đúng repo đang chứa nó).
+  - Dữ liệu hệ thống (`v-s/`, `cookies/`, `*/keys/*`, `mnha-media.json`, `*.json`) vẫn luôn ở repo chính như trước.
+  - File chữ **cũ** đang nằm ở repo phụ (từ trước khi chốt quy tắc) vẫn đọc được; lần lưu kế tiếp sẽ ghi sang repo chính (bản ở repo chính được ưu tiên khi đọc), còn xoá thì xoá cả bản cũ sót ở repo phụ. Không có bước chuyển hàng loạt.
+  - Link chia sẻ **thư mục** trỏ về repo chứa file chữ của thư mục (repo chính) nếu có; thư mục chỉ có file tải lên thì trỏ repo phụ chứa chúng.
+  - Test: `node test/github-pool.js` (mục "FILE CHỮ … luôn ở repo chính").
+- Đọc thì gộp mọi repo.
 - Sổ các repo đã tạo: `github/repos/index.json` (repo chính): `id`, tên repo, ngày tạo. **Không lưu dung lượng.**
 - Dung lượng lấy từ webhook `push` của GitHub (`repository.size`), giữ trong RAM; instance chưa nhận webhook thì hỏi API GitHub một lần. Hiện từng repo ở trang **Web kết nối**.
 - Webhook push (`<MAIN_URL>/api/github/webhook`) được **tự gắn** cho repo chính và mọi repo `-1`, `-2`… khi web khởi động (chỉ web chính, 1 lần/tiến trình); secret **tự sinh** (HMAC từ `SESSION_ENC_KEY`/`GITHUB_TOKEN`…, mọi instance ra cùng giá trị) — không cần đặt `GITHUB_WEBHOOK_SECRET` (đặt thì dùng giá trị đó). Cần token có quyền `admin:repo_hook`. Tắt: `GITHUB_WEBHOOK_AUTO=off`.

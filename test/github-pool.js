@@ -155,12 +155,12 @@ const P = (name, fn) => fn().then(() => console.log('✓ ' + name), (e) => { con
             { path: 'u3/codes/html/v/_media/id/seg1.ts', sha: blob },
             { path: 'u3/codes/html/v/info.json', content: json({ j: 1 }) },
             { path: 'u3/codes/html/v/mnha-media.json', content: json({ ok: 1 }) },
-            { path: 'u3/codes/html/new.html', content: Buffer.from('<p>x</p>') }
+            { path: 'u3/codes/html/new.png', content: Buffer.from('<p>x</p>') }
         ], 'media');
         assert.strictEqual(repos.get('repository-mnha-database-1').get('u3/codes/html/v/_media/id/seg1.ts').toString(), 'doan-1');
         assert(repos.get('repository-mnha-database').has('u3/codes/html/v/mnha-media.json'));
         assert(repos.get('repository-mnha-database').has('u3/codes/html/v/info.json'), 'json → repo chính');
-        assert(repos.get('repository-mnha-database-1').has('u3/codes/html/new.html'));
+        assert(repos.get('repository-mnha-database-1').has('u3/codes/html/new.png'));
         await gh.commitFiles([{ path: 'u1/codes/a.json', remove: true }], 'del');
         assert(!repos.get('repository-mnha-database').has('u1/codes/a.json'));
     });
@@ -174,7 +174,7 @@ const P = (name, fn) => fn().then(() => console.log('✓ ' + name), (e) => { con
         const idx = await baseClient.readJsonFile('github/repos/index.json');
         assert.deepStrictEqual(idx.repos.map((r) => r.id), ['1', '2']);
         assert(repos.get('repository-mnha-database-2').has('u4/x.pdf') && repos.get('repository-mnha-database-2').has('u4/y.pdf'));
-        assert.strictEqual((await gh.readBinaryFile('u3/codes/html/new.html')).toString(), '<p>x</p>', 'file ở repo -1 vẫn đọc được');
+        assert.strictEqual((await gh.readBinaryFile('u3/codes/html/new.png')).toString(), '<p>x</p>', 'file ở repo -1 vẫn đọc được');
     });
 
     await P('instance mới (RAM trống) đọc sổ rồi dùng tiếp repo mới nhất, không tạo thêm', async () => {
@@ -239,6 +239,45 @@ const P = (name, fn) => fn().then(() => console.log('✓ ' + name), (e) => { con
     await P('GITHUB_REPO_POOL=off → enabled() = false', async () => {
         const p = createPool({ env: { ...env, GITHUB_REPO_POOL: 'off' }, base: () => baseClient, createClient: () => null });
         assert.strictEqual(p.enabled(), false);
+    });
+
+    await P('FILE CHỮ (cpp, asm, html, css, js, txt, h, svg…) luôn ở repo chính; chỉ file tải lên (ảnh, docx…) sang repo phụ; file chữ cũ ở repo phụ vẫn đọc/ghi/xoá đúng', async () => {
+        const MAIN = 'repository-mnha-database';
+        const act = (await pool.active()).repo;
+        assert.notStrictEqual(act, MAIN, 'điều kiện test: repo chính đã đầy, repo đang dùng là repo phụ');
+        pool.noteSize(MAIN, 200 * MB, 'webhook');
+        for (const f of ['m.cpp', 'm.asm', 'in.txt', 'h.h', 'p.html', 'p.htm', 's.css', 'a.js', 'i.svg', 'r.md', 'd/.keep']) {
+            await gh.writeBinaryFile('u9/codes/html/' + f, Buffer.from('x'), 'm');
+            assert(repos.get(MAIN).has('u9/codes/html/' + f), f + ' phải ở repo chính');
+            assert(!repos.get(act).has('u9/codes/html/' + f), f + ' không được sang repo phụ');
+        }
+        await gh.writeBinaryFileBig('u9/codes/cpp/big.cpp', Buffer.from('y'), 'm');
+        assert(repos.get(MAIN).has('u9/codes/cpp/big.cpp'));
+        for (const f of ['a.png', 'b.jpg', 'c.docx', 'd.pdf', '_media/x/seg0.ts', '_media/x/index.m3u8']) {
+            await gh.writeBinaryFile('u9/codes/html/' + f, Buffer.from('z'), 'm');
+            assert(repos.get(act).has('u9/codes/html/' + f), f + ' (file tải lên) phải sang repo phụ');
+            assert(!repos.get(MAIN).has('u9/codes/html/' + f), f + ' không được ở repo chính');
+        }
+        // commitFiles (đổi tên thư mục / file): chữ → chính, tải lên → phụ
+        await gh.commitFiles([{ path: 'u9/codes/html/n.html', content: Buffer.from('h') }, { path: 'u9/codes/html/n.png', content: Buffer.from('p') }], 'm');
+        assert(repos.get(MAIN).has('u9/codes/html/n.html') && !repos.get(act).has('u9/codes/html/n.html'));
+        assert(repos.get(act).has('u9/codes/html/n.png') && !repos.get(MAIN).has('u9/codes/html/n.png'));
+        // link chia sẻ thư mục có cả file chữ lẫn ảnh → trỏ repo chính (nơi có code)
+        await gh.getRepoTree({ force: true });
+        assert.strictEqual(gh.repoForDirSync('u9/codes/html').repo, MAIN);
+        // file chữ CŨ nằm ở repo phụ: vẫn đọc được; lưu lại → sang repo chính; xoá → sạch ở cả hai nơi
+        repos.get(act).set('u9/old/legacy.cpp', Buffer.from('cu'));
+        await gh.getRepoTree({ force: true });
+        assert.strictEqual((await gh.readBinaryFile('u9/old/legacy.cpp')).toString(), 'cu');
+        await gh.writeBinaryFile('u9/old/legacy.cpp', Buffer.from('moi'), 'm');
+        assert.strictEqual(repos.get(MAIN).get('u9/old/legacy.cpp').toString(), 'moi');
+        await gh.getRepoTree({ force: true });
+        assert.strictEqual((await gh.readBinaryFile('u9/old/legacy.cpp')).toString(), 'moi', 'bản ở repo chính được ưu tiên');
+        await gh.deleteFile('u9/old/legacy.cpp', 'm');
+        assert(!repos.get(MAIN).has('u9/old/legacy.cpp') && !repos.get(act).has('u9/old/legacy.cpp'), 'xoá cả bản cũ sót ở repo phụ');
+        assert.strictEqual(pool.isText('u1/codes/_media/a/index.m3u8'), false);
+        assert.strictEqual(pool.isText('u1/codes/html/a.PNG'), false);
+        assert.strictEqual(pool.isText('u1/codes/html/A.HTML'), true);
     });
 
     console.log('github-pool: tất cả test đạt');
