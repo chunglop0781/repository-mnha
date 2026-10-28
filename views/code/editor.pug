@@ -56,6 +56,7 @@ block content
     script#payload(type="application/json")!= payloadJson
     div(id="emuModal", class="emu-modal hidden")
     if lang.key === "emu8086"
+        script(src="/code/emu8086/engine.js")
         script(src="/js/emuTools.js")
     if cppMode === "browser"
         script(src="/js/cppShims.js")

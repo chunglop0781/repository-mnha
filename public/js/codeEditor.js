@@ -120,7 +120,80 @@
         if (!list || !list.length) return;
         termOut.insertAdjacentHTML('afterbegin', '<div class="t-err">[Không tìm thấy file include cùng thư mục: ' + list.map(esc).join(', ') + '. Kiểm tra tên (phân biệt HOA/thường), đúng nhánh, repo công khai và file nằm cạnh file đang chạy.]</div>');
     }
+    // ---------- emu8086 chạy NGAY TRONG TRÌNH DUYỆT (public: /code/emu8086/engine.js → window.Emu8086) ----------
+    // Mỗi người có máy ảo riêng trong tab của mình: không có phiên trên máy chủ nên nhiều người chạy cùng lúc thoải mái (Vercel nhiều instance cũng không làm mất phiên).
+    var browserEmu = P.lang === 'emu8086' && !!window.Emu8086, emuRun = null;
+    function emuDraw(r) {
+        var m = r.m; if (!m) return;
+        var snap = m.snapshot(), w = m.status === 'waiting' ? m.waiting : null;
+        var v = { status: r.finished ? 'finished' : 'running', waiting: !!w, waitMode: w ? w.mode : null, screen: snap.screen, cursor: snap.cursor, regs: snap.regs, flags: snap.flags };
+        renderScreen(v); renderRegs(v); r.lastDraw = Date.now();
+        if (!r.finished) {
+            showInput(!!w, v.waitMode);
+            info.textContent = w ? (w.mode === 'char' ? 'Đang chờ phím — gõ trực tiếp vào màn hình đen (Enter = xuống dòng).' : 'Chương trình đang chờ bạn nhập...') : 'Đang chạy...';
+        }
+    }
+    function emuPump(r) {
+        if (r.finished || r.pumping) return;
+        r.pumping = true;
+        (function tick() {
+            if (r.finished) { r.pumping = false; return; }
+            var m = r.m;
+            if (Date.now() - r.startedAt > 240000 && !m.waiting) m.fault('Chạy quá thời gian cho phép.');
+            var st = m.run(100000);
+            if (st === 'running') { if (Date.now() - r.lastDraw > 80) emuDraw(r); return void setTimeout(tick, 0); }
+            r.pumping = false;
+            if (st === 'halted' || st === 'error') emuFinish(r); else emuDraw(r);
+        })();
+    }
+    function emuSend(r, text) {
+        if (!r || !r.m || r.finished) return false;
+        var w = r.m.waiting, t = String(text).slice(0, 2000);
+        if (w && w.mode === 'line') r.m.feed(t + '\r'); else r.m.feed(t === '' ? '\r' : t);
+        emuPump(r); return true;
+    }
+    function emuFinish(r) {
+        if (r.finished) return;
+        r.finished = true; if (emuRun === r) emuRun = null;
+        var m = r.m, snap = m ? m.snapshot() : null;
+        if (m && m.error && !r.error) r.error = m.error;
+        if (m) emuDraw(r);
+        if (r.asmErrors) termOut.innerHTML = r.asmErrors.map(function (e) { return '<div class="t-err">Dòng ' + e.line + ': ' + esc(e.message) + '</div>'; }).join('');
+        setRunning(false); showInput(false);
+        var code = r.code, exit = snap ? snap.exitCode : null;
+        info.innerHTML = (r.error ? '<span class="bad">' + esc(r.error) + '</span>' : '<span class="ok">Chạy xong' + (exit != null ? ' (mã thoát ' + exit + ')' : '') + '.</span>') + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
+        api('POST', '/code/emu8086/client-result', {
+            file: P.file, dir: P.dir, origin: P.online || undefined, source: code, console: m ? m.screen.raw : '', screen: snap ? snap.screen : [], inputs: m ? m.inputLog : [],
+            regs: snap ? snap.regs : null, flags: snap ? snap.flags : null, steps: snap ? snap.steps : 0, exitCode: exit, error: r.error, asmErrors: r.asmErrors || [],
+            startedAt: new Date(r.startedAt).toISOString(), durationMs: Date.now() - r.startedAt
+        }).then(function (x) { var sv = $('sv'); if (sv) sv.innerHTML = 'Đã lưu: ' + esc(x.saved); loadHistory(); })
+            .catch(function (e) { var sv = $('sv'); if (sv) sv.innerHTML = '<span class="bad">Lưu kết quả lỗi: ' + esc(e.message) + '</span>'; });
+    }
+    function runEmuBrowser() {
+        if (emuRun) return;
+        termOut.textContent = ''; $('outFiles').innerHTML = ''; info.textContent = 'Đang khởi động...'; setRunning(true); showInput(false);
+        var r = { m: null, code: '', finished: false, pumping: false, error: null, asmErrors: null, startedAt: Date.now(), lastDraw: 0 };
+        emuRun = r;
+        (text() !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
+            if (r.finished) return;
+            r.code = text(); r.startedAt = Date.now();
+            try { r.m = new Emu8086.Machine(r.code); }
+            catch (e) {
+                if (e && e.errors) { r.asmErrors = e.errors; r.error = 'Lỗi dịch hợp ngữ'; } else r.error = 'Lỗi: ' + (e && e.message);
+                return emuFinish(r);
+            }
+            emuDraw(r); emuPump(r); term.focus();
+        });
+    }
+    function emuStop() {
+        var r = emuRun; if (!r) return;
+        if (r.m) r.m.fault('Đã dừng bởi người dùng.');
+        r.error = 'Đã dừng bởi người dùng.';
+        if (!r.code) r.code = text();
+        emuFinish(r);
+    }
     function run() {
+        if (browserEmu) return P.runnable ? runEmuBrowser() : undefined;
         if (browserCpp) return P.runnable ? runBrowser() : undefined;
         if (!P.runnable || sid) return;
         termOut.textContent = ''; info.textContent = 'Đang khởi động...'; $('outFiles').innerHTML = ''; since = 0; showInput(false);
@@ -138,7 +211,7 @@
             else { termOut.innerHTML = j.errors.map(function (e) { return '<div class="t-err">Dòng ' + e.line + ': ' + esc(e.message) + '</div>'; }).join(''); info.innerHTML = '<span class="bad">Có ' + j.errors.length + ' lỗi.</span>'; }
         }).catch(function (e) { info.innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; });
     };
-    if (btnStop) btnStop.onclick = function () { if (wasmRun) { wasmRun.stop(); return; } if (!sid) { cancelWake = true; clearTimeout(wakeTimer); info.textContent = 'Đã hủy.'; setRunning(false); return; } if (sid) api('POST', '/code/session/' + sid + '/stop').catch(function () { }); };
+    if (btnStop) btnStop.onclick = function () { if (emuRun) { emuStop(); return; } if (wasmRun) { wasmRun.stop(); return; } if (!sid) { cancelWake = true; clearTimeout(wakeTimer); info.textContent = 'Đã hủy.'; setRunning(false); return; } if (sid) api('POST', '/code/session/' + sid + '/stop').catch(function () { }); };
 
     var isEmu = P.lang === 'emu8086', term = $('term'), keyQ = Promise.resolve();
     // emu8086: gõ phím thẳng vào màn hình (mỗi phím gửi ngay, Enter = mã 13) — giống console thật.
@@ -150,20 +223,21 @@
         else if (on && isEmu) term.focus();
     }
     function sendKey(t) {
+        if (emuRun) { emuSend(emuRun, t); return; }
         if (!sid) return;
         var id = sid;
         keyQ = keyQ.then(function () { return api('POST', '/code/session/' + id + '/input', { text: t }); }).catch(function () { });
     }
     if (isEmu) {
         term.addEventListener('keydown', function (e) {
-            if (!sid || e.ctrlKey || e.metaKey || e.altKey || !inputRow.classList.contains('hidden')) return;
+            if ((!sid && !emuRun) || e.ctrlKey || e.metaKey || e.altKey || !inputRow.classList.contains('hidden')) return;
             var t = null;
             if (e.key === 'Enter') t = '\r'; else if (e.key === 'Backspace') t = '\b'; else if (e.key.length === 1) t = e.key;
             if (t === null) return;
             e.preventDefault(); sendKey(t);
         });
         term.addEventListener('paste', function (e) {
-            if (!sid || !inputRow.classList.contains('hidden')) return;
+            if ((!sid && !emuRun) || !inputRow.classList.contains('hidden')) return;
             e.preventDefault(); var x = (e.clipboardData || window.clipboardData).getData('text'); x.split(/\r\n|\n|\r/).forEach(function (l, i, a) { if (l) sendKey(l); if (i < a.length - 1) sendKey('\r'); });
         });
         term.addEventListener('click', function () { if (inputRow.classList.contains('hidden')) term.focus(); });
@@ -180,6 +254,7 @@
     inputRow.addEventListener('submit', function (e) {
         e.preventDefault();
         if (wasmRun) { var w = inputBox.value; inputBox.value = ''; wasmInputs.push(w); wasmOut(w + '\n', 'in'); wasmRun.send(w + '\n'); return; }
+        if (emuRun) { var et = inputBox.value; inputBox.value = ''; showInput(false); emuSend(emuRun, et); return; }
         if (!sid) return;
         var t = inputBox.value; inputBox.value = ''; showInput(false);
         api('POST', '/code/session/' + sid + '/input', { text: t }).catch(function (er) { info.innerHTML = '<span class="bad">' + esc(er.message) + '</span>'; });

@@ -15,6 +15,8 @@ router.get('/session/:sid', ctrl.poll);
 router.post('/session/:sid/input', ctrl.input);
 router.post('/session/:sid/stop', ctrl.stop);
 
+router.get('/emu8086/engine.js', ctrl.emuEngine);      // bộ máy emu8086 chạy ở trình duyệt (mỗi người một máy ảo riêng, không cần phiên trên máy chủ)
+
 // HTML + CSS (đặt TRƯỚC /:lang; các thao tác chung như folder/save/delete rơi xuống route chung bên dưới)
 const raw = express.raw({ type: () => true, limit: '4mb' });          // phần/đoạn tải lên ≤ 3.5MB (Vercel giới hạn 4.5MB)
 router.get('/html', html.files);

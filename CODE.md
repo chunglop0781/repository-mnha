@@ -84,6 +84,13 @@ Trước đây mọi byte media đi GitHub → hàm Vercel (giải mã bằng No
 - **Bảo mật**: object trên R2/repo dự phòng là bản mã hoá; manifest/summary không chứa khoá thật. Đổi `MEDIA_ENC_KEY`/`CONNECT_ENC_KEY` = mất khả năng đọc media/khoá đã lưu.
 - Hướng dẫn người dùng + xử lý lỗi: `guide/connect-cloudflare.md`. Test: `node -r ./test/_stubs.js test/cloudflare.js` (ảnh→GitHub, direct/HLS→R2, R2 lỗi→dự phòng, đọc media cũ, purge, không lộ khoá).
 
+## Emu8086 chạy TRONG TRÌNH DUYỆT (nhiều người / nhiều tab chạy cùng lúc) — ĐÃ CHỐT, đừng đưa về phiên trên máy chủ
+- Trước đây emu8086 giữ phiên trong RAM của 1 instance Vercel → request sau rơi sang instance khác → "Phiên chạy không còn". Giờ mỗi người có **máy ảo riêng trong tab của mình**, không có phiên trên máy chủ nên không giới hạn số người chạy cùng lúc.
+- `GET /code/emu8086/engine.js` (`ctrl.emuEngine`) gói NGUYÊN `services/emu8086/assembler.js` + `machine.js` thành `window.Emu8086 = { Machine, AsmError, assemble }` (không nhân đôi mã). Trang sửa emu8086 nạp script này trước `codeEditor.js`.
+- `public/js/codeEditor.js` (`runEmuBrowser`, `emuPump`, `emuSend`, `emuFinish`, `emuStop`): dịch + chạy từng lát 100000 lệnh rồi nhường trình duyệt; phím gõ / ô nhập dòng đưa thẳng vào `Machine.feed`. Xong thì `POST /code/emu8086/client-result` chỉ để **lưu lịch sử** (`user_id/result/emu8086/`, cùng định dạng cũ + `runIn:'browser'`).
+- Không nạp được `engine.js` → tự lùi về cách cũ (phiên trên máy chủ, `/code/:lang/run`); `MAX_SESSIONS_PER_USER` = 5 áp cho đường lùi này và C++.
+- Test: `node -r ./test/_stubs.js test/emu-browser.js` (5 máy ảo độc lập chạy xen kẽ, không lẫn dữ liệu).
+
 ## Trình soạn code — tính năng DÙNG CHUNG cho MỌI ngôn ngữ (`public/js/editorKit.js`)
 Áp dụng cho emu8086, C++, HTML/CSS/JS và mọi dạng code thêm sau này (trang nào có `<textarea>` soạn code đều gọi `EditorKit.attach(textarea, { lang, file, readOnly })`;
 dạng mới chỉ cần thêm 1 nhánh trong `cfgFor()`: dấu chú thích, độ thụt, có tự đóng ngoặc hay không).
@@ -288,3 +295,10 @@ Test dùng `githubService` giả qua `require.cache`, không gọi GitHub thật
 - Dung lượng lấy từ webhook `push` của GitHub (`repository.size`), giữ trong RAM; instance chưa nhận webhook thì hỏi API GitHub một lần. Hiện từng repo ở trang **Web kết nối**.
 - Webhook push (`<MAIN_URL>/api/github/webhook`) được **tự gắn** cho repo chính và mọi repo `-1`, `-2`… khi web khởi động (chỉ web chính, 1 lần/tiến trình); secret **tự sinh** (HMAC từ `SESSION_ENC_KEY`/`GITHUB_TOKEN`…, mọi instance ra cùng giá trị) — không cần đặt `GITHUB_WEBHOOK_SECRET` (đặt thì dùng giá trị đó). Cần token có quyền `admin:repo_hook`. Tắt: `GITHUB_WEBHOOK_AUTO=off`.
 - Tắt: `GITHUB_REPO_POOL=off`. Test: `node test/github-pool.js`.
+
+## Emu8086 chạy ở TRÌNH DUYỆT (đã chốt — nhiều người chạy cùng lúc)
+Lỗi cũ: "Phiên chạy không còn…" — phiên emu8086 nằm trong RAM của 1 instance Vercel; request kế tiếp rơi vào instance khác → mất phiên, người khác phải chờ/chạy lại. **Không giữ phiên trên máy chủ nữa.**
+- `GET /code/emu8086/engine.js` (`controllers/code.controller.js` → `emuEngine`) ghép `services/emu8086/assembler.js` + `machine.js` thành `window.Emu8086 = { Machine, AsmError, assemble }` — dùng lại đúng mã đó, KHÔNG nhân đôi; sửa emulator chỉ sửa ở `services/emu8086/`.
+- `public/js/codeEditor.js` (`runEmuBrowser`, `emuPump`, `emuSend`, `emuFinish`): mỗi tab tự tạo `new Emu8086.Machine(code)`, chạy từng lô 100000 lệnh rồi nhường trình duyệt, nhập phím/dòng gọi thẳng `feed()`. Quá 240 giây (không tính lúc chờ nhập) thì dừng.
+- Kết thúc → `POST /code/emu8086/client-result` chỉ để LƯU lịch sử (`{user}/result/emu8086/{ts}.json`, cùng dạng trường như trước + `runIn:'browser'`). Máy chủ không chạy emu8086 trong luồng này; `/code/emu8086/run` + `sessions` vẫn còn làm đường dự phòng nếu `engine.js` không tải được.
+- C++ không đổi (runner Render / WASM). Test: `node -r ./test/_stubs.js test/emu-browser.js`.

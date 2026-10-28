@@ -297,6 +297,21 @@ exports.siblingsPost = wrap(async (req, res) => {    // như siblings nhưng the
 exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy trong trình duyệt → lưu lên GitHub như lần chạy ở server
     const lang = langOf(req);
     const b = req.body || {};
+    if (lang.key === 'emu8086') {      // emu8086 chạy ngay trong trình duyệt (không có phiên trên máy chủ) → chỉ nhận kết quả để lưu lịch sử
+        const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+        const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? JSON.parse(JSON.stringify(v).slice(0, 4000)) : null);
+        const errs = Array.isArray(b.asmErrors) ? b.asmErrors.slice(0, 50).map((e) => ({ line: num(e && e.line), message: String((e && e.message) || '').slice(0, 300) })) : [];
+        const e8 = {
+            lang: 'emu8086', file: String(b.file || ''), dir: String(b.dir || ''), ...(originOf(b.origin) ? { origin: originOf(b.origin) } : {}), source: String(b.source || '').slice(0, 200 * 1024),
+            kind: 'emu8086', status: b.error ? 'error' : 'ok', assemble: { ok: !errs.length, errors: errs },
+            console: String(b.console || '').slice(0, 1024 * 1024),
+            screen: Array.isArray(b.screen) ? b.screen.slice(0, 200).map((l) => String(l).slice(0, 400)) : [],
+            inputs: Array.isArray(b.inputs) ? b.inputs.slice(0, 500).map((x) => String(x).slice(0, 2000)) : [],
+            regs: obj(b.regs), flags: obj(b.flags), steps: num(b.steps), exitCode: num(b.exitCode), error: b.error ? String(b.error).slice(0, 2000) : null,
+            startedAt: b.startedAt ? String(b.startedAt).slice(0, 40) : null, finishedAt: new Date().toISOString(), durationMs: num(b.durationMs), runIn: 'browser'
+        };
+        return res.json({ ok: true, saved: await store.saveResult(uidOf(req), 'emu8086', e8) });
+    }
     const r = {
         lang: lang.key, file: String(b.file || ''), dir: String(b.dir || ''), ...(originOf(b.origin) ? { origin: originOf(b.origin) } : {}), source: String(b.source || '').slice(0, 200 * 1024),
         kind: 'cpp-browser', status: b.error ? 'error' : 'ok', console: String(b.console || '').slice(0, 1024 * 1024),
@@ -308,6 +323,19 @@ exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy tr
     if (r.origin && lang.key === 'cpp') { r.autoSaved = await store.saveOnlineOutputs(uidOf(req), lang.key, r.files); }
     res.json({ ok: true, saved: await store.saveResult(uidOf(req), lang.key, r), autoSaved: r.autoSaved });
 });
+
+// Bộ máy emu8086 (assembler + machine) gửi cho trình duyệt: dùng lại ĐÚNG mã trong services/emu8086 (không nhân đôi) → window.Emu8086 = { Machine, AsmError, assemble }
+let _emuBundle = null;
+exports.emuEngine = (req, res) => {
+    if (!_emuBundle) {
+        const fs = require('fs'), path = require('path');
+        const rd = (f) => fs.readFileSync(path.join(__dirname, '..', 'services', 'emu8086', f), 'utf8');
+        _emuBundle = '(function (g) {\n"use strict";\nvar A = { exports: {} };\n(function (module, exports, require) {\n' + rd('assembler.js') + '\n})(A, A.exports, function () { throw new Error("require"); });\n'
+            + 'var M = { exports: {} };\n(function (module, exports, require) {\n' + rd('machine.js') + '\n})(M, M.exports, function () { return A.exports; });\n'
+            + 'g.Emu8086 = { Machine: M.exports.Machine, AsmError: M.exports.AsmError, assemble: A.exports.assemble };\n})(window);\n';
+    }
+    res.set({ 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }).send(_emuBundle);
+};
 
 exports.results = wrap(async (req, res) => {
     const lang = langOf(req);
