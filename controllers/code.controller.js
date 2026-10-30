@@ -16,7 +16,7 @@ const sessions = require('../services/code/sessionManager');
 const remote = require('../services/code/remoteRunner');
 const remoteSource = require('../services/code/remoteSource');
 const includeResolver = require('../services/code/includeResolver');
-const { LANGS, CPP_RUN_MODE } = require('../config/codeConfig');
+const { LANGS, CPP_RUN_MODE, EMPTY_TXT_PLACEHOLDER } = require('../config/codeConfig');
 
 const uidOf = (req) => String(req.user._id);
 const wrap = (fn) => async (req, res) => {
@@ -174,6 +174,23 @@ exports.onlineFolder = wrap(async (req, res) => {
     });
 });
 
+// Tải 1 file văn bản của "Đọc thư mục trên mạng" về máy (link GitHub/GitLab công khai; máy chủ tải hộ, đã qua danh sách host + giới hạn 200KB của remoteSource).
+// Nút "Tải tất cả" ở trang đó gọi lần lượt từng file rồi gói zip ở trình duyệt.
+exports.onlineDownload = wrap(async (req, res) => {
+    const lang = langOf(req);
+    const parsed = remoteSource.parseSourceUrl(String(req.query.url || '').trim());
+    const ext = (parsed.last.lastIndexOf('.') > 0 ? parsed.last.slice(parsed.last.lastIndexOf('.') + 1) : '').toLowerCase();
+    if (!lang.exts.includes(ext)) throw Object.assign(new Error('File này không thuộc dạng code ' + lang.name), { status: 400 });
+    const content = await remoteSource.fetchText(parsed);
+    res.set({
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${parsed.last.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(parsed.last)}`,
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff'
+    });
+    res.send(content);
+});
+
 exports.history = wrap(async (req, res) => {
     const lang = langOf(req);
     res.render('code/history', { title: 'Lịch sử chạy code', user: req.user, lang });
@@ -196,6 +213,31 @@ exports.save = wrap(async (req, res) => {
     const lang = langOf(req);
     await store.writeFile(uidOf(req), lang.key, req.body.dir || '', req.body.file, req.body.content);
     res.json({ ok: true });
+});
+
+// Tải file văn bản (cpp, txt, h...) từ máy lên thư mục hiện tại — trùng tên thì ghi đè. Body: { dir, files:[{name, content}] }
+exports.uploadText = wrap(async (req, res) => {
+    const lang = langOf(req);
+    const r = await store.saveUploads(uidOf(req), lang.key, req.body.dir || '', req.body.files);
+    res.json({ ok: true, ...r });
+});
+
+// Tải 1 file văn bản về máy (nút "Tải" từng file; nút "Tải tất cả" gọi lần lượt rồi nén zip ở trình duyệt)
+exports.download = wrap(async (req, res) => {
+    const lang = langOf(req);
+    const dir = store.cleanDir(req.query.dir || '').join('/');
+    const file = store.cleanFileName(lang.key, req.query.file);
+    let content = await store.readFile(uidOf(req), lang.key, dir, file);
+    if (content === null) throw Object.assign(new Error('Không tìm thấy file'), { status: 404 });
+    if (content.trim() === EMPTY_TXT_PLACEHOLDER.trim()) content = '';      // .txt chỉ có dòng gợi ý → tải về như file rỗng
+    if (Buffer.byteLength(content) > 4 * 1024 * 1024) throw Object.assign(new Error('File lớn hơn 4MB, không tải trực tiếp được (Vercel giới hạn 4.5MB/lần trả về) — hãy mở link GitHub của thư mục để tải.'), { status: 413 });
+    res.set({
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${file.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(file)}`,
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff'
+    });
+    res.send(content);
 });
 
 exports.remove = wrap(async (req, res) => {

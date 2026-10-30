@@ -49,7 +49,8 @@ router.post('/:lang/siblings', ctrl.siblingsPost);
 router.post('/:lang/client-result', ctrl.saveClientResult);
 router.get('/:lang/history', ctrl.history);
 router.get('/:lang/online', ctrl.online);
-router.get('/:lang/online/folder', ctrl.onlineFolder);      // đọc thư mục trên mạng (chỉ file liên quan tới dạng code)
+router.get('/:lang/online/folder', ctrl.onlineFolder);
+router.get('/:lang/online/download', ctrl.onlineDownload);    // tải 1 file từ link GitHub/GitLab về máy      // đọc thư mục trên mạng (chỉ file liên quan tới dạng code)
 router.get('/:lang/results', ctrl.results);
 router.get('/:lang/results/:ts', ctrl.resultOne);
 router.post('/:lang/folder', ctrl.createFolder);
@@ -57,6 +58,8 @@ router.post('/:lang/rename-folder', ctrl.renameFolder);
 router.post('/:lang/rename-file', ctrl.renameFile);      // đổi tên thư mục (cả html)
 router.post('/:lang/file', ctrl.createFile);
 router.post('/:lang/save', ctrl.save);
+router.post('/:lang/upload-text', ctrl.uploadText);      // tải file văn bản (cpp, txt, h...) lên thư mục; trùng tên → ghi đè
+router.get('/:lang/download', ctrl.download);            // tải 1 file văn bản về máy
 router.post('/:lang/delete', ctrl.remove);
 router.post('/:lang/run', ctrl.run);
 router.post('/:lang/compile', ctrl.compile);

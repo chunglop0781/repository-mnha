@@ -151,6 +151,40 @@ async function finishText(uid, lang, b) {
     await writeFile(uid, lang, b.dir || '', b.file, Buffer.concat(bufs).toString('utf8'));
     return { ok: true, size: total };
 }
+// ---- TẢI FILE VĂN BẢN LÊN (cpp, txt, h, hpp, asm, html, css, js...) từ máy người dùng vào thư mục hiện tại.
+// Trùng tên file → GHI ĐÈ bản cũ. Văn bản luôn nằm ở repo chính (githubPool.keepsInMain). Tất cả file của 1 yêu cầu gom vào 1 commit.
+// files: [{ name, content }] — trả { saved:[tên], overwritten:[tên], skipped:[{name,reason}] }. File lỗi chỉ bị bỏ qua, không làm hỏng cả lô.
+const UPLOAD_MAX_FILES = 40;
+async function saveUploads(uid, lang, dir, files) {
+    const cfg = assertLang(lang);
+    const segs = cleanDir(dir);
+    if (!Array.isArray(files) || !files.length) throw bad('Chưa chọn file nào');
+    if (files.length > UPLOAD_MAX_FILES) throw bad(`Mỗi lần tải lên tối đa ${UPLOAD_MAX_FILES} file`);
+    const max = maxBytesOf(lang);
+    const out = { saved: [], overwritten: [], skipped: [] };
+    const existing = new Set((await list(uid, lang, segs.join('/'))).files);
+    const picked = new Map();                 // tên đã chuẩn hoá → Buffer (trùng tên trong cùng lô: file sau đè file trước)
+    for (const f of files) {
+        const raw = String((f && f.name) || '').slice(0, 120);
+        try {
+            if (!/\.[A-Za-z0-9]+$/.test(raw)) throw bad('thiếu đuôi file (' + cfg.exts.map((e) => '.' + e).join(', ') + ')');
+            const name = cleanFileName(lang, raw);
+            if (typeof f.content !== 'string') throw bad('nội dung không phải văn bản');
+            if (f.content.includes('\u0000')) throw bad('không phải file văn bản');
+            const text = displayText(name, f.content);
+            const size = Buffer.byteLength(text);
+            if (size > max) throw bad('quá lớn (tối đa ' + (max >= 1048576 ? (max / 1048576) + 'MB' : Math.round(max / 1024) + 'KB') + ')');
+            picked.set(name, Buffer.from(text, 'utf8'));
+        } catch (e) { out.skipped.push({ name: raw, reason: e.message }); }
+    }
+    if (!picked.size) return out;
+    const prefix = [root(uid, lang), ...segs].join('/');
+    const changes = [...picked].map(([name, content]) => ({ path: `${prefix}/${name}`, content }));
+    if (typeof gh.commitFiles === 'function') await gh.commitFiles(changes, `code: upload ${changes.length} file${segs.length ? ' → ' + segs.join('/') : ''}`);
+    else for (const c of changes) await gh.writeBinaryFile(c.path, c.content, `code: upload ${c.path.split('/').pop()}`);
+    for (const name of picked.keys()) { out.saved.push(name); if (existing.has(name)) out.overwritten.push(name); }
+    return out;
+}
 async function removeFile(uid, lang, dir, name) {
     return gh.deleteFile(filePath(uid, lang, dir, name, true), 'code: delete file');
 }
@@ -275,4 +309,4 @@ async function readResult(uid, lang, ts) {
 }
 
 module.exports = {
-    putTextPart, finishText, githubUrl, githubFolderUrl, displayText, renameFolder, renameFile, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName };
+    putTextPart, finishText, saveUploads, githubUrl, githubFolderUrl, displayText, renameFolder, renameFile, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName };

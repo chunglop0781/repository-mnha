@@ -4,7 +4,7 @@ block content
     link(rel="stylesheet", href="/css/html.css")
     - var base = "/code/html"
     - var parts = dir ? dir.split("/") : []
-    div(class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8", id="htmlFiles", data-dir=dir)
+    div(class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8", id="htmlFiles", data-dir=dir, data-lang="html", data-exts=lang.exts.join(","), data-max=3145728)
         a(href="/", class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
             i(data-lucide="arrow-left", class="w-4 h-4")
             | Chọn ngôn ngữ
@@ -23,6 +23,13 @@ block content
             a(href=base + "/online", class="px-4 py-2 rounded-lg bg-white border border-emerald-300 text-emerald-700 text-sm font-medium hover:bg-emerald-50 inline-flex items-center gap-1")
                 i(data-lucide="globe", class="w-4 h-4")
                 | Xem tệp code / Xem thư mục trên mạng
+            button(type="button", id="btnUploadText", class="px-4 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-sm font-medium hover:bg-indigo-50 inline-flex items-center gap-1")
+                i(data-lucide="upload", class="w-4 h-4")
+                | Tải file text lên
+            button(type="button", id="btnDownloadAll", class="px-4 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-sm font-medium hover:bg-indigo-50 inline-flex items-center gap-1")
+                i(data-lucide="download", class="w-4 h-4")
+                | Tải tất cả file text về
+            input(type="file", id="textUploadInput", multiple, class="hidden", accept=lang.exts.map(function (e) { return "." + e; }).join(","))
             if dir
                 button(type="button", id="btnRenFolder", data-rename=dir, class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") Đổi tên
             if dir
@@ -53,6 +60,7 @@ block content
                     a(href=base + "/edit?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f), target="_blank", rel="noopener", class="flex-1 text-gray-900 hover:text-indigo-600 break-all")= f
                     if isPage(f)
                         a(href=base + "/edit?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f) + "&view=1", target="_blank", rel="noopener", class="text-xs text-emerald-600 hover:underline") Xem
+                    a(href=base + "/download?dir=" + encodeURIComponent(dir) + "&file=" + encodeURIComponent(f), download=f, class="text-xs text-gray-600 hover:underline") Tải
                     button(type="button", class="text-xs text-indigo-600 hover:underline", data-rename-file=f) Đổi tên
                     button(class="btn-del-file text-xs text-red-500 hover:underline", data-file=f) Xoá
             each asset in assets
@@ -93,3 +101,5 @@ block content
     script(src="/js/mediaUpload.js")
     script(src="/js/htmlFiles.js")
     script(src="/js/folderTools.js")
+    script(src="/js/zipKit.js")
+    script(src="/js/textTransfer.js")

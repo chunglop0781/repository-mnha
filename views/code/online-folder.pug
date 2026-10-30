@@ -3,7 +3,7 @@ extends ../layout
 block content
     - var base = "/code/" + lang.key
     - function fmt(n) { return n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB" }
-    div(class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8")
+    div(class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8", id="onlineFolder", data-lang=lang.key, data-dir=crumbs[crumbs.length - 1].name)
         a(href=base + "/online", class="text-sm text-indigo-600 hover:underline inline-flex items-center gap-1")
             i(data-lucide="arrow-left", class="w-4 h-4")
             | Xem code trên mạng
@@ -15,6 +15,10 @@ block content
                 a(href=c.href, class="text-indigo-600 hover:underline break-all")= c.name
         div(class="mt-4 flex flex-wrap gap-3")
             a(href=web, target="_blank", rel="noopener noreferrer", class="px-4 py-2 rounded-lg bg-white border border-gray-300 text-sm font-medium hover:bg-gray-50") Mở trên #{host}
+            if list.some(function (x) { return x.type === "file"; })
+                button(type="button", id="btnDownloadAll", class="px-4 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-sm font-medium hover:bg-indigo-50 inline-flex items-center gap-1")
+                    i(data-lucide="download", class="w-4 h-4")
+                    | Tải tất cả file về
         p(class="mt-2 text-xs text-gray-500") Chỉ hiện file liên quan tới #{lang.name}: #{extList}. Bấm tên file để xem code (chỉ xem, vẫn chạy được).
         div(class="mt-5 bg-white rounded-2xl border border-gray-200 divide-y divide-gray-100")
             if !list.length
@@ -35,9 +39,12 @@ block content
                         if x.runnable
                             span(class="text-xs text-emerald-600") chạy được
                         span(class="text-xs text-gray-400 whitespace-nowrap")= fmt(x.size)
+                        a(href=base + "/online/download?url=" + encodeURIComponent(x.web), download=x.name, class="text-xs text-gray-600 hover:underline", data-dl-file=x.name) Tải
         if hidden
             p(class="mt-2 text-xs text-gray-500") Đã ẩn #{hidden} file không liên quan tới #{lang.name}.
         if truncated
             p(class="mt-2 text-xs text-amber-600") Chỉ hiện 300 mục đầu tiên.
+    script(src="/js/zipKit.js")
+    script(src="/js/onlineDownload.js")
     script.
         if (window.lucide) lucide.createIcons();
