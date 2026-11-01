@@ -81,4 +81,32 @@ const mediaKind = (name) => {
     for (const k of Object.keys(ASSET_EXTS)) if (ASSET_EXTS[k].includes(e)) return k;
     return null;
 };
-module.exports = { EMPTY_TXT_PLACEHOLDER, LANGS, LIMITS, NAME_RE, FILE_STEM_RE, CPP_RUN_MODE, CPP_RUNNER_URL, CPP_RUNNER_KEY, ASSET_EXTS, UPLOAD_EXTS, MEDIA, mediaKind };
+
+// ---- Lưu trữ file (/code/files) — chỉ nhận file Office / PDF / ảnh. Xem services/code/fileStore.js
+// File được CHIA thành các phần ≤ PART_BYTES (Vercel chặn request > 4.5MB), mỗi phần mã hoá riêng rồi ghi thành 1 file `NNNN.bin`
+// trong {uid}/codes/files/[thư-mục]/_data/<mã>/. File .bin KHÔNG phải file chữ nên nhóm repo (services/githubPool.js) ghi vào repo đang dùng:
+// repo đầy → tự tạo repo kế (…-1, -2, …) và các phần tiếp theo ghi sang repo đó, đúng thứ tự repo được tạo. Danh sách phần nằm ở mnha-files.json (repo chính).
+const FILE_EXTS = {
+    word: ['doc', 'docx', 'dot', 'dotx', 'docm', 'rtf', 'odt'],
+    excel: ['xls', 'xlsx', 'xlsm', 'xlsb', 'xlt', 'xltx', 'ods'],
+    powerpoint: ['ppt', 'pptx', 'pps', 'ppsx', 'pptm', 'pot', 'potx', 'odp'],
+    office: ['vsd', 'vsdx', 'pub', 'mpp', 'one'],           // Visio, Publisher, Project, OneNote
+    pdf: ['pdf'],
+    image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'tif', 'tiff', 'heic']
+};
+const FILES = {
+    ROOT: 'codes/files',
+    MANIFEST: 'mnha-files.json',     // cùng thư mục với file: { files: { "Báo cáo.docx": { id, size, parts:[{i,size,repo}], ... } } }
+    DATA_DIR: '_data',               // nơi chứa các phần đã mã hoá (ẩn khỏi danh sách thư mục)
+    PART_BYTES: 3.5 * 1024 * 1024,
+    MAX_FILE_BYTES: (Number(process.env.FILES_MAX_BYTES) > 0 ? Number(process.env.FILES_MAX_BYTES) : 200 * 1024 * 1024),
+    MAX_NAME: 120,
+    EXTS: FILE_EXTS,
+    DOWNLOAD_TTL_MS: 30 * 60 * 1000
+};
+const fileKind = (name) => {
+    const e = String(name || '').split('.').pop().toLowerCase();
+    for (const k of Object.keys(FILE_EXTS)) if (FILE_EXTS[k].includes(e)) return k;
+    return null;
+};
+module.exports = { FILES, FILE_EXTS, fileKind, EMPTY_TXT_PLACEHOLDER, LANGS, LIMITS, NAME_RE, FILE_STEM_RE, CPP_RUN_MODE, CPP_RUNNER_URL, CPP_RUNNER_KEY, ASSET_EXTS, UPLOAD_EXTS, MEDIA, mediaKind };

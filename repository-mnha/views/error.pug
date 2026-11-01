@@ -1,0 +1,8 @@
+extends layout
+
+block content
+    div(class="max-w-xl mx-auto px-4 py-20 text-center")
+        div(class="text-6xl font-bold text-indigo-600")= statusCode || 500
+        h1(class="mt-3 text-xl font-semibold")= title || 'Lỗi'
+        p(class="mt-2 text-gray-600")= message
+        a(href="/", class="mt-6 inline-block px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm") Về trang chính

@@ -15,3 +15,16 @@ block content
                     span(class="mt-5 inline-flex items-center text-sm font-medium text-indigo-600")
                         | Mở
                         i(data-lucide="chevron-right", class="w-4 h-4 ml-1")
+        if tools && tools.length
+            div(class="mt-10 mb-4")
+                h2(class="text-xl font-bold text-gray-900") Công cụ
+            div(class="grid grid-cols-1 sm:grid-cols-2 gap-6")
+                each t in tools
+                    a(href=t.href, class="group block bg-white rounded-2xl border border-gray-200 hover:border-indigo-300 hover:shadow-lg transition-all p-8")
+                        div(class="w-14 h-14 rounded-2xl bg-indigo-50 flex items-center justify-center")
+                            i(data-lucide=t.icon, class="w-7 h-7 text-indigo-600")
+                        h2(class="mt-5 text-xl font-bold text-gray-900 group-hover:text-indigo-600")= t.name
+                        p(class="mt-2 text-sm text-gray-500")= t.description
+                        span(class="mt-5 inline-flex items-center text-sm font-medium text-indigo-600")
+                            | Mở
+                            i(data-lucide="chevron-right", class="w-4 h-4 ml-1")

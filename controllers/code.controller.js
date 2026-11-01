@@ -33,7 +33,10 @@ const wrap = (fn) => async (req, res) => {
 const langOf = (req) => { const l = LANGS[req.params.lang]; if (!l || l.disabled) throw Object.assign(new Error('Không có dạng code này'), { status: 404 }); return l; };
 
 exports.hub = wrap(async (req, res) => {
-    res.render('code/hub', { title: 'Lập trình', user: req.user, langs: Object.values(LANGS).filter((l) => !l.disabled) });
+    res.render('code/hub', {
+        title: 'Lập trình', user: req.user, langs: Object.values(LANGS).filter((l) => !l.disabled),
+        tools: [{ href: '/code/files', name: 'Lưu trữ file', icon: 'folder-archive', description: 'Lưu tài liệu Word, Excel, PowerPoint, PDF và ảnh (mã hoá; file nặng tự chia nhỏ qua các repo).' }]
+    });
 });
 
 exports.files = wrap(async (req, res) => {

@@ -229,6 +229,28 @@ function createRouter() {
         const media = require('../../services/code/mediaService');
         return media.commit(req.mediaUid, req.body || {});
     }, req, res));
+    // ---- Lưu trữ file (Office / PDF / ảnh): cùng cơ chế phiếu tải lên như media — services/code/fileStore.js
+    router.post('/api/node/files/init', (req, res) => {
+        nodeUploadAuth(req, res, () => run(async () => {
+            const files = require('../../services/code/fileStore');
+            const uid = req.mediaUid;
+            const init = await files.init(uid, req.body || {});
+            const token = uploadToken.sign({
+                uid, uploadId: init.uploadId, name: init.name, dir: (req.body && req.body.dir) || '', nid: nodeId()
+            }, await ownKey(req));
+            return { ...init, token, node: { id: nodeId(), name: nodeName(), url: nodeUrl(req) } };
+        }, req, res));
+    });
+    router.put('/api/node/files/part', raw, nodeUploadAuth, (req, res) => run(async () => {
+        const files = require('../../services/code/fileStore');
+        return files.putPart(req.mediaUid, req.query, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    }, req, res));
+    router.post('/api/node/files/finish', nodeUploadAuth, (req, res) => run(async () => {
+        const files = require('../../services/code/fileStore');
+        return files.finish(req.mediaUid, req.body || {});
+    }, req, res));
+    // tải về: quyền nằm trong phiếu ký ?t= (không cookie) — web chính không phát dữ liệu
+    router.get('/api/node/files/download', (req, res) => require('../../controllers/files.controller').serveDownload(req, res));
     // xoá media / bật-tắt công khai: chỉ web chính gọi (phiếu tải lên không đủ quyền)
     router.post('/api/node/media/visibility', nodeUploadAuth, (req, res) => run(async () => {
         const media = require('../../services/code/mediaService');

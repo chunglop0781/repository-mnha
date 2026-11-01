@@ -1,0 +1,24 @@
+extends ../layout
+
+block content
+    link(rel="stylesheet", href="/css/code.css")
+    div(class="code-app", id="histApp", data-lang=lang.key)
+        div(class="code-top")
+            div(class="code-title")
+                i(data-lucide="history", class="w-4 h-4")
+                span Lịch sử chạy code — #{lang.name}
+                span(class="code-badge") Chỉ xem
+            div(class="code-actions")
+                a(href="/code/" + lang.key, class="code-btn", style="text-decoration:none") ← Danh sách file
+                a(href="/code/" + lang.key + "/online", class="code-btn", style="text-decoration:none") Xem code trên mạng
+        div(class="code-body")
+            div(class="hist-list", id="histList") Đang tải...
+            div(class="code-left")
+                div(class="code-gutter", id="histGutter")
+                pre(class="hist-code", id="histCode") Chọn một lần chạy ở bên trái để xem code.
+            div(class="code-right")
+                div(class="code-panel-title") Màn hình (screen) khi chạy
+                div(class="code-term")
+                    div(class="code-term-out", id="histOut")
+                div(id="histInfo", class="code-info")
+    script(src="/js/codeHistory.js")
