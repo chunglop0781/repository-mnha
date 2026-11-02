@@ -60,6 +60,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Đếm lưu lượng trình duyệt ⇄ web (xấp xỉ) cho trang /connect — xem services/connect/usage.js
 app.use(require('./services/connect/usage').middleware());
 
+// Xem file Lưu trữ CÔNG KHAI (không đăng nhập, không session): /f?u=&d=&n= (trang xem), /f/d (xem thư mục đã chia sẻ), /f/key (khoá + địa chỉ GitHub raw để trình duyệt tự giải mã), /f/raw (dự phòng, chuyển sang web kết nối); file riêng tư → 404.
+const filesCtl = require('./controllers/files.controller');
+app.get('/f', filesCtl.publicGate(false));
+app.get('/f/d', filesCtl.publicFolderPage);
+app.get('/f/key', filesCtl.publicKey);
+app.get('/f/raw', filesCtl.publicGate(true));
+
 // Session CHỈ đọc/ghi ở GitHub (cookies/index.json, mã hoá AES-256-GCM) — KHÔNG còn ghi session vào MongoDB.
 // Thiếu GITHUB_* hoặc SESSION_ENC_KEY thì dừng ngay (không có đường lùi về Mongo).
 let sessionStore;

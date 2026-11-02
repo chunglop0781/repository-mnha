@@ -42,6 +42,29 @@ function canUploadMedia(user) {
     return !!user;      // mở quyền: mọi tài khoản đã đăng nhập (kể cả chưa duyệt) đều được tải ảnh lên
 }
 
+/**
+ * "Lưu trữ file" (Word/Excel/PowerPoint/PDF/ảnh): CHỈ admin và student đã được duyệt được tải lên.
+ * Tài khoản client (chưa duyệt), pending, rejected, disabled → không tải lên được (vẫn xem được danh sách, link công khai, tải file đã có).
+ * (Quy tắc riêng của Lưu trữ file — ảnh/âm thanh/video của dạng code HTML vẫn theo canUploadMedia ở trên.)
+ */
+function canUploadFiles(user) {
+    if (!user) return false;
+    if (user.status === 'disabled' || user.status === 'rejected') return false;
+    if (user.role === 'admin') return true;
+    return user.role === 'student' && user.status === 'approved';
+}
+function filesDenyMessage(user) {
+    if (user && user.role === 'client') return 'Tài khoản chưa được duyệt nên chưa tải file lên được — hãy nhắn quản trị viên để được duyệt (admin và student mới được tải file lên).';
+    return uploadDenyMessage(user);
+}
+function requireFileUploader(req, res, next) {
+    if (canUploadFiles(req.user)) return next();
+    const msg = filesDenyMessage(req.user);
+    const json = req.method !== 'GET' || req.xhr || (req.headers.accept || '').includes('json');
+    if (json) return res.status(403).json({ error: msg, code: 'UPLOAD_NOT_ALLOWED' });
+    return res.status(403).render('error', { title: 'Chưa được tải lên', message: msg, statusCode: 403, user: req.user });
+}
+
 function requireMediaUploader(req, res, next) {
     if (canUploadMedia(req.user)) return next();
     const msg = uploadDenyMessage(req.user);
@@ -79,6 +102,6 @@ async function nodeUploadAuth(req, res, next) {
 }
 
 module.exports = {
-    isDefaultAdmin, canUploadMedia, uploadDenyMessage,
+    isDefaultAdmin, canUploadMedia, uploadDenyMessage, canUploadFiles, filesDenyMessage, requireFileUploader,
     requireDefaultAdmin, requireMediaUploader, nodeUploadAuth, tokenOf
 };

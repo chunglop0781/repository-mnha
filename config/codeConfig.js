@@ -92,6 +92,7 @@ const FILE_EXTS = {
     powerpoint: ['ppt', 'pptx', 'pps', 'ppsx', 'pptm', 'pot', 'potx', 'odp'],
     office: ['vsd', 'vsdx', 'pub', 'mpp', 'one'],           // Visio, Publisher, Project, OneNote
     pdf: ['pdf'],
+    text: ['txt'],                                           // xem + SỬA ngay trên web (UTF-8)
     image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'tif', 'tiff', 'heic']
 };
 const FILES = {
@@ -101,6 +102,7 @@ const FILES = {
     PART_BYTES: 3.5 * 1024 * 1024,
     MAX_FILE_BYTES: (Number(process.env.FILES_MAX_BYTES) > 0 ? Number(process.env.FILES_MAX_BYTES) : 200 * 1024 * 1024),
     MAX_NAME: 120,
+    TEXT_EDIT_MAX: 2 * 1024 * 1024,   // file .txt lớn hơn mức này không mở sửa trên web (chỉ tải về)
     EXTS: FILE_EXTS,
     DOWNLOAD_TTL_MS: 30 * 60 * 1000
 };

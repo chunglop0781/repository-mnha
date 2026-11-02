@@ -57,8 +57,8 @@ function header(salt) {
 }
 
 /** 1 bản ghi (khối) đã mã hoá — dùng khi gửi theo từng phần. */
-function encryptRecord(plain, salt, index) {
-    const key = sub('media-gcm', salt);
+function encryptRecord(plain, salt, index, keyOverride) {
+    const key = keyOverride || sub('media-gcm', salt);
     const iv = crypto.randomBytes(12);
     const c = crypto.createCipheriv('aes-256-gcm', key, iv);
     c.setAAD(aad(index));
@@ -77,14 +77,15 @@ function assemble(salt, records) {
     return Buffer.concat([header(salt), ...records]);
 }
 
-/** Giải mã file MNHAENC1 → Buffer. Sai khoá / bị sửa / sai định dạng → MediaCryptoError (code BAD_FORMAT | AUTH | NO_KEY). */
-function decryptBuffer(buf) {
+/** Giải mã file MNHAENC1 → Buffer. `startIndex` = số thứ tự (AAD) của khối đầu tiên — file đơn lẻ là 0; các PHẦN của file Lưu trữ mang số thứ tự của phần. Sai khoá / bị sửa / sai định dạng → MediaCryptoError (code BAD_FORMAT | AUTH | NO_KEY). */
+function decryptBuffer(buf, startIndex = 0, keyOverride = null) {
     if (!isEncrypted(buf)) throw new MediaCryptoError('Không phải file mã hoá của hệ thống (thiếu MNHAENC1).', 'BAD_FORMAT');
     if (buf[MAGIC.length] !== VER) throw new MediaCryptoError('Phiên bản mã hoá không hỗ trợ: ' + buf[MAGIC.length], 'BAD_FORMAT');
     const salt = buf.subarray(MAGIC.length + 1, HEADER_LEN);
-    const key = sub('media-gcm', salt);
+    const key = keyOverride || sub('media-gcm', salt);
     const out = [];
-    let pos = HEADER_LEN, idx = 0;
+    let pos = HEADER_LEN, idx = startIndex | 0;
+    const first = idx;
     while (pos < buf.length) {
         if (pos + 4 + 12 + 16 > buf.length) throw new MediaCryptoError('File mã hoá bị cắt cụt.', 'BAD_FORMAT');
         const len = buf.readUInt32BE(pos);
@@ -97,7 +98,7 @@ function decryptBuffer(buf) {
         catch (_) { throw new MediaCryptoError('Sai khoá hoặc file đã bị sửa/hỏng (không giải mã được khối ' + idx + ').', 'AUTH'); }
         pos = end; idx++;
     }
-    if (!idx) throw new MediaCryptoError('File mã hoá rỗng.', 'BAD_FORMAT');
+    if (idx === first) throw new MediaCryptoError('File mã hoá rỗng.', 'BAD_FORMAT');
     return out.length === 1 ? out[0] : Buffer.concat(out);
 }
 
@@ -126,6 +127,19 @@ function unwrapKey(b64) {
     return k;
 }
 
+// ---------------- khoá RIÊNG của file Lưu trữ (public/js/mnhaFiles.js giải mã bằng khoá này) ----------------
+/** Khoá AES-256 của 1 lần tải lên (dẫn xuất từ khoá chủ + người dùng + mã tải lên → không cần lưu trạng thái giữa các request). Bản lưu trong json là bản MÃ HOÁ (wrapBytes). */
+function filesKey(uid, uploadId) {
+    return crypto.createHmac('sha256', sub('files-key')).update(String(uid) + '|' + String(uploadId)).digest();
+}
+/** Mã hoá 2 chiều một khối byte nhỏ (khoá file…) để ghi vào json: base64 của file MNHAENC1. */
+function wrapBytes(buf) { return encryptBuffer(Buffer.from(buf)).toString('base64'); }
+function unwrapBytes(b64, len) {
+    const k = decryptBuffer(Buffer.from(String(b64 || ''), 'base64'));
+    if (len && k.length !== len) throw new MediaCryptoError('Khoá trong json không hợp lệ.', 'BAD_FORMAT');
+    return k;
+}
+
 // ---------------- biên nhận (chống nhét sha bất kỳ vào commit) ----------------
 function receipt(uid, uploadId, path, sha, size) {
     return crypto.createHmac('sha256', sub('receipt')).update([uid, uploadId, path, sha, size].join('|')).digest('hex').slice(0, 40);
@@ -140,5 +154,5 @@ function signKey() { return sub('preview-token'); }
 
 module.exports = {
     MediaCryptoError, MAGIC, HEADER_LEN, isEncrypted, fileKey, saltOf, deriveSalt, header, encryptRecord, encryptBuffer, assemble, decryptBuffer,
-    hlsKey, hlsIv, encryptHlsSegment, decryptHlsSegment, wrapKey, unwrapKey, receipt, verifyReceipt, signKey, resetKeys
+    hlsKey, hlsIv, encryptHlsSegment, decryptHlsSegment, wrapKey, unwrapKey, filesKey, wrapBytes, unwrapBytes, receipt, verifyReceipt, signKey, resetKeys
 };

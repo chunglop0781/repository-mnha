@@ -5,7 +5,7 @@ const ctrl = require('../controllers/code.controller');
 const html = require('../controllers/html.controller');
 const files = require('../controllers/files.controller');
 const { attachUser, requireAuth } = require('../middleware/auth');
-const { requireMediaUploader } = require('../middleware/uploadAuth');
+const { requireMediaUploader, requireFileUploader } = require('../middleware/uploadAuth');
 const { requireLocalData } = require('../services/connect/locality');
 
 router.use(attachUser);
@@ -45,11 +45,15 @@ router.post('/html/media/visibility', html.mediaVisibility);
 // Lưu trữ file (Office / PDF / ảnh) — đặt TRƯỚC /:lang. Phần file đi qua web kết nối giống ảnh/âm thanh/video.
 router.get('/files', files.page);
 router.get('/files/download', files.download);                    // phiếu ký trong ?t= (localhost / web dữ liệu); web kết nối dùng /api/node/files/download
+router.post('/files/open', files.open);
 router.post('/files/download-token', files.downloadToken);
-router.post('/files/upload/init', requireMediaUploader, files.uploadInit);
-router.post('/files/upload/local/init', requireLocalData, requireMediaUploader, files.uploadLocalInit);
-router.put('/files/upload/part', requireLocalData, requireMediaUploader, raw, files.uploadPart);
-router.post('/files/upload/finish', requireLocalData, requireMediaUploader, files.uploadFinish);
+router.post('/files/upload/init', requireFileUploader, files.uploadInit);
+router.post('/files/upload/local/init', requireLocalData, requireFileUploader, files.uploadLocalInit);
+router.put('/files/upload/part', requireLocalData, requireFileUploader, raw, files.uploadPart);
+router.post('/files/upload/finish', requireLocalData, requireFileUploader, files.uploadFinish);
+router.post('/files/visibility', files.visibility);
+router.get('/files/search', files.search);
+router.post('/files/folder/share', files.shareFolder);
 router.post('/files/folder', files.createFolder);
 router.post('/files/folder/delete', files.removeFolder);
 router.post('/files/rename', files.rename);

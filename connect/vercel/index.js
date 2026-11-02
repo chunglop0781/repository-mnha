@@ -251,6 +251,8 @@ function createRouter() {
     }, req, res));
     // tải về: quyền nằm trong phiếu ký ?t= (không cookie) — web chính không phát dữ liệu
     router.get('/api/node/files/download', (req, res) => require('../../controllers/files.controller').serveDownload(req, res));
+    // dự phòng khi trình duyệt không tự giải mã được: file đã bật "công khai" → byte đã giải mã
+    router.get('/api/node/files/public/raw', (req, res) => require('../../controllers/files.controller').publicRaw(req, res));
     // xoá media / bật-tắt công khai: chỉ web chính gọi (phiếu tải lên không đủ quyền)
     router.post('/api/node/media/visibility', nodeUploadAuth, (req, res) => run(async () => {
         const media = require('../../services/code/mediaService');
