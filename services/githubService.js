@@ -648,14 +648,19 @@ function createClient(opt = {}) {
     const b = opt.branch || process.env.GITHUB_BRANCH || 'main';
     if (!r) throw new Error('createClient: thiếu repo');
     if (!tok || !o) throw new Error('createClient: thiếu token/owner để tạo client GitHub.');
+    const _to = Object.prototype.hasOwnProperty.call(opt, 'timeout') ? opt.timeout : (process.env.VERCEL ? 50000 : 120000);
     const octo = new Octokit({
         auth: tok,
         userAgent: 'repository-mnha/1.0.0',
-        request: { timeout: Object.prototype.hasOwnProperty.call(opt, 'timeout') ? opt.timeout : (process.env.VERCEL ? 50000 : 120000) }
+        request: {
+            timeout: _to,
+            fetch: require('../utils/githubErrors').octokitFetch(_to)
+        }   // phiên bản API được ép trong hook attachRateLimitGuard (header ở constructor không có tác dụng với octokit.repos.*)
     });
     // Ghép vào cùng bộ theo dõi GitHub sập/bảo trì.
     try {
         const githubHealth = require('../utils/githubErrors');
+        githubHealth.attachRateLimitGuard(octo);   // dùng chung bộ hạ nhiệt/điều tốc + API version mới với client chính
         octo.hook.error('request', async (error) => { githubHealth.noteFailure(error); throw error; });
         octo.hook.after('request', () => githubHealth.noteSuccess());
     } catch (_) { /* utils không có trong test tối giản */ }

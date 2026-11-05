@@ -121,7 +121,7 @@ async function mutateManifest(uid, segs, fn, message) {
             return next;
         } catch (e) {
             last = e;
-            if (e.code !== 'SHA_CONFLICT') throw e;
+            if ((e.name === 'HttpError' || e.code !== 'SHA_CONFLICT')) throw e;
             await new Promise((ok) => setTimeout(ok, 200 * (attempt + 1)));
         }
     }

@@ -37,7 +37,7 @@ const httpErr = (msg, status = 400) => Object.assign(new Error(msg), { status })
 const wrap = (fn) => async (req, res) => {
     try { await fn(req, res); }
     catch (e) {
-        const status = e.status || (e.code === 'SHA_CONFLICT' ? 409 : 500);
+        const status = e.status || ((e.name !== 'HttpError' && e.code === 'SHA_CONFLICT') ? 409 : 500);
         if (status === 500) console.error('[html]', e);
         if (req.method === 'GET' && !(req.headers.accept || '').includes('json')) {
             return res.status(status).render('error', { title: 'Lỗi', message: e.message, statusCode: status, stack: null, user: req.user });

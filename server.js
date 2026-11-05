@@ -1,6 +1,7 @@
 // server.js — repository-mnha: web chạy code Emu8086 / C++ (Node.js)
 // Dùng CHUNG database người dùng (MongoDB) với dự án Luyện thi CNTT UTC; không phụ thuộc code của dự án đó.
-require('dotenv').config();
+// Chạy local: .env THẮNG biến môi trường hệ thống (tránh GITHUB_TOKEN cũ đặt trong Windows đè lên .env). Vercel/production: giữ biến của nền tảng.
+require("dotenv").config({ override: !process.env.VERCEL && process.env.NODE_ENV !== "production" });
 process.env.TZ = process.env.TZ || 'Asia/Ho_Chi_Minh';
 const path = require('path');
 const express = require('express');
@@ -148,7 +149,10 @@ app.use((err, req, res, next) => {            // eslint-disable-line no-unused-v
 
 if (!ON_VERCEL) {
     connectDb().then(() => {
-        app.listen(PORT, () => console.log(`🚀 repository-mnha chạy ở http://localhost:${PORT}`));
+        app.listen(PORT, () => {
+            console.log(`🚀 repository-mnha chạy ở http://localhost:${PORT}`);
+            try { require('./utils/githubErrors').logAuthStatus(require('./config/github').octokit); } catch (_) { /* bỏ qua */ }
+        });
     }).catch((e) => { console.error('❌ Không kết nối được MongoDB:', e.message); process.exit(1); });
 }
 module.exports = app;

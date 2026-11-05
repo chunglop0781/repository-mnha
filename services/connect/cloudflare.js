@@ -454,7 +454,7 @@ async function saveConfig(b = {}) {
                 await gh().writeJsonFileIfSha(FILE(), next, cur ? cur.sha : null, 'connect: xoá cấu hình Cloudflare');
                 invalidate();
                 return summary();
-            } catch (e) { last = e; if (e.code !== 'SHA_CONFLICT') throw e; await new Promise((ok) => setTimeout(ok, 220)); continue; }
+            } catch (e) { last = e; if ((e.name === 'HttpError' || e.code !== 'SHA_CONFLICT')) throw e; await new Promise((ok) => setTimeout(ok, 220)); continue; }
         }
         d.enabled = b.enabled === false || b.enabled === '0' ? false : true;
         delete d.secretHint;                       // bản cũ từng lưu 4 ký tự cuối của Secret — bỏ đi (repo public)
@@ -487,7 +487,7 @@ async function saveConfig(b = {}) {
             return summary();
         } catch (e) {
             last = e;
-            if (e.code !== 'SHA_CONFLICT') throw e;
+            if ((e.name === 'HttpError' || e.code !== 'SHA_CONFLICT')) throw e;
             await new Promise((ok) => setTimeout(ok, 220 * (attempt + 1)));
         }
     }
@@ -541,7 +541,7 @@ async function measure() {
             return stored;
         } catch (e) {
             last = e;
-            if (e.code !== 'SHA_CONFLICT') throw e;
+            if ((e.name === 'HttpError' || e.code !== 'SHA_CONFLICT')) throw e;
             await new Promise((ok) => setTimeout(ok, 220 * (attempt + 1)));
         }
     }

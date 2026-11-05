@@ -193,7 +193,7 @@ function createRouter() {
             json(res, 200, { ok: true, ...(out || {}) });
         } catch (e) {
             if (!e.status || e.status >= 500) console.error('[connect/vercel] media:', e);
-            json(res, e.status || (e.code === 'SHA_CONFLICT' ? 409 : 500), { error: e.message, code: e.code || undefined });
+            json(res, e.status || ((e.name !== 'HttpError' && e.code === 'SHA_CONFLICT') ? 409 : 500), { error: e.message, code: e.code || undefined });
         }
     }
 

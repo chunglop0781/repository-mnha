@@ -92,3 +92,6 @@ Web chính có thể dùng **nhiều Vercel deployment** làm "web dữ liệu" 
 - Web dữ liệu có trang **`/connect/key`** (chỉ admin mặc định): xem khoá sau khi nhập lại mật khẩu (sai 5 lần khoá 10 phút), nút sao chép, và mục **Tự kiểm tra khoá** (giải mã được khoá trong `v-s/index.json`, ký/xác minh phiếu tải lên đúng cơ chế thật).
 - Mỗi lần tải lên, web chính kiểm tra lần lượt cũ → mới: web sống **và đúng khoá** (`POST /api/node/ping`, ký bằng khoá riêng) mới được chọn. Sai khoá → bỏ qua, ghi vào danh sách kiểm tra và chuyển web kế tiếp.
 - Mỗi web nhận một **phiếu tải lên riêng**, ký bằng khoá kết nối của web đó; web dữ liệu từ chối (401) mọi phần/đoạn file có phiếu sai khoá, trình duyệt tự chuyển sang web kế.
+
+## GitHub bị chặn (abuse / rate limit) & API version
+Xem `GITHUB-RATELIMIT.md`.

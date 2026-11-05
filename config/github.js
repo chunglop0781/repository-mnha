@@ -20,12 +20,13 @@ if (!owner || !repo) {
 const octokit = new Octokit({
     auth: token || undefined,
     userAgent: 'repository-mnha/1.0.0',
-    request: { timeout: 20000 }
+    request: { timeout: 20000, fetch: require('../utils/githubErrors').octokitFetch(20000) }   // phiên bản API được ép trong hook (utils/githubErrors.js) — header ở đây không có tác dụng
 });
 
 // ★ Theo dõi GitHub sập/bảo trì: request lỗi → noteFailure, thành công → noteSuccess
 //   (xem utils/githubErrors.js + middleware/githubDownGuard.js)
 const githubHealth = require('../utils/githubErrors');
+githubHealth.attachRateLimitGuard(octokit);   // điều tốc + hạ nhiệt khi bị GitHub chặn (abuse) + ép X-GitHub-Api-Version mới (hết cảnh báo "POST /user/repos is deprecated")
 octokit.hook.error('request', async (error) => {
     githubHealth.noteFailure(error);
     throw error;
