@@ -1,6 +1,22 @@
 {
   "version": 2,
   "framework": null,
-  "functions": { "api/index.js": { "includeFiles": "{views,public,models}/**", "maxDuration": 60 } },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "{views,public,models}/**",
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/connect/usage-archive",
+      "schedule": "5 0 * * *"
+    }
+  ]
 }

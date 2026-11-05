@@ -59,6 +59,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Đếm lưu lượng trình duyệt ⇄ web (xấp xỉ) cho trang /connect — xem services/connect/usage.js
 app.use(require('./services/connect/usage').middleware());
+// Chốt ngày: gộp số đếm đã qua ở MongoDB vào GitHub rồi xoá ở MongoDB (Vercel Cron gọi mỗi ngày — xem vercel.json).
+// Không cần biến môi trường mới; muốn khoá lại thì đặt CRON_SECRET trên Vercel (Vercel tự gửi kèm Bearer).
+app.get('/api/connect/usage-archive', require('./services/connect/usage').archiveHandler);
 
 // Xem file Lưu trữ CÔNG KHAI (không đăng nhập, không session): /f?u=&d=&n= (trang xem), /f/d (xem thư mục đã chia sẻ), /f/key (khoá + địa chỉ GitHub raw để trình duyệt tự giải mã), /f/raw (dự phòng, chuyển sang web kết nối); file riêng tư → 404.
 const filesCtl = require('./controllers/files.controller');
