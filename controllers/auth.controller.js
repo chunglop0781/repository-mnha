@@ -9,8 +9,14 @@ const User = require('../models/User');
 const OTP = require('../models/OTP');
 const { OTP_TTL_MS } = OTP;
 const mail = require('../services/mailService');
+const loginThrottle = require('../services/loginThrottleService');
 
-const IS_DEV = process.env.NODE_ENV !== 'production';
+// ★ BẢO MẬT: chỉ bật dev khi NODE_ENV === 'development'. Trước đây `!== 'production'`: thiếu NODE_ENV là
+//   mã OTP bị hiện ngay trên trang xác minh (debugOtp) → ai cũng đăng ký/xác minh được email của người khác.
+const IS_DEV = process.env.NODE_ENV === 'development';
+const DUMMY_HASH = bcrypt.hashSync('dummy-password-for-timing-only', 10); // chống dò email bằng thời gian phản hồi
+const safeEqual = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
+const lockMessage = (sec) => `Bạn đã nhập sai 5/5 lần. Thiết bị này bị tạm khoá, vui lòng thử lại sau ${sec} giây.`;
 const RESEND_COOLDOWN_MS = 60 * 1000, MAX_ATTEMPTS = 5;
 const norm = (e) => String(e || '').trim().toLowerCase();
 const genOTP = () => String(crypto.randomInt(0, 1000000)).padStart(6, '0');
@@ -35,14 +41,27 @@ exports.login = async (req, res) => {
     const email = norm(req.body.email), password = String(req.body.password || '');
     const fail = (msg, code = 401) => res.status(code).render('auth/login', { title: 'Đăng nhập', error: msg, email, info: null, dataNode: isDataNode() });
     try {
+        // ★ Giới hạn 5 lần sai / (email + IP + thiết bị), khoá 1 phút — lưu ở Mongo
+        const device = loginThrottle.identify(req, email);
+        const gate = await loginThrottle.check(device);
+        if (gate.locked) { res.set('Retry-After', String(gate.seconds)); return fail(lockMessage(gate.seconds), 429); }
         const user = email ? await User.findOne({ email }).select('+password') : null;
-        const ok = user ? await bcrypt.compare(password, user.password) : false;
-        if (!user || !ok) return fail('Email hoặc mật khẩu không đúng.');
+        const ok = (await bcrypt.compare(password, user ? user.password : DUMMY_HASH)) && !!user;
+        if (!user || !ok) {
+            const f = await loginThrottle.recordFailure(device, { userId: user ? user._id : null });
+            if (f.locked) { res.set('Retry-After', String(f.seconds)); return fail(lockMessage(f.seconds), 429); }
+            return fail(`Email hoặc mật khẩu không đúng. Bạn còn ${f.remaining} lần thử.`);
+        }
+        await loginThrottle.clear(device);
         if (user.status === 'disabled') return fail('Tài khoản đã bị vô hiệu hoá.', 403);
         // Web dữ liệu: CHỈ admin mặc định (role=admin, userKey=null). Admin tổ chức / student / client bị từ chối.
         if (isDataNode() && !isDefaultAdmin(user)) {
             return fail('Web dữ liệu chỉ cho phép quản trị viên mặc định đăng nhập (role=admin, userKey=null).', 403);
         }
+        // ★ Chống SESSION FIXATION: cấp session id MỚI khi đăng nhập (giữ returnTo).
+        const returnTo = req.session.returnTo;
+        await new Promise((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
+        if (returnTo) req.session.returnTo = returnTo;
         req.session.user = sessionUser(user);
         // Lần đăng nhập đầu của admin mặc định: tự tạo khoá kết nối + ghi v-s/index.json (mã hoá).
         if (isDataNode() && isDefaultAdmin(user)) {
@@ -100,7 +119,10 @@ exports.verify = async (req, res) => {
         if (!doc) return fail('Mã đã hết hạn hoặc không tồn tại. Hãy đăng ký lại.');
         if (code.length !== 6) return fail('Vui lòng nhập đủ 6 chữ số OTP.');
         if (doc.attempts >= MAX_ATTEMPTS) { await OTP.deleteOne({ _id: doc._id }); return fail('Nhập sai quá nhiều lần. Hãy đăng ký lại.', 429); }
-        if (doc.code !== code) { doc.attempts += 1; await doc.save(); return fail(`Mã không đúng (còn ${MAX_ATTEMPTS - doc.attempts} lần thử).`); }
+        // ★ Tăng bộ đếm NGUYÊN TỬ trước khi so sánh (đọc → +1 → save cho phép thử song song vượt 5 lần)
+        const bumped = await OTP.findOneAndUpdate({ _id: doc._id }, { $inc: { attempts: 1 } }, { new: true });
+        if (!bumped || bumped.attempts > MAX_ATTEMPTS) { await OTP.deleteOne({ _id: doc._id }); return fail('Nhập sai quá nhiều lần. Hãy đăng ký lại.', 429); }
+        if (!safeEqual(doc.code, code)) return fail(`Mã không đúng (còn ${Math.max(0, MAX_ATTEMPTS - bumped.attempts)} lần thử).`);
         const p = doc.payload || {};
         if (!(await User.findOne({ email }))) {
             await User.create({ name: p.name, email, password: p.passwordHash, role: 'client', status: 'pending', userKey: null, connectedUserKeys: [] });
