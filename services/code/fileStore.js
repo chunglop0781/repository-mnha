@@ -9,6 +9,9 @@
 //     tự tạo repo kế (…-1, -2, …) và các phần sau ghi sang đó, nên một file nặng có thể trải qua nhiều repo THEO THỨ TỰ repo được tạo.
 //     Mỗi phần ghi lại repo đã chứa nó (`repo`) trong mnha-files.json; đọc thì gộp cây thư mục của mọi repo.
 //   • Mỗi request chỉ mang MỘT phần, không giữ trạng thái giữa các request:  init → PUT part × n → finish.
+//   • MÃ HOÁ NGAY TRONG TRÌNH DUYỆT: init trả khoá RIÊNG của file (+ salt) cho chủ file; trình duyệt mã hoá từng phần bằng WebCrypto (public/js/mnhaFiles.js encryptPart)
+//     rồi mới gửi. putPart KHÔNG mã hoá — chỉ kiểm tra cấu trúc MNHAENC1 (salt, kích thước, 1 khối), giải thử phần 0 để bắt sớm sai khoá, rồi ghi bản mã lên GitHub.
+//     Bản rõ không bao giờ đi qua mạng / web kết nối. Đường cũ (gửi bản rõ, máy chủ mã hoá) mặc định TẮT → 410; bật tạm bằng ALLOW_SERVER_ENCRYPT=1.
 //     Mã tải lên (uploadId) dẫn xuất từ (uid, thư mục, tên, kích thước, ngày sửa) nên tải lại đúng file đó sẽ LÀM TIẾP — bỏ qua các phần đã lên.
 //   • Tải về / xem: TRÌNH DUYỆT tự giải mã (public/js/mnhaFiles.js) — máy chủ chỉ trả khoá RIÊNG của file + địa chỉ GitHub raw của từng phần
 //     (release()), trình duyệt tải các phần mã hoá THẲNG từ GitHub rồi giải mã bằng WebCrypto: không tốn băng thông máy chủ.
@@ -89,6 +92,7 @@ function uploadIdFor(uid, segs, name, size, lastModified) {
 /** Salt dùng chung cho mọi phần của 1 lần tải lên (→ 1 khoá file). Không bí mật; khoá thật = HKDF(khoá chủ, salt) chỉ ra khỏi máy chủ qua release(). */
 const saltFor = (uid, uploadId) => mc.deriveSalt('files-salt|' + uid + '|' + uploadId);
 const partsCount = (size) => Math.max(1, Math.ceil(size / FILES.PART_BYTES));
+const ENC_OVERHEAD = mc.HEADER_LEN + 4 + 12 + 16;           // MNHAENC1 | ver | salt (25) + len u32 + iv + tag = 57 byte trên mỗi phần 1 khối
 
 // ---------------------------------------------------------------- sổ file (mnha-files.json)
 const pubCache = new Map();                       // trang thư mục công khai: uid|dir → { at, v } (giữ ngắn để đỡ gọi GitHub; mọi thay đổi sổ file xoá hết)
@@ -214,11 +218,20 @@ async function init(uid, b) {
     const ex = m.files[name];
     return {
         ok: true, name, kind: fileKind(name), size, uploadId: id, partBytes: FILES.PART_BYTES, n, have,
-        exists: !!(ex && ex.state !== 'uploading')
+        exists: !!(ex && ex.state !== 'uploading'),
+        // khoá RIÊNG của file này + salt ở header: để TRÌNH DUYỆT tự mã hoá (khoá chủ không rời máy chủ). Chỉ trả cho người đã qua kiểm quyền tải lên (cookie / phiếu).
+        key: mc.filesKey(uid, id).toString('base64'), salt: saltFor(uid, id).toString('base64')
     };
 }
 
-/** Bước 2: nhận 1 phần (≤ PART_BYTES): mã hoá rồi ghi thành _data/<mã>/NNNN.bin (repo đang dùng của nhóm repo). */
+/**
+ * Bước 2: nhận 1 phần ĐÃ MÃ HOÁ Ở TRÌNH DUYỆT (1 file MNHAENC1 gồm đúng 1 khối AES-256-GCM, AAD = số thứ tự phần) và ghi thành _data/<mã>/NNNN.bin
+ * (repo đang dùng của nhóm repo). Máy chủ KHÔNG mã hoá: chỉ kiểm tra cấu trúc rồi ghi nguyên bản mã.
+ *   • header đúng MNHAENC1 v1, salt đúng của lần tải lên này; độ dài khối khớp độ dài body (không thừa/thiếu byte);
+ *   • bản rõ ≤ PART_BYTES; phần không phải cuối phải ĐỦ PART_BYTES;
+ *   • phần 0 được giải thử bằng khoá của file → bắt sớm trình duyệt mã hoá sai khoá / sai AAD (các phần sau cùng khoá nên không cần giải thêm).
+ * Gửi bản rõ (trang cũ còn trong bộ nhớ đệm) → 410 trừ khi bật ALLOW_SERVER_ENCRYPT=1 (khi đó máy chủ mã hoá như trước).
+ */
 async function putPart(uid, q, body) {
     const segs = cleanDir(q.dir);
     const name = cleanName(q.name);
@@ -227,15 +240,38 @@ async function putPart(uid, q, body) {
     if (!Number.isInteger(i) || !Number.isInteger(n) || n < 1 || i < 0 || i >= n) throw bad('Số thứ tự phần không hợp lệ.');
     if (n > partsCount(FILES.MAX_FILE_BYTES)) throw bad('Quá nhiều phần.');
     if (!Buffer.isBuffer(body) || !body.length) throw bad('Phần dữ liệu rỗng.');
-    if (body.length > FILES.PART_BYTES) throw bad('Phần dữ liệu quá lớn.', 413);
-    if (i < n - 1 && body.length !== FILES.PART_BYTES) throw bad('Các phần trước phần cuối phải đủ ' + FILES.PART_BYTES + ' byte.');
-    const p = partPath(uid, segs, String(q.uploadId), i);
-    const salt = saltFor(uid, String(q.uploadId));                                           // chỉ nằm trong header cho đúng định dạng MNHAENC1 (không bí mật, không dùng để dẫn xuất khoá)
-    const data = mc.assemble(salt, [mc.encryptRecord(body, salt, i, mc.filesKey(uid, String(q.uploadId)))]);       // khoá riêng của file; AAD = số thứ tự phần i
+    const uploadId = String(q.uploadId);
+    const p = partPath(uid, segs, uploadId, i);
+    const salt = saltFor(uid, uploadId);
+    let data, plainLen;
+    if (mc.isEncrypted(body)) {
+        if (body.length > FILES.PART_BYTES + ENC_OVERHEAD) throw bad('Phần dữ liệu quá lớn.', 413);
+        if (body.length < ENC_OVERHEAD + 1) throw bad('Phần mã hoá bị cắt cụt.');
+        if (body[8] !== 1) throw bad('Phiên bản mã hoá không hỗ trợ.');
+        if (!body.subarray(9, mc.HEADER_LEN).equals(salt)) throw bad('Phần mã hoá không thuộc lần tải lên này (sai salt).', 403);
+        plainLen = body.readUInt32BE(mc.HEADER_LEN);
+        if (body.length !== ENC_OVERHEAD + plainLen) throw bad('Phần mã hoá sai độ dài (cắt cụt hoặc thừa dữ liệu).');
+        if (plainLen > FILES.PART_BYTES) throw bad('Phần dữ liệu quá lớn.', 413);
+        if (i < n - 1 && plainLen !== FILES.PART_BYTES) throw bad('Các phần trước phần cuối phải đủ ' + FILES.PART_BYTES + ' byte.');
+        if (i === 0) {
+            try { mc.decryptBuffer(body, 0, mc.filesKey(uid, uploadId)); }
+            catch (_) { throw bad('Phần đầu không giải mã được bằng khoá của file — trình duyệt mã hoá sai khoá/định dạng. Hãy tải lại trang rồi thử lại.', 422); }
+        }
+        data = body;
+    } else {
+        // đường cũ: bản rõ → máy chủ mã hoá (mặc định tắt)
+        if (process.env.ALLOW_SERVER_ENCRYPT !== '1') {
+            throw bad('Trang tải lên đã cũ (gửi file chưa mã hoá). Hãy tải lại trang (Ctrl+F5) để trình duyệt mã hoá file trước khi gửi.', 410);
+        }
+        if (body.length > FILES.PART_BYTES) throw bad('Phần dữ liệu quá lớn.', 413);
+        if (i < n - 1 && body.length !== FILES.PART_BYTES) throw bad('Các phần trước phần cuối phải đủ ' + FILES.PART_BYTES + ' byte.');
+        plainLen = body.length;
+        data = mc.assemble(salt, [mc.encryptRecord(body, salt, i, mc.filesKey(uid, uploadId))]);
+    }
     await gh.writeBinaryFileBig(p, data, `files: ${name} (phần ${i + 1}/${n})`);
     let repo = null;
     try { const r = await gh.repoFor(p); repo = r && r.repo ? r.repo : null; } catch (_) { /* không biết repo → bỏ qua */ }
-    return { ok: true, i, size: body.length, stored: data.length, repo };
+    return { ok: true, i, size: plainLen, stored: data.length, repo };
 }
 
 /** Bước 3: kiểm tra đủ phần rồi ghi mục vào sổ file (thay file cùng tên nếu có, và dọn các phần của bản cũ). */

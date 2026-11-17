@@ -3,6 +3,8 @@ process.env.SESSION_ENC_KEY = 'k'.repeat(40);
 delete process.env.VERCEL; delete process.env.DATA_NODE;
 const R = require('path').join(__dirname, '..') + '/';
 const assert = require('assert'), crypto = require('crypto'), fs = require('fs');
+const { enc } = require('./_enc');
+const putBodies = [];       // mọi thân PUT …/part mà trình duyệt gửi đi
 const files = new Map();
 const fakeGh = {
   isConfigured: true, owner: 'o', repo: 'r', branch: 'main',
@@ -46,7 +48,8 @@ function res(code, body) { return { ok: code < 400, status: code, json: async ()
 global.fetch = async (url, opt) => {
   calls.push((opt.method) + ' ' + url.split('?')[0]);
   const u = new URL(url, 'http://localhost'); const q = Object.fromEntries(u.searchParams);
-  const rq = { user: { _id: 'u9', status: 'approved', role: 'student' }, headers: { host: 'localhost', accept: 'application/json' }, hostname: 'localhost', query: q, method: opt.method, body: opt.body && typeof opt.body === 'string' ? JSON.parse(opt.body) : (opt.body ? Buffer.from(await opt.body.arrayBuffer()) : {}) };
+  const rq = { user: { _id: 'u9', status: 'approved', role: 'student' }, headers: { host: 'localhost', accept: 'application/json' }, hostname: 'localhost', query: q, method: opt.method, body: opt.body && typeof opt.body === 'string' ? JSON.parse(opt.body) : (opt.body ? Buffer.from(opt.body instanceof Uint8Array ? opt.body : await opt.body.arrayBuffer()) : {}) };
+  if (opt.method === 'PUT' && Buffer.isBuffer(rq.body)) putBodies.push(rq.body);
   if (/node-a/.test(url)) return res(500, { error: 'node-a hỏng' });
   if (u.origin === 'https://raw.githubusercontent.com') {
     calls.push('RAW');
@@ -76,6 +79,9 @@ const mkFile = (name, buf) => ({ name, size: buf.length, lastModified: 123, slic
   assert(global.reloaded, 'tải xong thì tải lại trang');
   assert(calls.includes('POST /code/files/upload/init'));
   assert.strictEqual(calls.filter((c) => c === 'PUT /code/files/upload/part').length, 3, 'chia 3 phần');
+  // TRÌNH DUYỆT đã mã hoá: mọi phần gửi đi là MNHAENC1, không chứa bản rõ
+  assert.strictEqual(putBodies.length, 3);
+  putBodies.forEach((b, k) => { assert.strictEqual(b.subarray(0, 8).toString('latin1'), 'MNHAENC1', 'phần ' + k + ' đã mã hoá'); assert(!b.includes(big.subarray(k * FILES.PART_BYTES, k * FILES.PART_BYTES + 64)), 'không lộ bản rõ'); });
   assert.strictEqual(calls.filter((c) => c === 'POST /code/files/upload/finish').length, 1);
   const stored = [...files.keys()].filter((k) => k.includes('/_data/') && k.endsWith('.bin')).sort();
   assert.deepStrictEqual(stored.map((k) => k.slice(-8)), ['0001.bin', '0002.bin', '0003.bin']);
@@ -107,7 +113,7 @@ const mkFile = (name, buf) => ({ name, size: buf.length, lastModified: 123, slic
   { const up = await (async () => { const rq = (b) => ({ user: { _id: 'u9', status: 'approved', role: 'student' }, headers: { host: 'localhost' }, hostname: 'localhost', query: {}, body: b, method: 'POST' });
       const o = { code: 200, body: null, status(c) { this.code = c; return this; }, set() { return this; }, json(x) { this.body = x; return this; } };
       await ctl.uploadInit(rq({ dir: 'tl', name: 'Ghi chú.txt', size: t0.length, lastModified: 1 }), o); const ini = o.body;
-      const o2 = { ...o, body: null }; await ctl.uploadPart({ ...rq({}), method: 'PUT', query: { dir: 'tl', name: ini.name, uploadId: ini.uploadId, i: 0, n: 1 }, body: t0 }, o2);
+      const o2 = { ...o, body: null }; await ctl.uploadPart({ ...rq({}), method: 'PUT', query: { dir: 'tl', name: ini.name, uploadId: ini.uploadId, i: 0, n: 1 }, body: await enc(ini, t0, 0) }, o2);
       const o3 = { ...o, body: null }; await ctl.uploadFinish(rq({ dir: 'tl', name: ini.name, uploadId: ini.uploadId, size: t0.length, lastModified: 1 }), o3); return o3.body; })();
     assert.strictEqual(up.ok, true); }
   await edBtn.onclick();
@@ -121,7 +127,8 @@ const mkFile = (name, buf) => ({ name, size: buf.length, lastModified: 123, slic
   await els.edSave.onclick();
   for (let i = 0; i < 60 && !global.reloaded; i++) await flush();
   assert(global.reloaded, 'lưu xong thì tải lại trang');
-  assert(calls.includes('POST /code/files/upload/init') && calls.includes('PUT /code/files/upload/part') && calls.includes('POST /code/files/upload/finish'), 'lưu = đi qua đường tải lên (mã hoá lại ở máy chủ)');
+  assert(calls.includes('POST /code/files/upload/init') && calls.includes('PUT /code/files/upload/part') && calls.includes('POST /code/files/upload/finish'), 'lưu = đi qua đường tải lên (trình duyệt mã hoá lại)');
+  assert(putBodies.length >= 4 && !putBodies[putBodies.length - 1].includes(Buffer.from('Nội dung đã sửa', 'utf8')), 'bản sửa .txt cũng gửi dạng mã hoá');
   assert.strictEqual(els.edMsg.textContent, 'Đã lưu ✓');
   // đọc lại bằng chính trình duyệt: ra nội dung mới
   const reread = await ctl.open({ user: { _id: 'u9', status: 'approved', role: 'student' }, headers: {}, body: { dir: '', name: 'Ghi chú.txt' }, method: 'POST' }, { set() { return this; }, json(x) { this.b = x; return this; }, status() { return this; } });

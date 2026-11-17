@@ -1,6 +1,7 @@
 // public/js/fileStorage.js — trang "Lưu trữ file" (/code/files): tải lên (chia phần ≤ 3.5MB, làm tiếp được), tải về, đổi tên, xoá.
-//   Tải lên: POST /code/files/upload/init (web chính chọn web kết nối + ký phiếu) → gửi từng PHẦN thẳng tới web kết nối
-//   (PUT …/files/part) → POST …/files/finish. Web lỗi → tự chuyển web kế. Xem services/code/fileStore.js.
+//   Tải lên: POST /code/files/upload/init (web chính chọn web kết nối + ký phiếu) → init ở web kết nối trả khoá RIÊNG của file →
+//   TRÌNH DUYỆT MÃ HOÁ từng PHẦN bằng WebCrypto (AES-256-GCM, MnhaFiles.encryptPart) rồi gửi bản mã thẳng tới web kết nối
+//   (PUT …/files/part) → POST …/files/finish. Bản rõ không rời máy; web kết nối chỉ kiểm tra + ghi lên GitHub. Web lỗi → tự chuyển web kế. Xem services/code/fileStore.js.
 (function () {
     'use strict';
     var root = document.getElementById('fileStorage'); if (!root) return;
@@ -236,23 +237,42 @@
         };
     }
 
+    // Khoá riêng của file (init trả về) → CryptoKey chỉ dùng để mã hoá, không xuất được. Không có WebCrypto / máy chủ cũ không trả khoá → báo lỗi rõ (KHÔNG gửi bản rõ).
+    function encryptor(init) {
+        var M = window.MnhaFiles;
+        if (!M || !M.supported() || typeof M.encryptPart !== 'function') {
+            var e = new Error('Trình duyệt không có WebCrypto (cần mở bằng https:// hoặc localhost) nên không mã hoá được file trước khi gửi.'); e.status = 400; return Promise.reject(e);
+        }
+        if (!init || !init.key || !init.salt) {
+            var e2 = new Error('Máy chủ nhận file chưa hỗ trợ mã hoá tại trình duyệt (thiếu khoá). Hãy cập nhật web kết nối cùng phiên bản rồi thử lại.'); e2.status = 400; return Promise.reject(e2);
+        }
+        return M.importEncryptKey(init.key).then(function (key) { return { key: key, salt: M.b64ToBytes(init.salt) }; });
+    }
+
     function sendParts(file, init, urls, token, label, onProgress) {
         var n = init.n, have = {}, i;
         (init.have || []).forEach(function (x) { have[x] = true; });
-        var chain = Promise.resolve(), done = Object.keys(have).length;
-        function step(i) {
-            return function () {
-                if (have[i]) return;
-                onProgress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n + (label ? ' — web ' + label : ''), done / n);
-                var q = { dir: dir, name: init.name, uploadId: init.uploadId, i: i, n: n };
-                if (token) q.token = token;
-                var body = file.slice(i * init.partBytes, (i + 1) * init.partBytes);
-                return retry(function () { return request('PUT', urls.part + '?' + qs(q), body, true); }, 'phần ' + (i + 1) + '/' + n)
-                    .then(function (r) { done++; if (r && r.repo) onProgress('Phần ' + (i + 1) + '/' + n + ' → repo ' + r.repo, done / n); });
-            };
-        }
-        for (i = 0; i < n; i++) chain = chain.then(step(i));
-        return chain.then(function () {
+        var done = Object.keys(have).length;
+        return encryptor(init).then(function (enc) {
+            var chain = Promise.resolve();
+            function step(i) {
+                return function () {
+                    if (have[i]) return;
+                    onProgress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n + (label ? ' — web ' + label : ''), done / n);
+                    var q = { dir: dir, name: init.name, uploadId: init.uploadId, i: i, n: n };
+                    if (token) q.token = token;
+                    // mã hoá 1 lần ở trình duyệt; gửi lại khi lỗi mạng thì dùng đúng bản mã đó
+                    return file.slice(i * init.partBytes, (i + 1) * init.partBytes).arrayBuffer()
+                        .then(function (ab) { return window.MnhaFiles.encryptPart(enc.key, enc.salt, new Uint8Array(ab), i); })
+                        .then(function (body) {
+                            return retry(function () { return request('PUT', urls.part + '?' + qs(q), body, true); }, 'phần ' + (i + 1) + '/' + n);
+                        })
+                        .then(function (r) { done++; if (r && r.repo) onProgress('Phần ' + (i + 1) + '/' + n + ' → repo ' + r.repo, done / n); });
+                };
+            }
+            for (i = 0; i < n; i++) chain = chain.then(step(i));
+            return chain;
+        }).then(function () {
             onProgress('Đang ghi vào danh sách file…', 0.98);
             var b = { dir: dir, name: init.name, uploadId: init.uploadId, size: file.size, lastModified: file.lastModified };
             if (token) b.token = token;

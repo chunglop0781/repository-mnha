@@ -1,6 +1,7 @@
 // controllers/files.controller.js — "Lưu trữ file" (/code/files): file Office (Word, Excel, PowerPoint…), PDF, ảnh. Xem services/code/fileStore.js
 //   GET  /code/files?dir=                      thư mục & file của tôi
-//   POST /code/files/upload/init               kiểm tra file, chọn web kết nối (phiếu tải lên) — như /code/html/upload/init
+//   POST /code/files/upload/init               kiểm tra file, chọn web kết nối (phiếu tải lên) — như /code/html/upload/init. init (ở web nhận) trả khoá RIÊNG của file + salt: TRÌNH DUYỆT mã hoá từng phần rồi mới gửi
+//                                              (PUT …/part nhận bản MÃ HOÁ; máy chủ chỉ kiểm tra cấu trúc rồi ghi lên GitHub — services/code/fileStore.js putPart)
 //   POST /code/files/upload/local/init, PUT /code/files/upload/part, POST /code/files/upload/finish   (localhost / web dữ liệu)
 //        trên web chính: các phần đi THẲNG tới web kết nối (/api/node/files/* trong connect/vercel/index.js)
 //   POST /code/files/open                      TRÌNH DUYỆT tự giải mã: trả khoá riêng của file + địa chỉ GitHub raw từng phần (≈ vài KB) — dữ liệu KHÔNG qua máy chủ

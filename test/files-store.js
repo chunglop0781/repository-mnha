@@ -23,13 +23,15 @@ require.cache[gp] = { id: gp, filename: gp, loaded: true, exports: fakeGh };
 const fs = require(R + 'services/code/fileStore');
 const { FILES } = require(R + 'config/codeConfig');
 const PART = FILES.PART_BYTES;
+const { enc } = require('./_enc');
+const mc = require(R + 'services/code/mediaCrypto');
 
 async function upload(uid, dir, name, buf, lastModified, skipParts = []) {
   const init = await fs.init(uid, { dir, name, size: buf.length, lastModified });
   const n = init.n;
   for (let i = 0; i < n; i++) {
     if (init.have.includes(i) || skipParts.includes(i)) continue;
-    await fs.putPart(uid, { dir, name: init.name, uploadId: init.uploadId, i, n }, buf.subarray(i * PART, (i + 1) * PART));
+    await fs.putPart(uid, { dir, name: init.name, uploadId: init.uploadId, i, n }, await enc(init, buf.subarray(i * PART, (i + 1) * PART), i));      // trình duyệt mã hoá rồi mới gửi
   }
   return { init, n };
 }
@@ -81,16 +83,55 @@ async function download(uid, dir, name) {
   await assert.rejects(fs.finish('u1', { dir: '', name: 'Dang do.pdf', uploadId: fs.uploadIdFor('u1', [], 'Dang do.pdf', big2.length, 333), size: big2.length, lastModified: 333 }), /Thiếu phần 3\/3/);
   const re = await fs.init('u1', { dir: '', name: 'Dang do.pdf', size: big2.length, lastModified: 333 });
   assert.deepStrictEqual(re.have, [0, 1]);
-  await fs.putPart('u1', { dir: '', name: 'Dang do.pdf', uploadId: re.uploadId, i: 2, n: 3 }, big2.subarray(2 * PART));
+  await fs.putPart('u1', { dir: '', name: 'Dang do.pdf', uploadId: re.uploadId, i: 2, n: 3 }, await enc(re, big2.subarray(2 * PART), 2));
   await fs.finish('u1', { dir: '', name: 'Dang do.pdf', uploadId: re.uploadId, size: big2.length, lastModified: 333 });
   assert(big2.equals(await download('u1', '', 'Dang do.pdf')));
 
   // 5) chống gian lận: sai mã tải lên / sai kích thước / phần sai cỡ / phần quá lớn
   await assert.rejects(fs.finish('u1', { dir: '', name: 'x.pdf', uploadId: 'a'.repeat(32), size: 10, lastModified: 1 }), /không khớp/);
   await assert.rejects(fs.putPart('u1', { dir: '', name: 'x.pdf', uploadId: 'zz', i: 0, n: 1 }, Buffer.from('a')), /Mã tải lên/);
-  await assert.rejects(fs.putPart('u1', { dir: '', name: 'x.pdf', uploadId: 'a'.repeat(32), i: 0, n: 2 }, Buffer.alloc(10)), /đủ/);
-  await assert.rejects(fs.putPart('u1', { dir: '', name: 'x.pdf', uploadId: 'a'.repeat(32), i: 0, n: 1 }, Buffer.alloc(PART + 1)), /quá lớn/);
+  const fk = (uid, id) => ({ key: mc.filesKey(uid, id).toString('base64'), salt: fs.saltFor(uid, id).toString('base64') });
+  const IDA = 'a'.repeat(32), KA = fk('u1', IDA), putA = (i, n, body) => fs.putPart('u1', { dir: '', name: 'x.pdf', uploadId: IDA, i, n }, body);
+  await assert.rejects(putA(0, 2, await enc(KA, Buffer.alloc(10), 0)), /đủ/);                     // phần không phải cuối phải đủ cỡ
+  await assert.rejects(putA(0, 1, await enc(KA, Buffer.alloc(PART + 1), 0)), /quá lớn/);          // bản rõ > PART_BYTES
   await assert.rejects(fs.putPart('u1', { dir: '', name: 'x.exe', uploadId: 'a'.repeat(32), i: 0, n: 1 }, Buffer.alloc(5)), /không được nhận/);
+
+  // 5b) MÃ HOÁ Ở TRÌNH DUYỆT: init trao khoá riêng; server KHÔNG mã hoá lại (ghi nguyên bản mã), chỉ kiểm tra cấu trúc
+  {
+    const plain = crypto.randomBytes(4321), ii = await fs.init('u1', { dir: 'enc', name: 'bm.pdf', size: plain.length, lastModified: 77 });
+    assert.strictEqual(ii.key, mc.filesKey('u1', ii.uploadId).toString('base64'), 'init trả khoá riêng của file');
+    assert.strictEqual(ii.salt, fs.saltFor('u1', ii.uploadId).toString('base64'));
+    const body = await enc(ii, plain, 0), q0 = { dir: 'enc', name: 'bm.pdf', uploadId: ii.uploadId, i: 0, n: 1 };
+    assert.strictEqual(body.subarray(0, 8).toString('latin1'), 'MNHAENC1');
+    assert(!body.includes(plain.subarray(0, 64)), 'bản gửi đi không chứa bản rõ');
+    const r = await fs.putPart('u1', q0, body);
+    assert.strictEqual(r.size, plain.length); assert.strictEqual(r.stored, body.length);
+    assert(files.get(fs.partPath('u1', ['enc'], ii.uploadId, 0)).equals(body), 'máy chủ ghi NGUYÊN bản mã của trình duyệt');
+    await fs.finish('u1', { dir: 'enc', name: 'bm.pdf', uploadId: ii.uploadId, size: plain.length, lastModified: 77 });
+    assert(plain.equals(await download('u1', 'enc', 'bm.pdf')), 'giải mã lại đúng file gốc');
+    // phần hỏng / sai bị từ chối
+    const err = async (b, re, code, qq) => { const e = await fs.putPart('u1', qq || q0, b).then(() => null, (x) => x); assert(e && re.test(e.message), 'cần lỗi ' + re + ' nhưng: ' + (e && e.message)); if (code) assert.strictEqual(e.status, code); };
+    await err(await enc(ii, plain, 0, { key: crypto.randomBytes(32).toString('base64') }), /không giải mã được/, 422);   // sai khoá
+    await err(await enc(ii, plain, 1), /không giải mã được/, 422);                                                         // sai AAD (số thứ tự)
+    await err(await enc(ii, plain, 0, { salt: crypto.randomBytes(16).toString('base64') }), /sai salt/, 403);              // salt của lần tải khác
+    await err(body.subarray(0, body.length - 5), /sai độ dài/, 400);                                                       // cắt cụt
+    await err(Buffer.concat([body, Buffer.from([0])]), /sai độ dài/, 400);                                                 // thừa byte
+    await err(body.subarray(0, 40), /cắt cụt/, 400);
+    await err(Buffer.concat([body.subarray(0, 8), Buffer.from([9]), body.subarray(9)]), /Phiên bản/, 400);
+    await err(Buffer.concat([Buffer.from('MNHAENC1'), Buffer.alloc(80, 7)]), /./, null);                                   // rác có đúng header
+    // bản rõ (trang cũ / client cũ) → 410, KHÔNG ghi gì lên GitHub
+    const n0 = files.size;
+    await err(plain, /Trang tải lên đã cũ/, 410);
+    assert.strictEqual(files.size, n0, 'không ghi gì khi bị từ chối');
+    // cờ ALLOW_SERVER_ENCRYPT=1: đường cũ (máy chủ mã hoá) hoạt động lại, vẫn giải mã được
+    process.env.ALLOW_SERVER_ENCRYPT = '1';
+    const old = Buffer.from('file cũ gửi bản rõ'), io = await fs.init('u1', { dir: 'enc', name: 'cu.pdf', size: old.length, lastModified: 78 });
+    await fs.putPart('u1', { dir: 'enc', name: 'cu.pdf', uploadId: io.uploadId, i: 0, n: 1 }, old);
+    await fs.finish('u1', { dir: 'enc', name: 'cu.pdf', uploadId: io.uploadId, size: old.length, lastModified: 78 });
+    assert(old.equals(await download('u1', 'enc', 'cu.pdf')));
+    delete process.env.ALLOW_SERVER_ENCRYPT;
+    await fs.removeFolder('u1', 'enc');          // dọn để không ảnh hưởng các kiểm tra danh sách thư mục phía sau
+  }
 
   // 6) ghi đè cùng tên: bản cũ bị dọn
   const before = [...files.keys()].filter((k) => k.includes('/_data/')).length;

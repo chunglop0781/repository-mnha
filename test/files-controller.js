@@ -4,6 +4,7 @@ delete process.env.VERCEL; delete process.env.DATA_NODE;
 const R = require('path').join(__dirname, '..') + '/';
 const assert = require('assert');
 const crypto = require('crypto');
+const { enc } = require('./_enc');
 const { EventEmitter } = require('events');
 const files = new Map();
 const fakeGh = {
@@ -45,7 +46,7 @@ const req = (o = {}) => ({ user: { _id: 'u9', status: 'approved', role: 'student
   assert.strictEqual(r.code, 400); assert(/không được nhận/.test(r.body.error));
   // gửi từng phần
   for (let i = 0; i < init.n; i++) {
-    r = mkRes(); await ctl.uploadPart(req({ method: 'PUT', query: { dir: 'bao-cao', name: init.name, uploadId: init.uploadId, i, n: init.n }, body: data.subarray(i * init.partBytes, (i + 1) * init.partBytes) }), r);
+    r = mkRes(); await ctl.uploadPart(req({ method: 'PUT', query: { dir: 'bao-cao', name: init.name, uploadId: init.uploadId, i, n: init.n }, body: await enc(init, data.subarray(i * init.partBytes, (i + 1) * init.partBytes), i) }), r);
     assert.strictEqual(r.code, 200, JSON.stringify(r.body));
   }
   r = mkRes(); await ctl.uploadFinish(req({ body: { dir: 'bao-cao', name: init.name, uploadId: init.uploadId, size: data.length, lastModified: lm } }), r);
@@ -80,7 +81,7 @@ const req = (o = {}) => ({ user: { _id: 'u9', status: 'approved', role: 'student
   const img = crypto.randomBytes(3000), pdf = crypto.randomBytes(FILES.PART_BYTES + 10), docx = crypto.randomBytes(900);
   const putFile = async (name, buf, lm2) => {
     let rr = mkRes(); await ctl.uploadInit(req({ body: { dir: 'cong-khai', name, size: buf.length, lastModified: lm2 } }), rr); const ini = rr.body;
-    for (let i = 0; i < ini.n; i++) { rr = mkRes(); await ctl.uploadPart(req({ method: 'PUT', query: { dir: 'cong-khai', name: ini.name, uploadId: ini.uploadId, i, n: ini.n }, body: buf.subarray(i * ini.partBytes, (i + 1) * ini.partBytes) }), rr); }
+    for (let i = 0; i < ini.n; i++) { rr = mkRes(); await ctl.uploadPart(req({ method: 'PUT', query: { dir: 'cong-khai', name: ini.name, uploadId: ini.uploadId, i, n: ini.n }, body: await enc(ini, buf.subarray(i * ini.partBytes, (i + 1) * ini.partBytes), i) }), rr); }
     rr = mkRes(); await ctl.uploadFinish(req({ body: { dir: 'cong-khai', name: ini.name, uploadId: ini.uploadId, size: buf.length, lastModified: lm2 } }), rr);
   };
   await putFile('anh.png', img, 1); await putFile('tai lieu.pdf', pdf, 2); await putFile('bien ban.docx', docx, 3);
@@ -167,7 +168,7 @@ const req = (o = {}) => ({ user: { _id: 'u9', status: 'approved', role: 'student
   // xem thư mục trên mạng = duyệt cả cây: thư mục con + file, có đường dẫn lên (không quá thư mục chia sẻ), breadcrumb
   const nest = async (d, name, buf, lm2) => {
     let rr = mkRes(); await ctl.uploadInit(req({ body: { dir: d, name, size: buf.length, lastModified: lm2 } }), rr); const ini = rr.body;
-    rr = mkRes(); await ctl.uploadPart(req({ method: 'PUT', query: { dir: d, name: ini.name, uploadId: ini.uploadId, i: 0, n: 1 }, body: buf }), rr);
+    rr = mkRes(); await ctl.uploadPart(req({ method: 'PUT', query: { dir: d, name: ini.name, uploadId: ini.uploadId, i: 0, n: 1 }, body: await enc(ini, buf, 0) }), rr);
     rr = mkRes(); await ctl.uploadFinish(req({ body: { dir: d, name: ini.name, uploadId: ini.uploadId, size: buf.length, lastModified: lm2 } }), rr);
     rr = mkRes(); await ctl.visibility(req({ body: { dir: d, name, public: true } }), rr);
   };

@@ -10,7 +10,7 @@ block content
             i(data-lucide="arrow-left", class="w-4 h-4")
             | Menu chính
         h1(class="mt-3 text-2xl font-bold text-gray-900") Lưu trữ file
-        p(class="mt-1 text-sm text-gray-500") Lưu tài liệu Word, Excel, PowerPoint, PDF và ảnh. File được mã hoá; file nặng tự chia nhỏ rồi lưu lần lượt vào các repo theo thứ tự repo được tạo. Khi tải về, trình duyệt của bạn tự giải mã — không qua máy chủ.
+        p(class="mt-1 text-sm text-gray-500") Lưu tài liệu Word, Excel, PowerPoint, PDF và ảnh. File được mã hoá ngay trong trình duyệt của bạn trước khi tải lên; file nặng tự chia nhỏ rồi lưu lần lượt vào các repo theo thứ tự repo được tạo. Khi tải về, trình duyệt của bạn tự giải mã — không qua máy chủ.
         nav(class="mt-2 text-sm text-gray-600 flex flex-wrap items-center gap-1")
             a(href=base, class="text-indigo-600 hover:underline") codes/files
             each p, i in parts
@@ -97,7 +97,7 @@ block content
                         input(type="file", id="upInput", multiple, class="hidden", accept=accept)
             ul(class="mt-2 text-xs text-gray-500 list-disc pl-5 space-y-1")
                 li Nhận: Word (#{exts.word.join(", ")}), Excel (#{exts.excel.join(", ")}), PowerPoint (#{exts.powerpoint.join(", ")}), PDF, văn bản (.txt — xem và sửa được ngay trên web), ảnh (#{exts.image.join(", ")}) và một số file Office khác (#{exts.office.join(", ")}).
-                li Tối đa #{fmt(limits.maxFile)} mỗi file. File được cắt thành các phần #{fmt(limits.part)}, mã hoá từng phần; đứt giữa chừng thì chọn lại đúng file đó để làm tiếp.
+                li Tối đa #{fmt(limits.maxFile)} mỗi file. File được cắt thành các phần #{fmt(limits.part)}, trình duyệt mã hoá từng phần rồi mới gửi (bản rõ không rời máy bạn); đứt giữa chừng thì chọn lại đúng file đó để làm tiếp.
                 li Các phần ghi vào repo đang dùng; repo đầy thì tự tạo repo kế tiếp và ghi tiếp theo thứ tự.
             div(id="upList", class="mt-3 grid gap-2")
     //- Xem / sửa file .txt ngay trên web (giải mã trong trình duyệt; lưu = mã hoá lại và ghi đè cùng tên)

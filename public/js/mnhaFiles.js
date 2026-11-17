@@ -4,8 +4,11 @@
 //   2) tải TỪNG PHẦN đã mã hoá THẲNG từ GitHub raw (nhiều phần cùng lúc), không qua máy chủ
 //   3) giải mã bằng WebCrypto: mỗi phần = "MNHAENC1" | ver | salt | len | iv | tag | ciphertext, AES-256-GCM, AAD = "MNHA" + SỐ THỨ TỰ PHẦN
 //      (GitHub/ai đó đảo hoặc đổi chỗ phần → xác thực thất bại, không ra file sai). Khoá chỉ nằm trong RAM của trang (extractable:false).
+//   MÃ HOÁ KHI TẢI LÊN cũng ở đây: encryptPart(key, salt, u8, index) → 1 phần MNHAENC1 (cùng định dạng/AAD như trên). Trình duyệt mã hoá TRƯỚC khi gửi, nên bản rõ không bao giờ rời máy người dùng;
+//   máy chủ / web kết nối chỉ nhận bản mã hoá rồi ghi lên GitHub (public/js/fileStorage.js, services/code/fileStore.js putPart).
 //   Khoá chủ KHÔNG BAO GIỜ tới đây — chỉ khoá riêng của file này. Lỗi tải thẳng (repo riêng tư, mạng, thiếu WebCrypto) mang `code` để nơi gọi quay về đường qua máy chủ.
 //   API:  MnhaFiles.supported() · MnhaFiles.toBlob(info, { onProgress(done, total), concurrency }) → Blob · MnhaFiles.save(blob, name) · MnhaFiles.decryptPart(key, u8, index)
+//         MnhaFiles.importEncryptKey(b64) → CryptoKey · MnhaFiles.encryptPart(key, saltU8, u8, index) → Promise<Uint8Array>
 (function (root) {
     'use strict';
     var MAGIC = [0x4d, 0x4e, 0x48, 0x41, 0x45, 0x4e, 0x43, 0x31];      // "MNHAENC1"
@@ -20,9 +23,33 @@
     function aadOf(index) { var a = new Uint8Array(8); a[0] = 0x4d; a[1] = 0x4e; a[2] = 0x48; a[3] = 0x41; a[4] = index >>> 24; a[5] = index >>> 16; a[6] = index >>> 8; a[7] = index; return a; }
     function isEncrypted(u) { if (!u || u.length < HEADER_LEN) return false; for (var i = 0; i < 8; i++) if (u[i] !== MAGIC[i]) return false; return true; }
 
-    function importKey(b64) {
+    function importKeyFor(b64, usages) {
         var kb = b64ToBytes(b64);
-        return subtle().importKey('raw', kb, 'AES-GCM', false, ['decrypt']).then(function (k) { kb.fill(0); return k; }, function (e) { kb.fill(0); throw e; });
+        return subtle().importKey('raw', kb, 'AES-GCM', false, usages).then(function (k) { kb.fill(0); return k; }, function (e) { kb.fill(0); throw e; });
+    }
+    function importKey(b64) { return importKeyFor(b64, ['decrypt']); }
+    function importEncryptKey(b64) { return importKeyFor(b64, ['encrypt']); }
+    function putU32(u, o, n) { u[o] = n >>> 24; u[o + 1] = n >>> 16; u[o + 2] = n >>> 8; u[o + 3] = n; }
+
+    /**
+     * MÃ HOÁ 1 phần (bản rõ `u8`) ngay trong trình duyệt → file MNHAENC1 gồm đúng 1 khối:
+     *   "MNHAENC1"(8) | ver=1 (1) | salt (16) | độ-dài-ct u32 BE | iv (12) | tag (16) | ciphertext        — AES-256-GCM, AAD = "MNHA" + số thứ tự phần.
+     * WebCrypto trả "bản mã ‖ thẻ xác thực" nên tách thẻ ra đặt TRƯỚC bản mã cho đúng định dạng của hệ thống.
+     */
+    async function encryptPart(key, salt, u8, index) {
+        if (!salt || salt.length !== 16) throw fail('Salt phải là 16 byte.', 'BAD_ARG');
+        if (!u8 || !u8.length) throw fail('Phần dữ liệu rỗng.', 'BAD_ARG');
+        var iv = g.crypto.getRandomValues(new Uint8Array(12)), out, ct;
+        try { ct = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv: iv, additionalData: aadOf(index), tagLength: 128 }, key, u8)); }
+        catch (e) { throw fail('Không mã hoá được phần ' + (index + 1) + ': ' + (e && e.message || e), 'NO_CRYPTO'); }
+        var len = ct.length - 16;
+        out = new Uint8Array(HEADER_LEN + 32 + len);
+        out.set(MAGIC, 0); out[8] = 1; out.set(salt, 9);
+        putU32(out, HEADER_LEN, len);
+        out.set(iv, HEADER_LEN + 4);
+        out.set(ct.subarray(len), HEADER_LEN + 16);        // thẻ xác thực
+        out.set(ct.subarray(0, len), HEADER_LEN + 32);     // bản mã
+        return out;
     }
 
     /** 1 phần (file MNHAENC1 chứa 1 hoặc vài khối) → Uint8Array bản rõ. index = số thứ tự phần (AAD của khối đầu). */
@@ -87,7 +114,7 @@
         setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 4000);
     }
 
-    var api = { supported: supported, readAll: readAll, toBlob: toBlob, save: save, decryptPart: decryptPart, importKey: importKey };
+    var api = { supported: supported, readAll: readAll, toBlob: toBlob, save: save, decryptPart: decryptPart, importKey: importKey, importEncryptKey: importEncryptKey, encryptPart: encryptPart, b64ToBytes: b64ToBytes };
     root.MnhaFiles = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : this);
