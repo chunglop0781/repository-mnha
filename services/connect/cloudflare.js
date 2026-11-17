@@ -195,7 +195,10 @@ async function request(method, c, key, { body = null, query = null, contentType 
 }
 
 /** Ký URL GET tạm thời (bucket private). */
-function presignGet(c, key, expires = 6 * 60 * 60) {
+function presignGet(c, key, expires = 6 * 60 * 60) { return presignUrl(c, 'GET', key, expires); }
+
+/** Ký URL tạm thời cho 1 phương thức (GET / PUT / HEAD): chỉ ký header host, gắn đúng 1 object — không lộ khoá R2. */
+function presignUrl(c, method, key, expires = 6 * 60 * 60) {
     const url = s3Url(c, key);
     const u = new URL(url);
     const { day, stamp } = amzDate();
@@ -208,10 +211,32 @@ function presignGet(c, key, expires = 6 * 60 * 60) {
         'X-Amz-SignedHeaders': 'host'
     };
     const q = canonicalQuery(params);
-    const canonical = ['GET', u.pathname, q, 'host:' + u.host + '\n', 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+    const canonical = [method, u.pathname, q, 'host:' + u.host + '\n', 'host', 'UNSIGNED-PAYLOAD'].join('\n');
     const toSign = ['AWS4-HMAC-SHA256', stamp, scope, sha256(canonical)].join('\n');
     const sig = crypto.createHmac('sha256', signingKey(c.secretAccessKey, day, c.region)).update(toSign).digest('hex');
     return url + '?' + q + '&X-Amz-Signature=' + sig;
+}
+
+/**
+ * URL để TRÌNH DUYỆT tự PUT 1 object thẳng lên R2 (không qua máy chủ → không tốn băng thông Vercel).
+ * Chỉ dùng được cho đúng key này, hết hạn sau `expires` giây. Cần bật CORS cho bucket (PUT từ domain web) — xem guide/connect-cloudflare.md.
+ */
+async function presignPutUrl(storage, key, expires = 2 * 60 * 60) {
+    const c = await creds(storage);
+    noteCloud({ req: 1 });
+    return presignUrl(c, 'PUT', key, expires);
+}
+
+/** Đọc [start, start+len) của 1 object (Range) — dùng kiểm tra header bản mã mà không tải cả phần. null nếu không có. */
+async function readRange(storage, key, start, len) {
+    const c = await creds(storage);
+    noteCloud({ req: 1 });
+    const res = await fetch(presignUrl(c, 'GET', key, 300), { headers: { Range: `bytes=${start}-${start + len - 1}` }, signal: AbortSignal.timeout(15000) });
+    if (res.status === 404) return null;
+    if (!res.ok && res.status !== 206) throw new Error('Cloudflare R2 lỗi ' + res.status + ' khi đọc Range ' + key);
+    const buf = Buffer.from(await res.arrayBuffer());
+    noteCloud({ down: buf.length });
+    return buf.subarray(0, len);
 }
 
 async function putObject(storage, key, buf, contentType) {
@@ -550,7 +575,7 @@ async function measure() {
 
 module.exports = {
     FILE, load, runtime, invalidate, summary, saveConfig, test,
-    putObject, getObject, headObject, deleteObject, listPrefix, listObjects, measure, deletePrefix, urlFor, publicUrl, presignGet,
+    putObject, getObject, headObject, deleteObject, listPrefix, listObjects, measure, deletePrefix, urlFor, publicUrl, presignGet, presignPutUrl, readRange,
     cfStorage, fbStorage, readObject,
     fallbackClient, fallbackReady, fallbackWriteBinary, fallbackCreateBlob, fallbackGetBlob,
     fallbackReadLarge, fallbackCommit, fallbackTree, fallbackRemovePrefix

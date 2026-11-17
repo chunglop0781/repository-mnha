@@ -17,6 +17,9 @@
 //     (release()), trình duyệt tải các phần mã hoá THẲNG từ GitHub rồi giải mã bằng WebCrypto: không tốn băng thông máy chủ.
 //     Mỗi file có 1 khoá RIÊNG (mc.filesKey: dẫn xuất từ khoá chủ + người dùng + mã tải lên); bản lưu trong mnha-files.json là bản MÃ HOÁ (`key`, mc.wrapBytes) nằm
 //     ngay trong json của thư mục — cùng chỗ với cờ `public` (công khai hay không). Mỗi phần là 1 khối AES-256-GCM có AAD = số thứ tự phần (đảo/đổi chỗ phần → không giải mã được).
+//   • TẢI LÊN THẲNG R2 (khi đã cấu hình Cloudflare R2 ở /connect, và FILES_DIRECT ≠ off): init trả thêm `direct.urls` = URL PUT ký sẵn (1 URL / 1 phần, đúng 1 key, hết hạn 2 giờ,
+//     không lộ khoá R2); trình duyệt mã hoá từng phần rồi PUT THẲNG lên R2 — bản mã KHÔNG đi qua máy chủ/Vercel. finish({direct:true}) chỉ HEAD + đọc Range header (vài chục byte)
+//     để kiểm tra kích thước/định dạng rồi ghi mnha-files.json (entry có `storage` = R2). Đọc: release() trả URL R2 (public / presign); xoá: xoá object R2. Chưa cấu hình R2 → luồng GitHub cũ như trước.
 //     Dự phòng khi không tải thẳng được (repo riêng tư, MEDIA_DIRECT=off, trình duyệt cũ, file lưu bằng bản cũ): máy chủ giải mã và gửi nối tiếp (open/readPart + signDownload).
 'use strict';
 const crypto = require('crypto');
@@ -25,6 +28,7 @@ const mc = require('./mediaCrypto');
 const { FILES, fileKind } = require('../../config/codeConfig');
 const { NAME_RE } = require('../../config/codeConfig');
 const keyService = require('./keyService');
+const cloudflare = require('../connect/cloudflare');
 
 const KEEP = '.keep';
 const bad = (m, status = 400) => Object.assign(new Error(m), { status });
@@ -93,6 +97,18 @@ function uploadIdFor(uid, segs, name, size, lastModified) {
 const saltFor = (uid, uploadId) => mc.deriveSalt('files-salt|' + uid + '|' + uploadId);
 const partsCount = (size) => Math.max(1, Math.ceil(size / FILES.PART_BYTES));
 const ENC_OVERHEAD = mc.HEADER_LEN + 4 + 12 + 16;           // MNHAENC1 | ver | salt (25) + len u32 + iv + tag = 57 byte trên mỗi phần 1 khối
+const plainOfPart = (size, i, n) => (i < n - 1 ? FILES.PART_BYTES : size - FILES.PART_BYTES * (n - 1));
+const isCf = (st) => !!(st && st.provider === 'cloudflare');
+
+/** Kho R2 đang dùng để nhận file tải lên thẳng từ trình duyệt (null = dùng luồng GitHub cũ). */
+async function r2Target() {
+    if (process.env.FILES_DIRECT === 'off') return null;
+    try { const rt = await cloudflare.runtime(); return rt && rt.storage ? rt.storage : null; } catch (_) { return null; }
+}
+async function pool(items, size, fn) {
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => { while (next < items.length) { const k = next++; await fn(items[k], k); } }));
+}
 
 // ---------------------------------------------------------------- sổ file (mnha-files.json)
 const pubCache = new Map();                       // trang thư mục công khai: uid|dir → { at, v } (giữ ngắn để đỡ gọi GitHub; mọi thay đổi sổ file xoá hết)
@@ -188,7 +204,8 @@ async function list(uid, dir) {
     const files = Object.values(m.files).filter((e) => e && e.name && e.state !== 'uploading').map((e) => ({
         name: e.name, kind: e.kind, size: e.size, mime: e.mime, public: e.public === true, parts: Array.isArray(e.parts) ? e.parts.length : 1,
         repos: [...new Set((e.parts || []).map((x) => x.repo).filter(Boolean))],
-        github: fileRepos(uid, segs, e),
+        github: isCf(e.storage) ? [] : fileRepos(uid, segs, e),
+        storage: isCf(e.storage) ? 'r2' : 'github',
         createdAt: e.createdAt || null, updatedAt: e.updatedAt || null
     })).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
     return { dir: segs.join('/'), folders: [...folders].sort(), files, shared: m.shared === true, repos: folderRepos(tree, uid, segs) };
@@ -216,8 +233,25 @@ async function init(uid, b) {
     const tree = await gh.getRepoTree({ force: true });
     for (let i = 0; i < n; i++) if (tree.files.has(prefix + pad(i + 1) + '.bin')) have.push(i);
     const ex = m.files[name];
+    // R2 đã cấu hình → trình duyệt PUT thẳng lên R2: các phần "đã có" tính theo object R2 (đúng kích thước), không theo GitHub
+    let direct = null;
+    const target = await r2Target();
+    if (target) {
+        try {
+            const objs = await cloudflare.listObjects(target, prefix);
+            const have2 = new Map(objs.map((o) => [o.key, o.size]));
+            const urls = {};
+            have.length = 0;
+            for (let i = 0; i < n; i++) {
+                const key = partPath(uid, segs, id, i);
+                if (have2.get(key) === ENC_OVERHEAD + plainOfPart(size, i, n)) have.push(i);
+                else urls[i] = await cloudflare.presignPutUrl(target, key);
+            }
+            direct = { provider: 'r2', urls };
+        } catch (e) { console.warn('[fileStore] R2 không sẵn sàng, dùng luồng GitHub:', e.message); direct = null; }
+    }
     return {
-        ok: true, name, kind: fileKind(name), size, uploadId: id, partBytes: FILES.PART_BYTES, n, have,
+        ok: true, name, kind: fileKind(name), size, uploadId: id, partBytes: FILES.PART_BYTES, n, have, ...(direct ? { direct } : {}),
         exists: !!(ex && ex.state !== 'uploading'),
         // khoá RIÊNG của file này + salt ở header: để TRÌNH DUYỆT tự mã hoá (khoá chủ không rời máy chủ). Chỉ trả cho người đã qua kiểm quyền tải lên (cookie / phiếu).
         key: mc.filesKey(uid, id).toString('base64'), salt: saltFor(uid, id).toString('base64')
@@ -283,14 +317,39 @@ async function finish(uid, b) {
     if (!Number.isInteger(size) || size <= 0 || size > FILES.MAX_FILE_BYTES) throw bad('Kích thước file không hợp lệ.');
     if (uploadIdFor(uid, segs, name, size, b.lastModified) !== String(b.uploadId)) throw bad('Mã tải lên không khớp với file.', 403);
     const n = partsCount(size);
-    const tree = await gh.getRepoTree({ force: true });
     const parts = [];
-    for (let i = 0; i < n; i++) {
-        const p = partPath(uid, segs, String(b.uploadId), i);
-        if (!tree.files.has(p)) throw bad(`Thiếu phần ${i + 1}/${n} — hãy tải lên lại (sẽ làm tiếp từ phần còn thiếu).`);
-        let repo = null;
-        try { const r = await gh.repoFor(p); repo = r && r.repo ? r.repo : null; } catch (_) { /* bỏ qua */ }
-        parts.push({ i, size: i < n - 1 ? FILES.PART_BYTES : size - FILES.PART_BYTES * (n - 1), ...(repo ? { repo } : {}) });
+    let target = null;
+    if (b.direct === true) {
+        // tải thẳng lên R2: kiểm tra từng object (HEAD + Range header ~29 byte), không tải bản mã về máy chủ
+        target = await r2Target();
+        if (!target) throw bad('Chưa cấu hình Cloudflare R2 nên không xác nhận được file tải thẳng.', 503);
+        const salt = saltFor(uid, String(b.uploadId));
+        const idx = Array.from({ length: n }, (_, i) => i);
+        await pool(idx, 6, async (i) => {
+            const key = partPath(uid, segs, String(b.uploadId), i);
+            const plainLen = plainOfPart(size, i, n);
+            const h = await cloudflare.headObject(target, key);
+            if (!h) throw bad(`Thiếu phần ${i + 1}/${n} trên R2 — hãy tải lên lại (sẽ làm tiếp từ phần còn thiếu).`);
+            if (h.size !== ENC_OVERHEAD + plainLen) {
+                await cloudflare.deleteObject(target, key).catch(() => { });
+                throw bad(`Phần ${i + 1}/${n} sai kích thước (${h.size} ≠ ${ENC_OVERHEAD + plainLen}) — đã xoá, hãy tải lên lại.`, 422);
+            }
+            const head = await cloudflare.readRange(target, key, 0, mc.HEADER_LEN + 4);
+            if (!head || !mc.isEncrypted(head) || head[8] !== 1 || !head.subarray(9, mc.HEADER_LEN).equals(salt) || head.readUInt32BE(mc.HEADER_LEN) !== plainLen) {
+                await cloudflare.deleteObject(target, key).catch(() => { });
+                throw bad(`Phần ${i + 1}/${n} không đúng định dạng mã hoá của lần tải lên này — đã xoá, hãy tải lên lại.`, 422);
+            }
+        });
+        for (let i = 0; i < n; i++) parts.push({ i, size: plainOfPart(size, i, n) });
+    } else {
+        const tree = await gh.getRepoTree({ force: true });
+        for (let i = 0; i < n; i++) {
+            const p = partPath(uid, segs, String(b.uploadId), i);
+            if (!tree.files.has(p)) throw bad(`Thiếu phần ${i + 1}/${n} — hãy tải lên lại (sẽ làm tiếp từ phần còn thiếu).`);
+            let repo = null;
+            try { const r = await gh.repoFor(p); repo = r && r.repo ? r.repo : null; } catch (_) { /* bỏ qua */ }
+            parts.push({ i, size: plainOfPart(size, i, n), ...(repo ? { repo } : {}) });
+        }
     }
     const now = new Date().toISOString();
     let old = null;
@@ -298,28 +357,35 @@ async function finish(uid, b) {
         old = m.files[name] || null;
         m.files[name] = {
             name, kind: fileKind(name), mime: mimeOf(name), size, id: String(b.uploadId), key: mc.wrapBytes(mc.filesKey(uid, String(b.uploadId))), parts,
+            ...(target ? { storage: target } : {}),
             ...(old && old.public === true ? { public: true } : {}),        // thay file cùng tên giữ nguyên chế độ công khai
             createdAt: old && old.createdAt ? old.createdAt : now, updatedAt: now
         };
         return m;
     }, `files: ${name}`);
     if (old && old.id && old.id !== String(b.uploadId)) {
-        const paths = await treePathsUnder(dataPrefix(uid, segs, old.id));
-        if (paths.length) await gh.commitFiles(paths.map((p) => ({ path: p, remove: true })), `files: thay ${name}`).catch((e) => console.warn('[fileStore] dọn bản cũ:', e.message));
+        await dropData(uid, segs, old, `files: thay ${name}`).catch((e) => console.warn('[fileStore] dọn bản cũ:', e.message));
     }
     return { ok: true, name, size, parts: n, repos: [...new Set(parts.map((x) => x.repo).filter(Boolean))] };
 }
 
 // ---------------------------------------------------------------- xoá / đổi tên
+/** Xoá dữ liệu (các phần) của 1 entry: R2 (nếu entry nằm ở R2) hoặc các file .bin trên GitHub. → số object/file đã xoá. */
+async function dropData(uid, segs, entry, message) {
+    if (!entry || !entry.id) return 0;
+    if (isCf(entry.storage)) { const r = await cloudflare.deletePrefix(entry.storage, dataPrefix(uid, segs, entry.id)); return r.deleted || 0; }
+    const paths = await treePathsUnder(dataPrefix(uid, segs, entry.id));
+    if (paths.length) await gh.commitFiles(paths.map((p) => ({ path: p, remove: true })), message);
+    return paths.length;
+}
 async function remove(uid, dir, name) {
     const segs = cleanDir(dir);
     const n = cleanName(name);
     let entry = null;
     await mutateManifest(uid, segs, (m) => { entry = m.files[n] || null; delete m.files[n]; return m; }, `files: xoá ${n}`);
     if (!entry) throw bad('Không tìm thấy file.', 404);
-    const paths = entry.id ? await treePathsUnder(dataPrefix(uid, segs, entry.id)) : [];
-    if (paths.length) await gh.commitFiles(paths.map((p) => ({ path: p, remove: true })), `files: xoá ${n}`);
-    return { ok: true, removed: paths.length };
+    const removed = await dropData(uid, segs, entry, `files: xoá ${n}`);
+    return { ok: true, removed };
 }
 
 async function rename(uid, dir, oldName, newName) {
@@ -345,6 +411,12 @@ async function removeFolder(uid, dir) {
     const prefix = join(root(uid), segs.join('/')) + '/';
     const paths = await treePathsUnder(prefix);
     if (paths.length > 3000) throw bad('Thư mục quá nhiều file (>3000)');
+    // file nằm ở R2 thì không có trong cây GitHub: đọc các mnha-files.json trong cây con để xoá object R2 trước
+    for (const mp of paths.filter((p) => p.endsWith('/' + FILES.MANIFEST))) {
+        const rel = mp.slice(root(uid).length + 1, -(FILES.MANIFEST.length + 1)).split('/').filter(Boolean);
+        const m = await readManifest(uid, rel).catch(() => null);
+        for (const e of Object.values((m && m.files) || {})) if (e && isCf(e.storage)) await dropData(uid, rel, e, 'files: xoá thư mục').catch((err) => console.warn('[fileStore] xoá R2:', err.message));
+    }
     if (paths.length) await gh.commitFiles(paths.map((p) => ({ path: p, remove: true })), 'files: xoá thư mục');
     pubCache.clear();
     return paths.length;
@@ -472,6 +544,16 @@ async function release(uid, dir, name, { publicOnly = false } = {}) {
     const count = Array.isArray(e.parts) && e.parts.length ? e.parts.length : partsCount(e.size);
     const base = { name: n, kind: e.kind || fileKind(n), size: e.size, mime: e.mime || mimeOf(n) };
     if (!e.key) return { mode: 'server', ...base };                                                  // file lưu bằng bản cũ (chưa có khoá riêng trong json) → giải mã ở máy chủ
+    if (isCf(e.storage)) {
+        // file ở R2: URL public hoặc presign (null = bucket chế độ proxy → đọc qua máy chủ)
+        const parts = [];
+        for (let i = 0; i < count; i++) {
+            const url = await cloudflare.urlFor(e.storage, partPath(id, segs, e.id, i), { v: e.id });
+            if (!url) return { mode: 'server', ...base };
+            parts.push({ i, url, size: e.parts && e.parts[i] ? e.parts[i].size : undefined });
+        }
+        return { mode: 'direct', ...base, parts, key: mc.unwrapBytes(e.key, 32).toString('base64') };
+    }
     const tree = await gh.getRepoTree();
     const parts = [];
     for (let i = 0; i < count; i++) {
@@ -548,12 +630,15 @@ async function open(uid, dir, name) {
     const e = m.files[n];
     if (!e || e.state === 'uploading' || !e.id) throw bad('Không tìm thấy file.', 404);
     const count = Array.isArray(e.parts) && e.parts.length ? e.parts.length : partsCount(e.size);
-    const t = await gh.getRepoTree();
-    for (let i = 0; i < count; i++) if (!t.files.has(partPath(uid, segs, e.id, i))) throw bad(`File bị thiếu phần ${i + 1}/${count} trên GitHub.`, 410);
+    const onR2 = isCf(e.storage);
+    if (!onR2) {
+        const t = await gh.getRepoTree();
+        for (let i = 0; i < count; i++) if (!t.files.has(partPath(uid, segs, e.id, i))) throw bad(`File bị thiếu phần ${i + 1}/${count} trên GitHub.`, 410);
+    }
     return {
         name: e.name, size: e.size, mime: e.mime || mimeOf(e.name), parts: count,
         async readPart(i) {
-            const buf = await gh.readBinaryFileLarge(partPath(uid, segs, e.id, i));
+            const buf = onR2 ? await cloudflare.getObject(e.storage, partPath(uid, segs, e.id, i)) : await gh.readBinaryFileLarge(partPath(uid, segs, e.id, i));
             if (!buf) throw bad(`Không đọc được phần ${i + 1}/${count}.`, 502);
             try {
                 // bản hiện tại: khoá riêng giải từ json (`key`), AAD = số thứ tự phần; bản trước (salt chung) khoá theo salt ở header, AAD = số thứ tự; bản đầu: mỗi phần 1 file riêng, khối số 0

@@ -196,3 +196,25 @@ Mục **Dung lượng đã up lên Cloudflare R2** nằm ngay trong khung Cloudf
 
 - Số “ghi lên R2” lưu **mỗi tuần một file** `usage/week-N/index.json` (cùng nơi lưu lượng Vercel, **không xoá**), cộng gộp mọi web (web chính + web dữ liệu). Mỗi instance giữ bộ đếm rồi ghi lên GitHub định kỳ (~45 giây) — số đo là xấp xỉ, tính từ lúc bật tính năng này.
 - Số chính thức của Cloudflare: Dashboard → R2 → bucket → **Metrics**. R2 miễn phí 10 GB lưu trữ/tháng; thu phí theo dung lượng lưu và số request, không thu phí băng thông ra (egress).
+
+## 11. "Lưu trữ file" tải THẲNG lên R2 (không tốn băng thông Vercel)
+
+Khi R2 đã cấu hình ở `/connect`, trang `/code/files` để **trình duyệt mã hoá từng phần rồi PUT thẳng lên R2** bằng URL ký sẵn
+(`services/connect/cloudflare.js` → `presignPutUrl`; mỗi URL chỉ dùng cho đúng 1 object, hết hạn sau 2 giờ, khoá R2 không rời máy chủ).
+Máy chủ chỉ cấp URL (`init`) và xác nhận (`finish`: HEAD + đọc 29 byte header) — bản mã không đi qua Vercel. Chưa cấu hình R2 hoặc R2 lỗi → tự dùng luồng GitHub cũ.
+
+**Bắt buộc bật CORS cho bucket** (R2 → bucket → Settings → CORS policy), thay domain bằng domain web của bạn (thêm cả domain các web kết nối nếu trang chạy ở đó):
+
+```json
+[{
+  "AllowedOrigins": ["https://ten-mien-cua-ban.vercel.app"],
+  "AllowedMethods": ["GET", "PUT", "HEAD"],
+  "AllowedHeaders": ["*"],
+  "ExposeHeaders": ["Content-Length", "Content-Range", "ETag"],
+  "MaxAgeSeconds": 3600
+}]
+```
+
+- Chưa bật CORS: trình duyệt báo "Không tải thẳng lên R2 được" rồi tự gửi qua web kết nối → GitHub (vẫn chạy nhưng tốn băng thông).
+- Tắt hẳn tải thẳng: đặt biến môi trường `FILES_DIRECT=off`.
+- Xoá file / thư mục / thay file cùng tên sẽ xoá luôn object R2 (`_data/<mã>/NNNN.bin`). Test: `node test/files-direct-r2.js`.

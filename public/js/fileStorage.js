@@ -1,7 +1,8 @@
 // public/js/fileStorage.js — trang "Lưu trữ file" (/code/files): tải lên (chia phần ≤ 3.5MB, làm tiếp được), tải về, đổi tên, xoá.
 //   Tải lên: POST /code/files/upload/init (web chính chọn web kết nối + ký phiếu) → init ở web kết nối trả khoá RIÊNG của file →
 //   TRÌNH DUYỆT MÃ HOÁ từng PHẦN bằng WebCrypto (AES-256-GCM, MnhaFiles.encryptPart) rồi gửi bản mã thẳng tới web kết nối
-//   (PUT …/files/part) → POST …/files/finish. Bản rõ không rời máy; web kết nối chỉ kiểm tra + ghi lên GitHub. Web lỗi → tự chuyển web kế. Xem services/code/fileStore.js.
+//   (PUT …/files/part) → POST …/files/finish. Nếu init trả `direct.urls` (đã cấu hình Cloudflare R2): trình duyệt PUT THẲNG bản mã lên R2 bằng URL ký sẵn
+//   (không qua Vercel), rồi POST …/files/finish {direct:true}; R2 lỗi/CORS → tự quay về đường cũ. Bản rõ không rời máy; web kết nối chỉ kiểm tra + ghi lên GitHub. Web lỗi → tự chuyển web kế. Xem services/code/fileStore.js.
 (function () {
     'use strict';
     var root = document.getElementById('fileStorage'); if (!root) return;
@@ -249,7 +250,18 @@
         return M.importEncryptKey(init.key).then(function (key) { return { key: key, salt: M.b64ToBytes(init.salt) }; });
     }
 
+    // Tải thẳng lên R2 bằng URL PUT ký sẵn (init.direct.urls[i]): bản mã không qua máy chủ → không tốn băng thông Vercel. Lỗi mạng/CORS/403 → e.direct để quay về đường qua web kết nối.
+    function putDirect(url, body) {
+        return fetch(url, { method: 'PUT', body: body }).then(function (r) {
+            if (!r.ok) { var e = new Error('R2 trả HTTP ' + r.status); e.status = r.status; e.direct = true; throw e; }
+            return {};
+        }, function (err) {
+            var e2 = new Error('Không gửi thẳng được lên R2 (' + ((err && err.message) || 'mạng / CORS') + ')'); e2.direct = true; throw e2;
+        });
+    }
+
     function sendParts(file, init, urls, token, label, onProgress) {
+        var direct = init.direct && init.direct.urls ? init.direct.urls : null;
         var n = init.n, have = {}, i;
         (init.have || []).forEach(function (x) { have[x] = true; });
         var done = Object.keys(have).length;
@@ -258,13 +270,17 @@
             function step(i) {
                 return function () {
                     if (have[i]) return;
-                    onProgress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n + (label ? ' — web ' + label : ''), done / n);
+                    onProgress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n + (direct ? ' — thẳng lên R2' : (label ? ' — web ' + label : '')), done / n);
                     var q = { dir: dir, name: init.name, uploadId: init.uploadId, i: i, n: n };
                     if (token) q.token = token;
                     // mã hoá 1 lần ở trình duyệt; gửi lại khi lỗi mạng thì dùng đúng bản mã đó
                     return file.slice(i * init.partBytes, (i + 1) * init.partBytes).arrayBuffer()
                         .then(function (ab) { return window.MnhaFiles.encryptPart(enc.key, enc.salt, new Uint8Array(ab), i); })
                         .then(function (body) {
+                            if (direct) {
+                                if (!direct[i]) { var ne = new Error('Thiếu URL tải lên cho phần ' + (i + 1)); ne.direct = true; throw ne; }
+                                return retry(function () { return putDirect(direct[i], body); }, 'phần ' + (i + 1) + '/' + n);
+                            }
                             return retry(function () { return request('PUT', urls.part + '?' + qs(q), body, true); }, 'phần ' + (i + 1) + '/' + n);
                         })
                         .then(function (r) { done++; if (r && r.repo) onProgress('Phần ' + (i + 1) + '/' + n + ' → repo ' + r.repo, done / n); });
@@ -275,6 +291,7 @@
         }).then(function () {
             onProgress('Đang ghi vào danh sách file…', 0.98);
             var b = { dir: dir, name: init.name, uploadId: init.uploadId, size: file.size, lastModified: file.lastModified };
+            if (direct) b.direct = true;
             if (token) b.token = token;
             return retry(function () { return request('POST', urls.finish, b); }, 'hoàn tất');
         });
@@ -296,7 +313,12 @@
                     : (plan.uploadId && plan.name ? Promise.resolve(plan) : retry(function () { return post(urls.init, body); }));
                 return first.then(function (init) {
                     if (init.exists && !(opt && opt.overwrite) && !confirm('Đã có file "' + init.name + '" trong thư mục này. Ghi đè?')) { var c = new Error('Đã huỷ (giữ file cũ).'); c.cancelled = true; throw c; }
-                    return sendParts(file, init, urls, init.token || tok, label, onProgress);
+                    return sendParts(file, init, urls, init.token || tok, label, onProgress).catch(function (e) {
+                        if (!e || !e.direct) throw e;
+                        // R2 không nhận (thường do chưa bật CORS cho bucket) → gửi lại toàn bộ qua web kết nối → GitHub như trước
+                        say('Không tải thẳng lên R2 được (' + e.message + ') — chuyển sang gửi qua web kết nối…');
+                        return sendParts(file, Object.assign({}, init, { have: [], direct: null }), urls, init.token || tok, label, onProgress);
+                    });
                 }).catch(function (e) {
                     lastErr = e;
                     if (e.cancelled || (isDataError(e) && e.status !== 401 && e.status !== 403)) throw e;     // 401/403 từ web kết nối = sai khoá/phiếu → thử web kế
