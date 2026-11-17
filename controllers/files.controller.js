@@ -91,6 +91,7 @@ exports.uploadInit = wrap(async (req, res) => {
 });
 exports.uploadLocalInit = wrap(async (req, res) => res.json(await store.init(uidOf(req), req.body || {})));
 exports.uploadPart = wrap(async (req, res) => res.json(await store.putPart(uidOf(req), req.query, asBuf(req.body))));
+exports.uploadCommit = wrap(async (req, res) => res.json(await store.commitBlobs(uidOf(req), req.body || {})));
 exports.uploadFinish = wrap(async (req, res) => res.json(await store.finish(uidOf(req), req.body || {})));
 
 // ---------------------------------------------------------------- tải về

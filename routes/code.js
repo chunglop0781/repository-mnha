@@ -51,6 +51,7 @@ router.post('/files/upload/init', requireFileUploader, files.uploadInit);
 router.post('/files/upload/local/init', requireLocalData, requireFileUploader, files.uploadLocalInit);
 router.put('/files/upload/part', requireLocalData, requireFileUploader, raw, files.uploadPart);
 router.post('/files/upload/finish', requireLocalData, requireFileUploader, files.uploadFinish);
+router.post('/files/upload/commit', requireLocalData, requireFileUploader, files.uploadCommit);
 router.post('/files/visibility', files.visibility);
 router.get('/files/search', files.search);
 router.post('/files/folder/share', files.shareFolder);

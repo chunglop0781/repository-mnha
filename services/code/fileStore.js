@@ -101,9 +101,28 @@ const plainOfPart = (size, i, n) => (i < n - 1 ? FILES.PART_BYTES : size - FILES
 const isCf = (st) => !!(st && st.provider === 'cloudflare');
 
 /** Kho R2 đang dùng để nhận file tải lên thẳng từ trình duyệt (null = dùng luồng GitHub cũ). */
-async function r2Target() {
-    if (process.env.FILES_DIRECT === 'off') return null;
-    try { const rt = await cloudflare.runtime(); return rt && rt.storage ? rt.storage : null; } catch (_) { return null; }
+async function r2Status() {
+    if (process.env.FILES_DIRECT === 'off') return { target: null, why: 'biến môi trường FILES_DIRECT=off đang tắt tải thẳng' };
+    try {
+        const rt = await cloudflare.runtime();
+        if (rt && rt.storage) return { target: rt.storage, why: null };
+        if (rt && rt.error) return { target: null, why: 'cấu hình Cloudflare R2 lỗi: ' + rt.error };
+        if (rt && rt.doc && rt.doc.enabled === false) return { target: null, why: 'Cloudflare R2 đang TẮT ở trang /connect' };
+        return { target: null, why: 'web này chưa đọc được cấu hình Cloudflare R2 (chưa lưu ở /connect, hoặc không đọc được v-s/cloudflare.json)' };
+    } catch (e) { return { target: null, why: 'không đọc được cấu hình R2: ' + e.message }; }
+}
+async function r2Target() { return (await r2Status()).target; }
+
+/** Cho trình duyệt đẩy bản mã thẳng lên GitHub? Cần GitHub App (token tạm, nhập ở /connect) và không đặt FILES_GH_DIRECT=off. */
+const appTok = () => require('../githubAppToken');
+const ghDirectOn = async () => process.env.FILES_GH_DIRECT !== 'off' && (await appTok().isConfigured());
+/** Repo đang nhận file mới + TOKEN TẠM (installation token: 1 giờ, 1 repo, Contents:write) để TRÌNH DUYỆT gọi api.github.com (POST /git/blobs). PAT thật không rời máy chủ. */
+async function ghTicket() {
+    let rec = { owner: gh.owner, repo: gh.repo, branch: gh.branch };
+    try { if (gh.pooled && gh.pool && typeof gh.pool.active === 'function') { const a = await gh.pool.active(); if (a && a.owner && a.repo) rec = { owner: a.owner, repo: a.repo, branch: a.branch || gh.branch }; } } catch (_) { /* dùng repo chính */ }
+    if (!rec.owner || !rec.repo) throw bad('Chưa xác định được repo GitHub để nhận file.', 503);
+    const t = await appTok().mintForRepo(rec.owner, rec.repo);
+    return { owner: rec.owner, repo: rec.repo, branch: rec.branch || 'main', token: t.token, expiresAt: t.expiresAt };
 }
 async function pool(items, size, fn) {
     let next = 0;
@@ -234,8 +253,9 @@ async function init(uid, b) {
     for (let i = 0; i < n; i++) if (tree.files.has(prefix + pad(i + 1) + '.bin')) have.push(i);
     const ex = m.files[name];
     // R2 đã cấu hình → trình duyệt PUT thẳng lên R2: các phần "đã có" tính theo object R2 (đúng kích thước), không theo GitHub
-    let direct = null;
-    const target = await r2Target();
+    let direct = null, directWhy = null;
+    const st = await r2Status(), target = st.target;
+    directWhy = st.why;
     if (target) {
         try {
             const objs = await cloudflare.listObjects(target, prefix);
@@ -248,10 +268,19 @@ async function init(uid, b) {
                 else urls[i] = await cloudflare.presignPutUrl(target, key);
             }
             direct = { provider: 'r2', urls };
-        } catch (e) { console.warn('[fileStore] R2 không sẵn sàng, dùng luồng GitHub:', e.message); direct = null; }
+        } catch (e) { console.warn('[fileStore] R2 không sẵn sàng, dùng luồng GitHub:', e.message); direct = null; directWhy = 'R2 không phản hồi/không cho liệt kê (' + e.message + ')'; }
+    }
+    // Không có R2: nếu đã cấu hình GitHub App → trình duyệt tự đẩy thẳng lên GitHub bằng TOKEN TẠM (phần đã có tính theo cây GitHub như luồng cũ)
+    let ghDirect = null;
+    if (!direct) {
+        if (await ghDirectOn()) {
+            try { ghDirect = await ghTicket(); } catch (e) { directWhy = (directWhy ? directWhy + '; ' : '') + 'GitHub trực tiếp không dùng được: ' + e.message; }
+        } else {
+            directWhy = (directWhy ? directWhy + '. ' : '') + (process.env.FILES_GH_DIRECT === 'off' ? 'FILES_GH_DIRECT=off đang tắt đẩy thẳng lên GitHub' : 'Muốn đẩy thẳng lên GitHub (không qua Vercel): nhập GitHub App ở trang /connect (mục GitHub App) để cấp token tạm cho trình duyệt');
+        }
     }
     return {
-        ok: true, name, kind: fileKind(name), size, uploadId: id, partBytes: FILES.PART_BYTES, n, have, ...(direct ? { direct } : {}),
+        ok: true, name, kind: fileKind(name), size, uploadId: id, partBytes: FILES.PART_BYTES, n, have, ...(direct ? { direct } : {}), ...(ghDirect ? { ghDirect } : {}), ...(!direct && !ghDirect ? { directWhy: directWhy || 'không rõ lý do' } : {}),
         exists: !!(ex && ex.state !== 'uploading'),
         // khoá RIÊNG của file này + salt ở header: để TRÌNH DUYỆT tự mã hoá (khoá chủ không rời máy chủ). Chỉ trả cho người đã qua kiểm quyền tải lên (cookie / phiếu).
         key: mc.filesKey(uid, id).toString('base64'), salt: saltFor(uid, id).toString('base64')
@@ -309,6 +338,35 @@ async function putPart(uid, q, body) {
 }
 
 /** Bước 3: kiểm tra đủ phần rồi ghi mục vào sổ file (thay file cùng tên nếu có, và dọn các phần của bản cũ). */
+/**
+ * Sau khi TRÌNH DUYỆT đã tự tạo blob (bản mã) trên GitHub: gom các phần thành MỘT commit tại đường dẫn _data/<mã>/NNNN.bin.
+ *   b = { dir, name, uploadId, size, lastModified, parts: [{ i, sha }] }   — chỉ vài trăm byte, không mang dữ liệu file.
+ * Máy chủ không đọc nội dung blob (không tốn băng thông); kích thước/định dạng được kiểm khi giải mã lúc tải về.
+ */
+async function commitBlobs(uid, b) {
+    if (!(await ghDirectOn())) throw bad('Web này chưa bật tải thẳng lên GitHub (cần cấu hình GitHub App ở /connect và FILES_GH_DIRECT khác off).', 403);
+    const segs = cleanDir(b.dir);
+    const name = cleanName(b.name);
+    if (!hex32(b.uploadId)) throw bad('Mã tải lên không hợp lệ.');
+    const size = Number(b.size);
+    if (!Number.isInteger(size) || size <= 0 || size > FILES.MAX_FILE_BYTES) throw bad('Kích thước file không hợp lệ.');
+    const id = String(b.uploadId);
+    if (uploadIdFor(uid, segs, name, size, b.lastModified) !== id) throw bad('Mã tải lên không khớp với file.', 403);
+    const n = partsCount(size);
+    const list = Array.isArray(b.parts) ? b.parts : [];
+    if (!list.length || list.length > 64) throw bad('Danh sách phần không hợp lệ.');
+    const seen = new Set();
+    const changes = list.map((x) => {
+        const i = Number(x && x.i), sha = String((x && x.sha) || '');
+        if (!Number.isInteger(i) || i < 0 || i >= n || seen.has(i)) throw bad('Số thứ tự phần không hợp lệ.');
+        if (!/^[0-9a-f]{40}$/.test(sha)) throw bad('Mã blob không hợp lệ.');
+        seen.add(i);
+        return { path: partPath(uid, segs, id, i), sha };
+    });
+    await gh.commitFiles(changes, `files: ${name} (${changes.length} phần)`);
+    return { ok: true, committed: changes.length };
+}
+
 async function finish(uid, b) {
     const segs = cleanDir(b.dir);
     const name = cleanName(b.name);
@@ -651,6 +709,6 @@ async function open(uid, dir, name) {
 
 module.exports = {
     cleanDir, cleanName, manifestPath, partPath, uploadIdFor, partsCount, mimeOf,
-    list, mkdir, init, putPart, finish, remove, rename, removeFolder, signDownload, verifyDownload, open, readManifest,
+    list, mkdir, init, putPart, commitBlobs, finish, remove, rename, removeFolder, signDownload, verifyDownload, open, readManifest,
     setVisibility, openPublic, search, fold, release, publicInfo, saltFor, setFolderShared, publicFolder
 };

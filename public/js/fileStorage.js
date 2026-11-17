@@ -2,7 +2,7 @@
 //   Tải lên: POST /code/files/upload/init (web chính chọn web kết nối + ký phiếu) → init ở web kết nối trả khoá RIÊNG của file →
 //   TRÌNH DUYỆT MÃ HOÁ từng PHẦN bằng WebCrypto (AES-256-GCM, MnhaFiles.encryptPart) rồi gửi bản mã thẳng tới web kết nối
 //   (PUT …/files/part) → POST …/files/finish. Nếu init trả `direct.urls` (đã cấu hình Cloudflare R2): trình duyệt PUT THẲNG bản mã lên R2 bằng URL ký sẵn
-//   (không qua Vercel), rồi POST …/files/finish {direct:true}; R2 lỗi/CORS → tự quay về đường cũ. Bản rõ không rời máy; web kết nối chỉ kiểm tra + ghi lên GitHub. Web lỗi → tự chuyển web kế. Xem services/code/fileStore.js.
+//   (không qua Vercel), rồi POST …/files/finish {direct:true}; R2 lỗi/CORS → tự quay về đường cũ. Nếu init trả `ghDirect` (đã nhập GitHub App ở /connect): trình duyệt tự POST /git/blobs lên api.github.com bằng TOKEN TẠM (không qua Vercel) rồi POST …/files/commit để server gom vào 1 commit. Bản rõ không rời máy; web kết nối chỉ kiểm tra + ghi lên GitHub. Web lỗi → tự chuyển web kế. Xem services/code/fileStore.js.
 (function () {
     'use strict';
     var root = document.getElementById('fileStorage'); if (!root) return;
@@ -234,7 +234,8 @@
         return {
             init: base + (node ? '/api/node/files/init' : '/code/files/upload/local/init'),
             part: base + (node ? '/api/node/files/part' : '/code/files/upload/part'),
-            finish: base + (node ? '/api/node/files/finish' : '/code/files/upload/finish')
+            finish: base + (node ? '/api/node/files/finish' : '/code/files/upload/finish'),
+            commit: base + (node ? '/api/node/files/commit' : '/code/files/upload/commit')
         };
     }
 
@@ -260,17 +261,52 @@
         });
     }
 
+    // Tạo BLOB bản mã THẲNG trên GitHub (api.github.com cho phép CORS) bằng TOKEN TẠM do máy chủ cấp (GitHub App, 1 giờ, 1 repo) → không tốn băng thông Vercel.
+    // Lỗi mạng / token hết hạn / hết hạn mức → e.direct để quay về đường qua web kết nối.
+    function blobToBase64(bytes) {
+        return new Promise(function (ok, no) {
+            var fr = new FileReader();
+            fr.onload = function () { var s = String(fr.result || ''); ok(s.slice(s.indexOf(',') + 1)); };
+            fr.onerror = function () { no(fr.error || new Error('Không đọc được dữ liệu')); };
+            fr.readAsDataURL(new Blob([bytes]));
+        });
+    }
+    function putGithubBlob(t, bytes) {
+        return blobToBase64(bytes).then(function (b64) {
+            return fetch('https://api.github.com/repos/' + encodeURIComponent(t.owner) + '/' + encodeURIComponent(t.repo) + '/git/blobs', {
+                method: 'POST',
+                headers: { Authorization: 'Bearer ' + t.token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: b64, encoding: 'base64' })
+            });
+        }).then(function (r) {
+            if (r.status === 201 || r.status === 200) return r.json().then(function (j) { if (!j || !/^[0-9a-f]{40}$/.test(j.sha || '')) { var e0 = new Error('GitHub không trả mã blob'); e0.direct = true; throw e0; } return j.sha; });
+            var e = new Error('GitHub trả HTTP ' + r.status + (r.status === 401 || r.status === 403 ? ' (token tạm hết hạn / hết quyền / hết hạn mức)' : '')); e.status = r.status; e.direct = true; throw e;
+        }, function (err) {
+            var e2 = new Error('Không gửi thẳng được lên GitHub (' + ((err && err.message) || 'mạng') + ')'); e2.direct = true; throw e2;
+        });
+    }
+
     function sendParts(file, init, urls, token, label, onProgress) {
+        var gt = init.ghDirect && init.ghDirect.token ? init.ghDirect : null;
         var direct = init.direct && init.direct.urls ? init.direct.urls : null;
         var n = init.n, have = {}, i;
         (init.have || []).forEach(function (x) { have[x] = true; });
         var done = Object.keys(have).length;
+        var pending = [];          // blob đã tạo trên GitHub nhưng chưa commit: [{ i, sha }]
+        var COMMIT_EVERY = 8;      // gom ~28MB / 1 commit → đứt giữa chừng vẫn làm tiếp được
+        function commitPending() {
+            if (!pending.length) return Promise.resolve();
+            var list = pending.splice(0, pending.length);
+            var cb = { dir: dir, name: init.name, uploadId: init.uploadId, size: file.size, lastModified: file.lastModified, parts: list };
+            if (token) cb.token = token;
+            return retry(function () { return request('POST', urls.commit, cb); }, 'ghi ' + list.length + ' phần vào repo');
+        }
         return encryptor(init).then(function (enc) {
             var chain = Promise.resolve();
             function step(i) {
                 return function () {
                     if (have[i]) return;
-                    onProgress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n + (direct ? ' — thẳng lên R2' : (label ? ' — web ' + label : '')), done / n);
+                    onProgress('Đang mã hoá & tải phần ' + (i + 1) + '/' + n + (direct ? ' — thẳng lên R2' : (gt ? ' — thẳng lên GitHub' : (label ? ' — web ' + label : ''))), done / n);
                     var q = { dir: dir, name: init.name, uploadId: init.uploadId, i: i, n: n };
                     if (token) q.token = token;
                     // mã hoá 1 lần ở trình duyệt; gửi lại khi lỗi mạng thì dùng đúng bản mã đó
@@ -281,13 +317,19 @@
                                 if (!direct[i]) { var ne = new Error('Thiếu URL tải lên cho phần ' + (i + 1)); ne.direct = true; throw ne; }
                                 return retry(function () { return putDirect(direct[i], body); }, 'phần ' + (i + 1) + '/' + n);
                             }
+                            if (gt) {
+                                return retry(function () { return putGithubBlob(gt, body); }, 'phần ' + (i + 1) + '/' + n).then(function (sha) {
+                                    pending.push({ i: i, sha: sha });
+                                    return pending.length >= COMMIT_EVERY ? commitPending() : null;
+                                });
+                            }
                             return retry(function () { return request('PUT', urls.part + '?' + qs(q), body, true); }, 'phần ' + (i + 1) + '/' + n);
                         })
                         .then(function (r) { done++; if (r && r.repo) onProgress('Phần ' + (i + 1) + '/' + n + ' → repo ' + r.repo, done / n); });
                 };
             }
             for (i = 0; i < n; i++) chain = chain.then(step(i));
-            return chain;
+            return chain.then(commitPending);
         }).then(function () {
             onProgress('Đang ghi vào danh sách file…', 0.98);
             var b = { dir: dir, name: init.name, uploadId: init.uploadId, size: file.size, lastModified: file.lastModified };
@@ -313,11 +355,14 @@
                     : (plan.uploadId && plan.name ? Promise.resolve(plan) : retry(function () { return post(urls.init, body); }));
                 return first.then(function (init) {
                     if (init.exists && !(opt && opt.overwrite) && !confirm('Đã có file "' + init.name + '" trong thư mục này. Ghi đè?')) { var c = new Error('Đã huỷ (giữ file cũ).'); c.cancelled = true; throw c; }
+                    // Cho người dùng THẤY đang đi đường nào: thẳng R2 (không tốn băng thông Vercel) hay qua web kết nối (tốn).
+                    if ((init.direct && init.direct.urls) || init.ghDirect) say('');
+                    else say('Đang gửi file QUA web kết nối (tốn băng thông Vercel) — không tải thẳng được vì: ' + (init.directWhy || 'web kết nối này đang chạy bản code cũ chưa hỗ trợ tải thẳng R2 (hãy deploy lại web đó)') + '.');
                     return sendParts(file, init, urls, init.token || tok, label, onProgress).catch(function (e) {
                         if (!e || !e.direct) throw e;
                         // R2 không nhận (thường do chưa bật CORS cho bucket) → gửi lại toàn bộ qua web kết nối → GitHub như trước
-                        say('Không tải thẳng lên R2 được (' + e.message + ') — chuyển sang gửi qua web kết nối…');
-                        return sendParts(file, Object.assign({}, init, { have: [], direct: null }), urls, init.token || tok, label, onProgress);
+                        say('Không tải thẳng được (' + e.message + ') — chuyển sang gửi qua web kết nối (tốn băng thông Vercel)…');
+                        return sendParts(file, Object.assign({}, init, { have: [], direct: null, ghDirect: null }), urls, init.token || tok, label, onProgress);
                     });
                 }).catch(function (e) {
                     lastErr = e;

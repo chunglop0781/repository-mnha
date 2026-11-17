@@ -49,6 +49,12 @@ const { enc } = require('./_enc');
   const init = await fs.init(uid, { dir: '', name: 'bai.pdf', size: buf.length, lastModified: 1 });
   assert.strictEqual(init.n, 3);
   assert.ok(init.direct && init.direct.urls && Object.keys(init.direct.urls).length === 3, 'phải có 3 URL PUT');
+  assert.strictEqual(init.directWhy, undefined, 'có tải thẳng thì không có lý do');
+  // 1b) tắt tải thẳng → init nói RÕ lý do để giao diện báo "đang tốn băng thông Vercel vì …"
+  process.env.FILES_DIRECT = 'off';
+  const off = await fs.init(uid, { dir: '', name: 'bai-off.pdf', size: 1000, lastModified: 5 });
+  delete process.env.FILES_DIRECT;
+  assert.ok(!off.direct && /FILES_DIRECT=off/.test(off.directWhy), 'lý do: ' + off.directWhy);
   // 2) "trình duyệt" mã hoá + PUT thẳng lên R2 (phần 1 bỏ lại để thử làm tiếp)
   for (const i of [0, 2]) r2.set(urlToKey(init.direct.urls[i]), await enc(init, buf.subarray(i * PART, (i + 1) * PART), i));
   await assert.rejects(fs.finish(uid, { dir: '', name: 'bai.pdf', uploadId: init.uploadId, size: buf.length, lastModified: 1, direct: true }), /Thiếu phần 2/);

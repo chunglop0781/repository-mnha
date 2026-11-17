@@ -245,6 +245,10 @@ function createRouter() {
         const files = require('../../services/code/fileStore');
         return files.putPart(req.mediaUid, req.query, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
     }, req, res));
+    router.post('/api/node/files/commit', nodeUploadAuth, (req, res) => run(async () => {
+        const files = require('../../services/code/fileStore');
+        return files.commitBlobs(req.mediaUid, req.body || {});
+    }, req, res));
     router.post('/api/node/files/finish', nodeUploadAuth, (req, res) => run(async () => {
         const files = require('../../services/code/fileStore');
         return files.finish(req.mediaUid, req.body || {});
