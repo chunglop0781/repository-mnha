@@ -49,6 +49,7 @@ exports.page = wrap(async (req, res) => {
         canUpload: canUploadFiles(req.user),
         denyMessage: canUploadFiles(req.user) ? null : filesDenyMessage(req.user),
         shared: data.shared === true,
+        hasPass: data.hasPass === true,
         limits: { maxFile: FILES.MAX_FILE_BYTES, part: FILES.PART_BYTES, textEdit: FILES.TEXT_EDIT_MAX },
         exts: FILE_EXTS,
         files: data.files
@@ -56,7 +57,7 @@ exports.page = wrap(async (req, res) => {
     res.render('code/storage', {
         title: 'Lưu trữ file', user: req.user, uid: uidOf(req), dir: data.dir, repos: data.repos || [], folders: data.folders, files: data.files,
         exts: FILE_EXTS, limits: payload.limits, payloadJson: json(payload),
-        canUpload: payload.canUpload, denyMessage: payload.denyMessage, shared: payload.shared,
+        canUpload: payload.canUpload, denyMessage: payload.denyMessage, shared: payload.shared, hasPass: payload.hasPass,
         accept: [].concat(...Object.values(FILE_EXTS)).map((e) => '.' + e).join(',')
     });
 });
@@ -170,6 +171,12 @@ exports.shareFolder = wrap(async (req, res) => {
     if (typeof b.shared !== 'boolean') throw Object.assign(new Error('Thiếu trạng thái chia sẻ.'), { status: 400 });
     res.json(await store.setFolderShared(uidOf(req), b.dir || '', b.shared));
 });
+exports.folderPassword = wrap(async (req, res) => {          // đặt / ĐỔI / xoá mật khẩu (chủ đã đăng nhập → không cần mật khẩu cũ, quên thì đặt lại)
+    const b = req.body || {};
+    if (b.remove === true) return res.json(await store.setFolderPassword(uidOf(req), b.dir || '', null));
+    if (typeof b.password !== 'string' || !b.password) throw Object.assign(new Error('Nhập mật khẩu mới.'), { status: 400 });
+    res.json(await store.setFolderPassword(uidOf(req), b.dir || '', b.password));
+});
 exports.search = wrap(async (req, res) => { res.set('Cache-Control', 'no-store').json({ ok: true, ...(await store.search(uidOf(req), req.query.q)) }); });
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -177,10 +184,50 @@ const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(n >= 10485760 ? 0 :
 const pubQuery = (q, extra) => new URLSearchParams({ u: String(q.u || ''), d: String(q.d || ''), n: String(q.n || ''), ...(extra || {}) }).toString();
 const NOT_FOUND = 'Không tìm thấy file hoặc file không công khai.';
 
+
+// ---------------------------------------------------------------- mật khẩu chia sẻ
+const safeNext = (n) => (typeof n === 'string' && /^\/f(\/d)?\?/.test(n) && !n.includes('//') ? n : '/');
+/** Trang nhập mật khẩu (HTML thuần, nút hiện/ẩn bằng /js/pwToggle.js). */
+function lockedPage(res, q, next, error) {
+    res.status(error ? 401 : 200).set({
+        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'"
+    }).send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>Nhập mật khẩu</title><style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a}
+form{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:24px;width:min(92vw,360px)}h1{font-size:18px;margin:0 0 4px}p{margin:0 0 14px;font-size:13px;color:#64748b}
+.row{display:flex;gap:6px}input{flex:1;min-width:0;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:15px}button{padding:10px 14px;border-radius:8px;border:1px solid #c7d2fe;background:#fff;color:#4f46e5;cursor:pointer;font-size:13px}
+button.go{width:100%;margin-top:12px;background:#4f46e5;color:#fff;border:0;font-size:15px}.err{color:#b91c1c;font-size:13px;margin:8px 0 0}
+</style></head><body><form method="post" action="/f/unlock"><h1>🔒 Link được khoá bằng mật khẩu</h1><p>Nhập mật khẩu do người chia sẻ cung cấp để xem.</p>
+<input type="hidden" name="u" value="${esc(q.u || '')}"><input type="hidden" name="d" value="${esc(q.d || '')}"><input type="hidden" name="next" value="${esc(next)}">
+<div class="row"><input id="pw" type="password" name="password" autocomplete="off" autofocus required maxlength="64" placeholder="Mật khẩu"><button type="button" data-pw-toggle="pw" aria-label="Hiện hoặc ẩn mật khẩu">Hiện</button></div>
+${error ? `<div class="err">${esc(error)}</div>` : ''}<button class="go" type="submit">Mở</button></form><script src="/js/pwToggle.js"></script></body></html>`);
+}
+/** true = đã chặn (đã trả trang/JSON/lỗi). kind: 'html' | 'json' | 'text'. */
+async function blockedByPassword(req, res, kind) {
+    const a = await store.publicAccess(req.query.u, req.query.d || '', req.cookies, req.query.pt);
+    if (!a.locked) return false;
+    if (kind === 'json') { res.set('Cache-Control', 'no-store').status(401).json({ error: 'Link này cần mật khẩu — hãy tải lại trang và nhập mật khẩu.', code: 'LOCKED' }); return true; }
+    if (kind === 'text') { textErr(res, 401, 'Link này cần mật khẩu — mở lại trang xem và nhập mật khẩu.'); return true; }
+    lockedPage(res, req.query, req.originalUrl || (req.path + '?' + new URLSearchParams(req.query).toString()));
+    return true;
+}
+exports.publicUnlock = async (req, res) => {
+    const b = req.body || {}, q = { u: String(b.u || ''), d: String(b.d || '') }, next = safeNext(b.next);
+    try {
+        keyService.throttle('files-unlock:' + (req.ip || 'x'), 30);
+        const r = await store.unlock(q.u, q.d, b.password);
+        if (!r) return lockedPage(res, q, next, 'Sai mật khẩu.');
+        if (r.token) res.cookie(r.name, r.token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: r.maxAge, path: '/' });
+        res.redirect(303, next);
+    } catch (e) { lockedPage(res, q, next, e.status === 429 ? 'Thử quá nhiều lần — hãy đợi một lúc.' : (e.message || 'Lỗi')); }
+};
+
 /** Khoá + địa chỉ raw của file CÔNG KHAI (không cần đăng nhập). Riêng tư / không có → cùng lỗi 404. Tắt công khai là ngừng cấp khoá. */
 exports.publicKey = async (req, res) => {
     try {
         keyService.throttle('files-pub:' + (req.ip || (req.headers && req.headers['x-forwarded-for']) || 'x'), 300);
+        if (await blockedByPassword(req, res, 'json')) return;
         const info = await store.release(req.query.u, req.query.d || '', req.query.n, { publicOnly: true });
         res.set('Cache-Control', 'no-store').json({ ok: true, ...info });
     } catch (e) {
@@ -195,7 +242,14 @@ exports.publicKey = async (req, res) => {
 exports.publicPageAt = (rawPath) => async (req, res) => {
     try {
         const o = await store.publicInfo(req.query.u, req.query.d || '', req.query.n);
+        if (await blockedByPassword(req, res, 'html')) return;
         const kind = fileKind(o.name);
+        // Trước / Sau: ảnh đi giữa các ảnh, loại khác đi giữa các file không phải ảnh (cùng thư mục, chỉ file công khai)
+        const sib = (await store.publicSiblings(req.query.u, req.query.d || '')).filter((x) => (x.kind === 'image') === (kind === 'image'));
+        const at = sib.findIndex((x) => x.name === o.name);
+        const hrefOf = (x) => (x ? `/f?${pubQuery({ u: req.query.u, d: req.query.d || '', n: x.name })}` : '');
+        const prevHref = at > 0 ? hrefOf(sib[at - 1]) : '', nextHref = at >= 0 && at < sib.length - 1 ? hrefOf(sib[at + 1]) : '';
+        const counter = at >= 0 && sib.length > 1 ? `${at + 1} / ${sib.length}` : '';
         const keyUrl = `/f/key?${pubQuery(req.query)}`, srvView = `${rawPath}?${pubQuery(req.query)}`, srvDl = `${rawPath}?${pubQuery(req.query, { dl: '1' })}`;
         let rawOrigin = '';
         try { if (process.env.MEDIA_RAW_BASE) rawOrigin = ' ' + new URL(process.env.MEDIA_RAW_BASE).origin; } catch (_) { /* bỏ qua */ }
@@ -206,9 +260,9 @@ exports.publicPageAt = (rawPath) => async (req, res) => {
 <title>${esc(o.name)}</title><style>
 body{margin:0;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a}header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 16px;background:#fff;border-bottom:1px solid #e2e8f0}
 h1{font-size:16px;margin:0;flex:1;min-width:10rem;word-break:break-all}.meta{font-size:12px;color:#64748b}.btn{background:#4f46e5;color:#fff;text-decoration:none;padding:8px 14px;border-radius:8px;font-size:14px;border:0;cursor:pointer}.btn.alt{background:#fff;color:#4f46e5;border:1px solid #c7d2fe}.hide{display:none}
-main{padding:16px;text-align:center}img{max-width:100%;height:auto;border-radius:8px}iframe{width:100%;height:calc(100vh - 90px);border:1px solid #e2e8f0;border-radius:8px;background:#fff}.note{color:#475569}#msg.err{color:#b91c1c}
-</style></head><body data-key="${esc(keyUrl)}" data-kind="${esc(kind || '')}" data-size="${esc(o.size)}" data-name="${esc(o.name)}" data-srv-view="${esc(srvView)}" data-srv-dl="${esc(srvDl)}">
-<header><h1>${esc(o.name)}</h1><span class="meta">${esc(fmtSize(o.size))}</span><button id="btnDl" class="btn" type="button">Tải về</button><a id="aSrv" class="btn alt hide" href="${esc(srvDl)}">Tải qua máy chủ</a></header>
+main{padding:16px;text-align:center}img{max-width:100%;max-height:calc(100vh - 110px);width:auto;height:auto;object-fit:contain;border-radius:8px}iframe{width:100%;height:calc(100vh - 90px);border:1px solid #e2e8f0;border-radius:8px;background:#fff}.note{color:#475569}#msg.err{color:#b91c1c}
+</style></head><body data-key="${esc(keyUrl)}" data-kind="${esc(kind || '')}" data-size="${esc(o.size)}" data-name="${esc(o.name)}" data-srv-view="${esc(srvView)}" data-srv-dl="${esc(srvDl)}" data-prev="${esc(prevHref)}" data-next="${esc(nextHref)}">
+<header><h1>${esc(o.name)}</h1><span class="meta">${esc(fmtSize(o.size))}${counter ? ' · ' + esc(counter) : ''}</span>${prevHref ? `<a id="aPrev" class="btn alt" href="${esc(prevHref)}" title="Trước (phím ←)">‹ Trước</a>` : ''}${nextHref ? `<a id="aNext" class="btn alt" href="${esc(nextHref)}" title="Sau (phím →)">Sau ›</a>` : ''}<button id="btnDl" class="btn" type="button">Tải về</button><a id="aSrv" class="btn alt hide" href="${esc(srvDl)}">Tải qua máy chủ</a></header>
 <main><p id="msg" class="note">Đang tải và giải mã ngay trong trình duyệt…</p><div id="view"></div></main>
 <script src="/js/mnhaFiles.js"></script><script src="/js/filePublic.js"></script></body></html>`);
     } catch (e) { textErr(res, e.status || 500, e.status === 404 ? NOT_FOUND : (e.message || 'Lỗi')); }
@@ -221,6 +275,7 @@ main{padding:16px;text-align:center}img{max-width:100%;height:auto;border-radius
 exports.publicFolderPage = async (req, res) => {
     try {
         const f = await store.publicFolder(req.query.u, req.query.d || '');
+        if (await blockedByPassword(req, res, 'html')) return;
         const KIND = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint', office: 'Office', pdf: 'PDF', text: 'Văn bản', image: 'Ảnh' };
         const u = String(req.query.u || '');
         const folderHref = (d) => `/f/d?${new URLSearchParams({ u, d }).toString()}`;
@@ -236,21 +291,23 @@ exports.publicFolderPage = async (req, res) => {
         const body = up + folders + rows;
         res.status(200).set({
             'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
-            'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+            'Content-Security-Policy': `default-src 'none'; script-src 'self'; connect-src 'self' https://raw.githubusercontent.com${(() => { try { return process.env.MEDIA_RAW_BASE ? ' ' + new URL(process.env.MEDIA_RAW_BASE).origin : ''; } catch (_) { return ''; } })()}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`
         }).send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>${esc(f.name)}</title><style>
 body{margin:0;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a}header{padding:14px 16px;background:#fff;border-bottom:1px solid #e2e8f0}h1{font-size:18px;margin:0;word-break:break-all}.meta{font-size:12px;color:#64748b;margin-top:4px}
 .bc{font-size:13px;margin-top:6px;color:#475569;word-break:break-all}.bc a.c{color:#4f46e5;text-decoration:none}.bc a.c:hover{text-decoration:underline}.bc i{font-style:normal;margin:0 4px;color:#94a3b8}
 main{max-width:760px;margin:16px auto;padding:0 16px}ul{list-style:none;margin:0;padding:0;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}li+li{border-top:1px solid #f1f5f9}
-a{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;padding:12px 14px;color:#0f172a;text-decoration:none}li a:hover{background:#f8fafc}.n{word-break:break-all;font-weight:500}.m{font-size:12px;color:#64748b}.empty{padding:24px;text-align:center;color:#64748b}
-</style></head><body><header><h1>${esc(f.name)}</h1><div class="bc">${crumbs.join('<i>/</i>')}</div><div class="meta">${f.folders.length} thư mục · ${f.files.length} file công khai — bấm để mở; file giải mã ngay trong trình duyệt${f.truncated ? ' · (cây lớn — chỉ quét 200 thư mục đầu)' : ''}</div></header>
-<main>${body ? `<ul>${body}</ul>` : '<div class="empty">Thư mục này chưa có file nào công khai.</div>'}</main></body></html>`);
+a{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;padding:12px 14px;color:#0f172a;text-decoration:none}li a:hover{background:#f8fafc}.n{word-break:break-all;font-weight:500}.m{font-size:12px;color:#64748b}.empty{padding:24px;text-align:center;color:#64748b}.tools{max-width:760px;margin:12px auto 0;padding:0 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tools button{background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}.tools button:disabled{opacity:.6}#zmsg{font-size:13px;color:#475569}#zmsg.err{color:#b91c1c}
+</style></head><body data-u="${esc(u)}" data-d="${esc(f.dir)}" data-zip="${esc(f.name)}" data-files="${esc(JSON.stringify(f.files.map((x) => x.name)))}"><header><h1>${esc(f.name)}</h1><div class="bc">${crumbs.join('<i>/</i>')}</div><div class="meta">${f.folders.length} thư mục · ${f.files.length} file công khai — bấm để mở; file giải mã ngay trong trình duyệt${f.truncated ? ' · (cây lớn — chỉ quét 200 thư mục đầu)' : ''}</div></header>
+${f.files.length ? '<div class="tools"><button id="btnZipAll" type="button">⬇ Tải tất cả file (' + f.files.length + ') — .zip</button><span id="zmsg"></span></div>' : ''}
+<main>${body ? `<ul>${body}</ul>` : '<div class="empty">Thư mục này chưa có file nào công khai.</div>'}</main>${f.files.length ? '<script src="/js/mnhaFiles.js"></script><script src="/js/zipKit.js"></script><script src="/js/filePublicFolder.js"></script>' : ''}</body></html>`);
     } catch (e) { textErr(res, e.status || 500, e.status === 404 ? 'Không tìm thấy thư mục hoặc thư mục không được chia sẻ.' : (e.message || 'Lỗi')); }
 };
 
 /** Byte của file công khai: ảnh / PDF xem thẳng (inline), mọi loại khác (và ?dl=1) tải về. */
 exports.publicRaw = async (req, res) => {
     try {
+        if (await blockedByPassword(req, res, 'text')) return;
         const o = await store.openPublic(req.query.u, req.query.d || '', req.query.n);
         const kind = fileKind(o.name);
         const inline = req.query.dl !== '1' && (kind === 'image' || kind === 'pdf');
@@ -266,7 +323,9 @@ exports.publicGate = (raw) => async (req, res) => {
     try {
         const t = await locality.dataTarget(req);
         if (t.mode === 'node') {
-            const extra = req.query.dl === '1' ? { dl: '1' } : undefined;
+            const acc = await store.publicAccess(req.query.u, req.query.d || '', req.cookies, req.query.pt);
+            if (acc.locked) return textErr(res, 401, 'Link này cần mật khẩu — mở lại trang xem và nhập mật khẩu.');
+            const extra = { ...(req.query.dl === '1' ? { dl: '1' } : {}), ...(acc.pt ? { pt: acc.pt } : {}) };
             return res.redirect(302, `${t.base}/api/node/files/public/raw?${pubQuery(req.query, extra)}`);
         }
         if (t.mode === 'none') return textErr(res, 503, 'Hiện chưa có web kết nối nào hoạt động để xem file — hãy thử lại sau.');

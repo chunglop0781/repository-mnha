@@ -34,6 +34,7 @@ const edBtn = { dataset: { edit: 'Ghi chú.txt' }, textContent: 'Xem / Sửa', d
 const saved = [];
 global.window = global;
 global.document = {
+  addEventListener() { },
   getElementById: (id) => els[id] || null,
   querySelectorAll: (sel) => (sel === '[data-dl]' ? [dlBtn] : sel === '[data-edit]' ? [edBtn] : []),
   createElement: () => { const r = el({ innerHTML: '', className: '', style: {}, remove() { }, click() { saved.push(this.download); } }); rows.push(r); return r; },
@@ -75,8 +76,9 @@ const mkFile = (name, buf) => ({ name, size: buf.length, lastModified: 123, slic
   els.upInput.files = [mkFile('Giáo trình.pdf', big), mkFile('lạ.exe', Buffer.alloc(10))];
   els.upInput._h = els.upInput._h || {};
   els.upInput.onchange();
-  for (let i = 0; i < 40 && !global.reloaded; i++) await flush();
-  assert(global.reloaded, 'tải xong thì tải lại trang');
+  for (let i = 0; i < 60 && calls.filter((c) => c === 'POST /code/files/upload/finish').length < 1; i++) await flush();
+  await flush(); await flush(); await new Promise((ok) => setTimeout(ok, 1300));
+  assert(!global.reloaded, 'lô còn file không hợp lệ (.exe) → giữ trang để người dùng đọc lỗi, không tự tải lại');
   assert(calls.includes('POST /code/files/upload/init'));
   assert.strictEqual(calls.filter((c) => c === 'PUT /code/files/upload/part').length, 3, 'chia 3 phần');
   // TRÌNH DUYỆT đã mã hoá: mọi phần gửi đi là MNHAENC1, không chứa bản rõ
@@ -92,6 +94,21 @@ const mkFile = (name, buf) => ({ name, size: buf.length, lastModified: 123, slic
   els.upInput.files = [mkFile('Giáo trình.pdf', big)]; els.upInput.onchange();
   for (let i = 0; i < 40 && !global.reloaded; i++) await flush();
   assert.strictEqual(calls.filter((c) => c === 'PUT /code/files/upload/part').length, 0, 'phần đã có thì bỏ qua');
+
+  // tải HÀNG LOẠT: chỉ tải lại trang SAU KHI cả 3 file đã lên đủ (trước đây lên 1 file là tải lại ngay)
+  {
+    await new Promise((ok) => setTimeout(ok, 1200));       // chờ lần tải lại của lô trước
+    calls = []; global.reloaded = false;
+    let finishesAtReload = -1; global.location.reload = () => { finishesAtReload = calls.filter((c) => c === 'POST /code/files/upload/finish').length; global.reloaded = true; };
+    els.upInput.files = ['a.png', 'b.png', 'c.png'].map((n, k) => mkFile(n, crypto.randomBytes(100 + k)));
+    els.upInput.onchange();
+    for (let i = 0; i < 200 && !global.reloaded; i++) await flush();
+    assert(global.reloaded, 'lô xong thì tải lại trang');
+    assert.strictEqual(finishesAtReload, 3, 'tải lại trang chỉ sau khi đủ 3 file (finish x3), không phải sau file đầu');
+    assert.strictEqual(els.upInput.files.length, 3, 'danh sách đã chọn không bị mất');
+    const names = [...files.keys()].filter((k) => k.endsWith('mnha-files.json')).map((k) => JSON.parse(files.get(k).toString()).files).reduce((a, f) => a.concat(Object.keys(f)), []);
+    ['a.png', 'b.png', 'c.png'].forEach((n) => assert(names.includes(n), 'đã ghi ' + n));
+  }
 
   // tải về: TRÌNH DUYỆT tự giải mã (xin khoá ở /code/files/open → tải thẳng GitHub raw → giải mã → lưu), KHÔNG gọi đường qua máy chủ
   calls = []; saved.length = 0;

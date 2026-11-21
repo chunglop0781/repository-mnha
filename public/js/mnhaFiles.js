@@ -107,6 +107,29 @@
     }
     async function toBlob(info, opt) { return new Blob(await readAll(info, opt), { type: info.mime || 'application/octet-stream' }); }
 
+    // Gói nhiều file thành 1 .zip ngay ở trình duyệt. items: [{ name, ... }]; infoOf(item) → Promise<info của /open hoặc /f/key>; cần MnhaZip (zipKit.js).
+    // Tên trùng được đánh số; 1 file lỗi không làm hỏng cả gói (được ghi vào failed).
+    async function zipAll(items, infoOf, opt) {
+        opt = opt || {};
+        var Z = root.MnhaZip; if (!Z) throw fail('Thiếu zipKit.js', 'NO_ZIP');
+        var entries = [], failed = [], used = {}, i;
+        for (i = 0; i < items.length; i++) {
+            var it = items[i], nm = String(it.name || 'file');
+            if (opt.onFile) opt.onFile(i, items.length, nm);
+            try {
+                var info = await infoOf(it), blob;
+                if (info && info.mode === 'direct') blob = await toBlob(info, {});
+                else if (info && info.blob) blob = info.blob;
+                else throw fail('Không tải thẳng được từ GitHub.', 'NO_RAW');
+                var u8 = new Uint8Array(await blob.arrayBuffer()), out = nm, k = 1;
+                while (used[out.toLowerCase()]) { var dot = nm.lastIndexOf('.'); out = dot > 0 ? nm.slice(0, dot) + ' (' + (++k) + ')' + nm.slice(dot) : nm + ' (' + (++k) + ')'; }
+                used[out.toLowerCase()] = 1; entries.push({ name: out, data: u8 });
+            } catch (e) { failed.push({ name: nm, error: e && e.message ? e.message : String(e) }); }
+        }
+        if (!entries.length) throw fail(failed.length ? 'Không tải được file nào: ' + failed[0].error : 'Thư mục không có file.', 'EMPTY');
+        return { blob: Z.zip(entries), count: entries.length, failed: failed };
+    }
+
     function save(blob, name) {
         var url = URL.createObjectURL(blob), a = document.createElement('a');
         a.href = url; a.download = String(name || 'file'); a.style.display = 'none';
@@ -114,7 +137,7 @@
         setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 4000);
     }
 
-    var api = { supported: supported, readAll: readAll, toBlob: toBlob, save: save, decryptPart: decryptPart, importKey: importKey, importEncryptKey: importEncryptKey, encryptPart: encryptPart, b64ToBytes: b64ToBytes };
+    var api = { supported: supported, readAll: readAll, toBlob: toBlob, zipAll: zipAll, save: save, decryptPart: decryptPart, importKey: importKey, importEncryptKey: importEncryptKey, encryptPart: encryptPart, b64ToBytes: b64ToBytes };
     root.MnhaFiles = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : this);

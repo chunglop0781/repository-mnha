@@ -158,7 +158,7 @@ const req = (o = {}) => ({ user: { _id: 'u9', status: 'approved', role: 'student
   r = mkRes(); await ctl.visibility(req({ body: { dir: 'cong-khai', name: 'tai lieu.pdf', public: false } }), r);
   r = mkRes(); await ctl.publicFolderPage({ query: { u: 'u9', d: 'cong-khai' }, headers: {} }, r);
   assert.strictEqual(r.code, 200); assert(/bien ban\.docx/.test(r.body)); assert(!/tai lieu\.pdf/.test(r.body), 'file riêng tư không hiện'); assert(!/anh\.png/.test(r.body));
-  assert(/href="\/f\?u=u9&amp;d=cong-khai&amp;n=bien\+ban\.docx"/.test(r.body), 'link tới trang xem từng file'); assert(/default-src 'none'/.test(r.headers['Content-Security-Policy'])); assert(!/<script/.test(r.body));
+  assert(/href="\/f\?u=u9&amp;d=cong-khai&amp;n=bien\+ban\.docx"/.test(r.body), 'link tới trang xem từng file'); assert(/default-src 'none'/.test(r.headers['Content-Security-Policy'])); assert(!/<script[^>]*>[^<]/.test(r.body), 'không có script nội tuyến'); assert(/id="btnZipAll"/.test(r.body), 'có nút tải tất cả (.zip)');
   r = mkRes(); await ctl.page(req({ method: 'GET', query: { dir: 'cong-khai' }, headers: { host: 'localhost' } }), r); assert.strictEqual(r.data.shared, true); assert.strictEqual(r.data.limits.textEdit, FILES.TEXT_EDIT_MAX);
   r = mkRes(); await ctl.shareFolder(req({ body: { dir: 'cong-khai', shared: false } }), r);
   r = mkRes(); await ctl.publicFolderPage({ query: { u: 'u9', d: 'cong-khai' }, headers: {} }, r); assert.strictEqual(r.code, 404, 'thôi chia sẻ → 404');

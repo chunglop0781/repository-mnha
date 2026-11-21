@@ -132,6 +132,7 @@ async function pool(items, size, fn) {
 // ---------------------------------------------------------------- sổ file (mnha-files.json)
 const pubCache = new Map();                       // trang thư mục công khai: uid|dir → { at, v } (giữ ngắn để đỡ gọi GitHub; mọi thay đổi sổ file xoá hết)
 const PUB_TTL_MS = 15 * 1000;
+const passCache = new Map();                      // uid|dir → { at, v } mật khẩu hiệu lực (xoá khi sổ file đổi)
 async function readManifest(uid, segs) {
     const m = await gh.readJsonFile(manifestPath(uid, segs)).catch(() => null);
     const out = m && typeof m === 'object' ? m : {};
@@ -151,12 +152,12 @@ async function mutateManifest(uid, segs, fn, message) {
         const next = (await fn(m)) || m;
         next.updatedAt = new Date().toISOString();
         try {
-            if (!Object.keys(next.files).length && next.shared !== true && cur) {
-                await gh.commitFiles([{ path: p, remove: true }], message);      // hết file và thư mục không chia sẻ → bỏ luôn sổ
-            } else if (Object.keys(next.files).length || next.shared === true) {
+            if (!Object.keys(next.files).length && next.shared !== true && !next.pass && cur) {
+                await gh.commitFiles([{ path: p, remove: true }], message);      // hết file, không chia sẻ, không mật khẩu → bỏ luôn sổ
+            } else if (Object.keys(next.files).length || next.shared === true || next.pass) {
                 await gh.writeJsonFileIfSha(p, next, cur ? cur.sha : null, message);
             }
-            pubCache.clear();
+            pubCache.clear(); passCache.clear();
             return next;
         } catch (e) {
             last = e;
@@ -227,7 +228,7 @@ async function list(uid, dir) {
         storage: isCf(e.storage) ? 'r2' : 'github',
         createdAt: e.createdAt || null, updatedAt: e.updatedAt || null
     })).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
-    return { dir: segs.join('/'), folders: [...folders].sort(), files, shared: m.shared === true, repos: folderRepos(tree, uid, segs) };
+    return { dir: segs.join('/'), folders: [...folders].sort(), files, shared: m.shared === true, hasPass: !!(m.pass && m.pass.h), repos: folderRepos(tree, uid, segs) };
 }
 
 async function mkdir(uid, dir, name) {
@@ -400,10 +401,18 @@ async function finish(uid, b) {
         });
         for (let i = 0; i < n; i++) parts.push({ i, size: plainOfPart(size, i, n) });
     } else {
-        const tree = await gh.getRepoTree({ force: true });
+        // GitHub đôi khi chưa kịp hiện commit vừa tạo (nhất là khi tải hàng loạt, file nối file) → đọc lại cây vài lần trước khi báo thiếu phần
+        let tree = null;
+        for (let attempt = 0; attempt < 5; attempt++) {
+            tree = await gh.getRepoTree({ force: true });
+            let all = true;
+            for (let i = 0; i < n; i++) if (!tree.files.has(partPath(uid, segs, String(b.uploadId), i))) { all = false; break; }
+            if (all) break;
+            await new Promise((ok) => setTimeout(ok, 600 * (attempt + 1)));
+        }
         for (let i = 0; i < n; i++) {
             const p = partPath(uid, segs, String(b.uploadId), i);
-            if (!tree.files.has(p)) throw bad(`Thiếu phần ${i + 1}/${n} — hãy tải lên lại (sẽ làm tiếp từ phần còn thiếu).`);
+            if (!tree.files.has(p)) throw bad(`Thiếu phần ${i + 1}/${n} — hãy tải lên lại (sẽ làm tiếp từ phần còn thiếu).`, 409);
             let repo = null;
             try { const r = await gh.repoFor(p); repo = r && r.repo ? r.repo : null; } catch (_) { /* bỏ qua */ }
             parts.push({ i, size: plainOfPart(size, i, n), ...(repo ? { repo } : {}) });
@@ -625,6 +634,91 @@ async function release(uid, dir, name, { publicOnly = false } = {}) {
     return { mode: 'direct', ...base, parts, key: mc.unwrapBytes(e.key, 32).toString('base64') };      // mở khoá bản mã hoá trong json — chỉ sau khi đã kiểm quyền ở trên
 }
 
+
+// ---------------------------------------------------------------- MẬT KHẨU chia sẻ công khai
+// Mặc định công khai KHÔNG có mật khẩu. Chủ file có thể đặt / ĐỔI / xoá mật khẩu của một thư mục bất cứ lúc nào (kể cả khi quên mật khẩu cũ — chủ đã đăng nhập
+// nên không cần mật khẩu cũ). Mật khẩu áp cho file công khai trong thư mục đó và mọi thư mục con (thư mục con có mật khẩu riêng thì dùng cái riêng).
+// Lưu trong mnha-files.json: pass = { s: salt, h: scrypt, v: mã phiên bản }. Đổi / xoá mật khẩu → `v` đổi → mọi phiếu đã mở khoá trước đó mất hiệu lực.
+const PASS_MIN = 4, PASS_MAX = 64, ACCESS_TTL_MS = 12 * 3600 * 1000;
+const scryptHex = (pw, salt) => crypto.scryptSync(String(pw), Buffer.from(salt, 'hex'), 32).toString('hex');
+async function setFolderPassword(uid, dir, password) {
+    const segs = cleanDir(dir);
+    const remove = password == null || password === '';
+    if (!remove) {
+        const pw = String(password);
+        if (pw.length < PASS_MIN || pw.length > PASS_MAX) throw bad(`Mật khẩu dài ${PASS_MIN}–${PASS_MAX} ký tự.`);
+    }
+    await mutateManifest(uid, segs, (m) => {
+        if (remove) delete m.pass;
+        else { const salt = crypto.randomBytes(16).toString('hex'); m.pass = { s: salt, h: scryptHex(password, salt), v: crypto.randomBytes(6).toString('hex') }; }
+        return m;
+    }, `files: ${remove ? 'xoá' : 'đặt'} mật khẩu thư mục ${segs.join('/') || '(gốc)'}`);
+    return { ok: true, hasPass: !remove };
+}
+/** Mật khẩu hiệu lực của thư mục: gần nhất trong chuỗi con → cha → gốc. → { at: 'thư/mục', pass } hoặc null (không có mật khẩu). */
+async function effectivePass(uid, segs) {
+    const id = String(uid || ''), ck = id + '|' + segs.join('/'), hit = passCache.get(ck);
+    if (hit && Date.now() - hit.at < PUB_TTL_MS) return hit.v;
+    let v = null;
+    for (let k = segs.length; k >= 0; k--) {
+        const m = await readManifest(id, segs.slice(0, k));
+        if (m.pass && m.pass.h && m.pass.s) { v = { at: segs.slice(0, k).join('/'), pass: m.pass }; break; }
+    }
+    passCache.set(ck, { at: Date.now(), v });
+    if (passCache.size > 300) passCache.delete(passCache.keys().next().value);
+    return v;
+}
+const accessSig = (body) => crypto.createHmac('sha256', mc.signKey()).update('files-pw|' + body).digest('base64url');
+/** Tên cookie mở khoá cho (người dùng, thư mục có mật khẩu). */
+const accessCookieName = (uid, at) => 'fpw_' + crypto.createHash('sha1').update(String(uid) + '|' + at).digest('hex').slice(0, 12);
+function signAccess(uid, at, v, ttlMs = ACCESS_TTL_MS) {
+    const body = Buffer.from(JSON.stringify({ u: String(uid), a: at, v, e: Date.now() + ttlMs })).toString('base64url');
+    return body + '.' + accessSig(body);
+}
+function verifyAccessToken(tok, uid, at, v) {
+    const s = String(tok || ''), i = s.indexOf('.');
+    if (i < 1 || s.length > 600) return false;
+    const body = s.slice(0, i), sig = s.slice(i + 1), want = accessSig(body);
+    if (sig.length !== want.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return false;
+    let p; try { p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch (_) { return false; }
+    return !!p && p.u === String(uid) && p.a === at && p.v === v && p.e > Date.now();
+}
+/**
+ * Kiểm quyền xem công khai của 1 thư mục. cookies = req.cookies (hoặc { pt } khi chuyển sang web kết nối).
+ * → { locked:false } nếu không có mật khẩu / đã mở khoá; { locked:true, at } nếu cần nhập mật khẩu.
+ */
+async function publicAccess(uid, dir, cookies, ptToken) {
+    const id = String(uid || '');
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) return { locked: false };      // uid sai → để các hàm 404 xử lý như cũ
+    let segs; try { segs = cleanDir(dir); } catch (_) { return { locked: false }; }
+    const ep = await effectivePass(id, segs);
+    if (!ep) return { locked: false };
+    const tok = ptToken || (cookies && cookies[accessCookieName(id, ep.at)]);
+    if (tok && verifyAccessToken(tok, id, ep.at, ep.pass.v)) return { locked: false, at: ep.at, pt: tok };
+    return { locked: true, at: ep.at };
+}
+/** Đúng mật khẩu → trả phiếu (đặt vào cookie); sai → null. */
+async function unlock(uid, dir, password) {
+    const id = String(uid || '');
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) return null;
+    let segs; try { segs = cleanDir(dir); } catch (_) { return null; }
+    const ep = await effectivePass(id, segs);
+    if (!ep) return { token: null, at: null, name: null };                        // không có mật khẩu: không cần phiếu
+    const got = Buffer.from(scryptHex(String(password || '').slice(0, PASS_MAX), ep.pass.s), 'hex'), want = Buffer.from(ep.pass.h, 'hex');
+    if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return null;
+    return { token: signAccess(id, ep.at, ep.pass.v), at: ep.at, name: accessCookieName(id, ep.at), maxAge: ACCESS_TTL_MS };
+}
+
+/** Các file CÔNG KHAI cùng thư mục (để nút Trước / Sau khi xem file) — sắp theo tên, giống trang danh sách. */
+async function publicSiblings(uid, dir) {
+    const id = String(uid || '');
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) return [];
+    let segs; try { segs = cleanDir(dir); } catch (_) { return []; }
+    const m = await readManifest(id, segs);
+    return Object.values(m.files).filter((e) => e && e.name && e.public === true && e.state !== 'uploading' && e.id)
+        .map((e) => ({ name: e.name, kind: e.kind || fileKind(e.name), size: e.size })).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+}
+
 // ---------------------------------------------------------------- tìm kiếm (mọi thư mục)
 const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
 async function search(uid, query) {
@@ -710,5 +804,6 @@ async function open(uid, dir, name) {
 module.exports = {
     cleanDir, cleanName, manifestPath, partPath, uploadIdFor, partsCount, mimeOf,
     list, mkdir, init, putPart, commitBlobs, finish, remove, rename, removeFolder, signDownload, verifyDownload, open, readManifest,
-    setVisibility, openPublic, search, fold, release, publicInfo, saltFor, setFolderShared, publicFolder
+    setVisibility, openPublic, search, fold, release, publicInfo, saltFor, setFolderShared, publicFolder,
+    setFolderPassword, publicAccess, unlock, publicSiblings, accessCookieName, signAccess, effectivePass
 };

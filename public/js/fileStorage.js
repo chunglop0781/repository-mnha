@@ -132,6 +132,92 @@
     if (ba) ba.onclick = bulk(true);
     if (bp) bp.onclick = bulk(false);
 
+    // ---------------------------------------------------------------- lấy nội dung file đã giải mã (dùng cho Xem + Tải tất cả)
+    function fetchInfo(d, name) {       // → info { mode:'direct', ... } hoặc { blob } khi phải đi qua máy chủ
+        return post('/code/files/open', { dir: d, name: name }).then(function (info) {
+            var viaServer = function () {
+                return post('/code/files/download-token', { dir: d, name: name }).then(function (j) {
+                    return fetch(j.url).then(function (r) { if (!r.ok) throw new Error('Không đọc được file (HTTP ' + r.status + ').'); return r.blob(); });
+                }).then(function (bl) { return { blob: bl, name: name }; });
+            };
+            if (info.mode !== 'direct' || !window.MnhaFiles || !window.MnhaFiles.supported()) return viaServer();
+            return Promise.resolve(info);
+        });
+    }
+    function fetchBlob(d, name) {
+        return fetchInfo(d, name).then(function (info) {
+            if (info.blob) return info.blob;
+            return window.MnhaFiles.toBlob(info).catch(function (e) {
+                if (e.code === 'RAW' || e.code === 'NO_RAW' || e.code === 'NO_CRYPTO') return post('/code/files/download-token', { dir: d, name: name }).then(function (j) { return fetch(j.url).then(function (r) { if (!r.ok) throw new Error('Không đọc được file (HTTP ' + r.status + ').'); return r.blob(); }); });
+                throw e;
+            });
+        });
+    }
+
+    // ---------------------------------------------------------------- tải TẤT CẢ file của thư mục (.zip, gói ngay ở trình duyệt)
+    var bz = document.getElementById('btnZipAll');
+    if (bz) bz.onclick = function () {
+        var names = (P.files || []).map(function (f) { return { name: f.name }; });
+        if (!names.length) { alert('Thư mục này chưa có file.'); return; }
+        if (!window.MnhaFiles || !window.MnhaFiles.supported() || !window.MnhaZip) { alert('Trình duyệt không hỗ trợ giải mã (cần https:// hoặc localhost).'); return; }
+        var old = bz.textContent; bz.disabled = true;
+        window.MnhaFiles.zipAll(names, function (it) { return fetchInfo(dir, it.name); }, { onFile: function (i, n, nm) { bz.textContent = 'Đang tải ' + (i + 1) + '/' + n + '…'; say('Đang tải & giải mã: ' + nm); } })
+            .then(function (r) {
+                window.MnhaZip.save(r.blob, (dir ? dir.split('/').pop() : 'luu-tru-file') + '.zip');
+                say(r.failed.length ? 'Đã gói ' + r.count + ' file; ' + r.failed.length + ' file lỗi (' + r.failed[0].name + ': ' + r.failed[0].error + ').' : 'Xong — đã gói ' + r.count + ' file.');
+            })
+            .catch(function (e) { alert(e.message); })
+            .then(function () { bz.textContent = old; bz.disabled = false; });
+    };
+
+    // ---------------------------------------------------------------- XEM file ngay trên web (ảnh, PDF) + Trước / Sau bằng nút hoặc phím ← →
+    var vw = { box: document.getElementById('vwBox'), title: document.getElementById('vwTitle'), body: document.getElementById('vwBody'), count: document.getElementById('vwCount'), prev: document.getElementById('vwPrev'), next: document.getElementById('vwNext'), close: document.getElementById('vwClose'), dl: document.getElementById('vwDl') };
+    var vwList = [], vwIdx = -1, vwUrl = null, vwSeq = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function (b) { vwList.push({ name: b.dataset.view, kind: b.dataset.kind }); });
+    function vwStop() { if (vwUrl) { try { URL.revokeObjectURL(vwUrl); } catch (_) { } vwUrl = null; } }
+    function vwShow(i) {
+        if (!vw.box || i < 0 || i >= vwList.length) return;
+        var it = vwList[i], seq = ++vwSeq; vwIdx = i; vwStop();
+        vw.box.classList.remove('hidden'); vw.title.textContent = it.name; vw.count.textContent = vwList.length > 1 ? (i + 1) + ' / ' + vwList.length : '';
+        vw.prev.disabled = i <= 0; vw.next.disabled = i >= vwList.length - 1;
+        vw.body.innerHTML = '<div class="text-sm text-gray-500">Đang tải & giải mã…</div>';
+        fetchBlob(dir, it.name).then(function (bl) {
+            if (seq !== vwSeq) return;
+            vwUrl = URL.createObjectURL(bl);
+            vw.body.innerHTML = '';
+            var el = document.createElement(it.kind === 'image' ? 'img' : 'iframe');
+            el.src = vwUrl; if (it.kind === 'image') { el.alt = it.name; el.className = 'max-w-full max-h-[78vh] object-contain mx-auto'; } else { el.title = it.name; el.className = 'w-full h-[78vh] border-0 bg-white'; }
+            vw.body.appendChild(el);
+        }).catch(function (e) { if (seq === vwSeq) vw.body.innerHTML = '<div class="text-sm text-red-600">' + esc(e.message) + '</div>'; });
+    }
+    function vwHide() { if (!vw.box) return; vwSeq++; vwStop(); vw.body.innerHTML = ''; vw.box.classList.add('hidden'); vwIdx = -1; }
+    Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function (b, i) { b.onclick = function () { vwShow(i); }; });
+    if (vw.prev) vw.prev.onclick = function () { vwShow(vwIdx - 1); };
+    if (vw.next) vw.next.onclick = function () { vwShow(vwIdx + 1); };
+    if (vw.close) vw.close.onclick = vwHide;
+    if (vw.dl) vw.dl.onclick = function () { if (vwIdx >= 0) download(vw.dl, dir, vwList[vwIdx].name); };
+    document.addEventListener('keydown', function (e) {
+        if (vwIdx < 0 || e.altKey || e.ctrlKey || e.metaKey) return;
+        if (e.key === 'ArrowLeft') { e.preventDefault(); vwShow(vwIdx - 1); } else if (e.key === 'ArrowRight') { e.preventDefault(); vwShow(vwIdx + 1); } else if (e.key === 'Escape') vwHide();
+    });
+
+    // ---------------------------------------------------------------- mật khẩu chia sẻ (băm một chiều ở máy chủ — không xem lại được, chỉ đặt lại)
+    var pw = { box: document.getElementById('pwBox'), input: document.getElementById('pwInput'), msg: document.getElementById('pwMsg'), save: document.getElementById('pwSave'), cancel: document.getElementById('pwCancel') };
+    var bpw = document.getElementById('btnPass'), bpr = document.getElementById('btnPassRemove');
+    function pwSay(t, err) { if (pw.msg) { pw.msg.textContent = t; pw.msg.className = 'text-xs ' + (err ? 'text-red-600' : 'text-gray-500'); } }
+    if (bpw && pw.box) bpw.onclick = function () { pw.input.value = ''; pw.input.type = 'password'; pwSay(''); pw.box.classList.remove('hidden'); pw.input.focus(); };
+    if (pw.cancel) pw.cancel.onclick = function () { pw.box.classList.add('hidden'); pw.input.value = ''; };
+    if (pw.save) pw.save.onclick = function () {
+        var v = pw.input.value;
+        if (v.length < 4) { pwSay('Mật khẩu tối thiểu 4 ký tự.', true); return; }
+        pw.save.disabled = true; pwSay('Đang lưu…');
+        post('/code/files/folder/password', { dir: dir, password: v }).then(function () { location.reload(); }).catch(function (e) { pw.save.disabled = false; pwSay(e.message, true); });
+    };
+    if (bpr) bpr.onclick = function () {
+        if (!confirm('Xoá mật khẩu? Link chia sẻ sẽ mở được mà không cần mật khẩu.')) return;
+        post('/code/files/folder/password', { dir: dir, remove: true }).then(function () { location.reload(); }).catch(function (e) { alert(e.message); });
+    };
+
     // ---------------------------------------------------------------- tìm kiếm
     function fold(t) { return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim(); }
     var box = document.getElementById('fsSearch'), res = document.getElementById('fsResults'), btnAll = document.getElementById('btnSearchAll');
@@ -375,7 +461,7 @@
         });
     }
 
-    var queue = [], running = false, okCount = 0;
+    var queue = [], running = false, okCount = 0, badCount = 0, failedItems = [];
     function addRow(file) {
         var li = document.createElement('div');
         li.className = 'rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm';
@@ -384,28 +470,52 @@
         list.appendChild(li);
         return { bar: li.querySelector('.bar'), msg: li.querySelector('.msg'), el: li };
     }
+    function rowErr(row, text) { row.bar.className = 'bar h-full bg-red-400'; row.msg.className = 'msg mt-1 text-xs text-red-600'; row.msg.textContent = text; }
+    // Lỗi tạm thời (mạng, 5xx, GitHub chưa kịp cập nhật → 409) thì thử lại tối đa 2 lần; lỗi do dữ liệu (đuôi, kích thước…) dừng ngay.
+    function attempt(it, n) {
+        it.row.bar.className = 'bar h-full bg-indigo-500';
+        it.row.msg.className = 'msg mt-1 text-xs text-gray-500';
+        return upload(it.file, function (t, fr) { it.row.msg.textContent = t; it.row.bar.style.width = Math.round((fr || 0) * 100) + '%'; })
+            .then(function (r) { okCount++; it.row.bar.style.width = '100%'; it.row.bar.className = 'bar h-full bg-emerald-500'; it.row.msg.textContent = 'Xong — ' + r.parts + ' phần' + (r.repos && r.repos.length ? ' · repo: ' + r.repos.join(' → ') : ''); })
+            .catch(function (e) {
+                var retriable = !e.cancelled && n < 2 && (!isDataError(e) || e.status === 409);
+                if (retriable) { it.row.msg.textContent = 'Lỗi tạm thời (' + e.message + ') — thử lại lần ' + (n + 2) + '…'; return sleep(1500 * (n + 1)).then(function () { return attempt(it, n + 1); }); }
+                rowErr(it.row, e.message); failedItems.push(it);
+            });
+    }
+    // Xong CẢ LÔ mới tải lại trang; còn file lỗi thì giữ nguyên trang để đọc lỗi, có nút "Thử lại file lỗi".
+    function endBatch() {
+        var ok = okCount, bad = badCount; okCount = 0; badCount = 0;          // số đếm tính riêng từng lô
+        if (!failedItems.length && !bad) { if (ok) setTimeout(function () { location.reload(); }, 900); return; }
+        var box = document.createElement('div');
+        box.className = 'rounded-xl border border-amber-300 bg-amber-50 text-amber-900 text-sm px-3 py-2 flex flex-wrap items-center gap-3';
+        box.innerHTML = '<span class="flex-1">Đã tải xong ' + okCount + ' file' + (failedItems.length ? ', ' + failedItems.length + ' file lỗi' : '') + (badCount ? ', ' + badCount + ' file không hợp lệ' : '') + '. Trang chưa tải lại để bạn xem lỗi.</span>' +
+            (failedItems.length ? '<button type="button" class="rt px-3 py-1 rounded-lg bg-white border border-amber-400 text-xs font-medium">Thử lại file lỗi</button>' : '') +
+            '<button type="button" class="rl px-3 py-1 rounded-lg bg-white border border-amber-400 text-xs font-medium">Tải lại trang</button>';
+        list.appendChild(box);
+        var rl = box.querySelector('.rl'), rt = box.querySelector('.rt');
+        if (rl) rl.onclick = function () { location.reload(); };
+        if (rt) rt.onclick = function () { var again = failedItems.splice(0, failedItems.length); if (box.remove) box.remove(); again.forEach(function (it) { it.row.msg.textContent = 'Đang chờ…'; queue.push(it); }); runQueue(); };
+    }
     function runQueue() {
         if (running) return; running = true;
         (function next() {
             var it = queue.shift();
-            if (!it) { running = false; if (okCount) setTimeout(function () { location.reload(); }, 900); return; }
-            upload(it.file, function (t, fr) { it.row.msg.textContent = t; it.row.bar.style.width = Math.round((fr || 0) * 100) + '%'; })
-                .then(function (r) { okCount++; it.row.bar.style.width = '100%'; it.row.bar.className = 'bar h-full bg-emerald-500'; it.row.msg.textContent = 'Xong — ' + r.parts + ' phần' + (r.repos && r.repos.length ? ' · repo: ' + r.repos.join(' → ') : ''); })
-                .catch(function (e) { it.row.bar.className = 'bar h-full bg-red-400'; it.row.msg.className = 'msg mt-1 text-xs text-red-600'; it.row.msg.textContent = e.message; })
-                .then(next);
+            if (!it) { running = false; endBatch(); return; }
+            attempt(it, 0).then(function () { return queue.length ? sleep(500) : null; }).then(next, next);     // nghỉ nửa giây giữa các file để GitHub kịp cập nhật
         })();
     }
     function addFiles(files) {
-        Array.prototype.forEach.call(files, function (f) {
+        Array.prototype.slice.call(files).forEach(function (f) {
             var row = addRow(f), e = extOf(f.name);
-            if (allowed.indexOf(e) < 0) { row.bar.className = 'bar h-full bg-red-400'; row.msg.className = 'msg mt-1 text-xs text-red-600'; row.msg.textContent = 'Chỉ nhận file Word, Excel, PowerPoint (và file Office khác), PDF, ảnh — không nhận ".' + (e || '?') + '".'; return; }
-            if (!f.size) { row.msg.className = 'msg mt-1 text-xs text-red-600'; row.msg.textContent = 'File rỗng.'; return; }
-            if (f.size > P.limits.maxFile) { row.msg.className = 'msg mt-1 text-xs text-red-600'; row.msg.textContent = 'File quá lớn (tối đa ' + size(P.limits.maxFile) + ').'; return; }
+            if (allowed.indexOf(e) < 0) { badCount++; rowErr(row, 'Chỉ nhận file Word, Excel, PowerPoint (và file Office khác), PDF, ảnh — không nhận ".' + (e || '?') + '".'); return; }
+            if (!f.size) { badCount++; rowErr(row, 'File rỗng.'); return; }
+            if (f.size > P.limits.maxFile) { badCount++; rowErr(row, 'File quá lớn (tối đa ' + size(P.limits.maxFile) + ').'); return; }
             queue.push({ file: f, row: row });
         });
         runQueue();
     }
-    input.onchange = function () { addFiles(input.files); input.value = ''; };
+    input.onchange = function () { var picked = Array.prototype.slice.call(input.files || []); input.value = ''; addFiles(picked); };
     ['dragenter', 'dragover'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('bg-indigo-50'); }); });
     ['dragleave', 'drop'].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('bg-indigo-50'); }); });
     drop.addEventListener('drop', function (e) { if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files); });

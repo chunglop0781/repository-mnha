@@ -74,6 +74,7 @@ app.get('/f', filesCtl.publicGate(false));
 app.get('/f/d', filesCtl.publicFolderPage);
 app.get('/f/key', filesCtl.publicKey);
 app.get('/f/raw', filesCtl.publicGate(true));
+app.post('/f/unlock', filesCtl.publicUnlock);        // nhập mật khẩu link chia sẻ → cookie mở khoá 12 giờ
 
 // Session CHỈ đọc/ghi ở GitHub (cookies/index.json, mã hoá AES-256-GCM) — KHÔNG còn ghi session vào MongoDB.
 // Thiếu GITHUB_* hoặc SESSION_ENC_KEY thì dừng ngay (không có đường lùi về Mongo).

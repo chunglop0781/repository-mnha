@@ -26,6 +26,11 @@ block content
             if shared
                 a(href=folderHref, target="_blank", rel="noopener", class="px-3 py-2 text-sm text-emerald-700 hover:underline") Mở trang thư mục
                 button(type="button", id="btnCopyFolder", data-copy=folderHref, class="px-3 py-2 text-sm text-emerald-700 hover:underline") Sao chép link thư mục
+            if files.length
+                button(id="btnZipAll", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700", title="Giải mã và gói mọi file của thư mục này thành 1 file .zip ngay trong trình duyệt") ⬇ Tải tất cả (#{files.length} file, .zip)
+            button(id="btnPass", class="px-4 py-2 rounded-lg bg-white border text-sm font-medium " + (hasPass ? "border-amber-300 text-amber-700 hover:bg-amber-50" : "border-gray-300 text-gray-700 hover:bg-gray-50"), title="Khoá link chia sẻ bằng mật khẩu. Quên mật khẩu cũ thì cứ đặt mật khẩu mới để thay.") #{hasPass ? "🔒 Đổi mật khẩu chia sẻ" : "🔓 Đặt mật khẩu chia sẻ"}
+            if hasPass
+                button(id="btnPassRemove", class="px-3 py-2 text-sm text-red-600 hover:underline") Xoá mật khẩu
             if dir
                 button(id="btnDelFolder", class="px-4 py-2 rounded-lg bg-white border border-red-300 text-red-600 text-sm font-medium hover:bg-red-50") Xoá thư mục này
         if repos && repos.length
@@ -37,6 +42,7 @@ block content
                     div(class="mt-1 flex items-center gap-2 pl-6")
                         a(href=g.url, target="_blank", rel="noopener noreferrer", class="flex-1 min-w-0 truncate text-indigo-600 hover:underline font-mono text-xs", title=g.url)= g.repo + " — " + g.files + " file"
                         button(type="button", class="px-2 py-0.5 rounded-lg bg-gray-100 text-xs font-medium hover:bg-gray-200 whitespace-nowrap", data-copyabs=g.url) Sao chép
+        p(class="mt-2 text-xs text-gray-500") Chia sẻ công khai <b>mặc định không có mật khẩu</b>. Bấm <b>Đặt mật khẩu chia sẻ</b> để khoá link (áp cho file công khai của thư mục này và thư mục con); mật khẩu được <b>băm một chiều</b> nên không ai xem lại được — quên thì đặt mật khẩu mới để thay. #{hasPass ? "Thư mục này đang CÓ mật khẩu." : "Thư mục này chưa đặt mật khẩu."}
         p(class="mt-2 text-xs text-gray-500") Mặc định mọi file là <b>riêng tư</b> (chỉ bạn xem). Bấm nhãn trạng thái của từng file để bật <b>công khai</b>, rồi gửi link cho người khác — ai có link đều xem được (ảnh, PDF xem thẳng; Word/Excel/PowerPoint tải về).
 
         //- tìm kiếm
@@ -78,6 +84,8 @@ block content
                                 a(href=g.url, target="_blank", rel="noopener noreferrer", class="ml-1 text-indigo-600 hover:underline", title="Mở thư mục chứa các phần mã hoá trên GitHub")= g.repo + (f.parts > 1 ? " (" + g.parts + " phần)" : "")
                     if f.kind === "text" && f.size <= limits.textEdit
                         button(type="button", class="text-xs text-indigo-600 hover:underline", data-edit=f.name)= canUpload ? "Xem / Sửa" : "Xem"
+                    if f.kind === "image" || f.kind === "pdf"
+                        button(type="button", class="text-xs text-indigo-600 hover:underline", data-view=f.name, data-kind=f.kind) Xem
                     button(type="button", class="text-xs text-indigo-600 hover:underline", data-dl=f.name) Tải
                     button(type="button", class="text-xs text-gray-600 hover:underline", data-ren=f.name) Đổi tên
                     button(type="button", class="text-xs text-red-500 hover:underline", data-del=f.name) Xoá
@@ -110,6 +118,31 @@ block content
             div(class="flex items-center gap-3 px-4 py-3 border-t border-gray-100")
                 span(id="edMsg", class="flex-1 text-xs text-gray-500")
                 button(type="button", id="edSave", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") Lưu
+    //- Xem ảnh / PDF ngay trên web, Trước / Sau bằng nút hoặc phím ← →
+    div(id="vwBox", class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-3")
+        div(class="bg-white rounded-2xl shadow-xl w-full max-w-5xl flex flex-col max-h-[95vh]")
+            div(class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-100")
+                button(type="button", id="vwPrev", class="px-3 py-1.5 rounded-lg border border-gray-300 text-sm disabled:opacity-40", title="Trước (phím ←)") ‹ Trước
+                button(type="button", id="vwNext", class="px-3 py-1.5 rounded-lg border border-gray-300 text-sm disabled:opacity-40", title="Sau (phím →)") Sau ›
+                span(id="vwCount", class="text-xs text-gray-500")
+                h3(id="vwTitle", class="flex-1 min-w-[8rem] font-semibold text-gray-900 break-all text-sm")
+                button(type="button", id="vwDl", class="text-sm text-indigo-600 hover:underline") Tải
+                button(type="button", id="vwClose", class="text-sm text-gray-500 hover:text-gray-800") Đóng (Esc)
+            div(id="vwBody", class="flex-1 overflow-auto p-3 text-center")
+    //- Đặt / đổi mật khẩu chia sẻ
+    div(id="pwBox", class="hidden fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4")
+        div(class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5")
+            h3(class="font-semibold text-gray-900") Mật khẩu chia sẻ thư mục
+            p(class="mt-1 text-xs text-gray-500") 4–64 ký tự. Đặt mới sẽ THAY mật khẩu cũ (không cần nhớ cũ) và khoá lại mọi người đã mở link trước đó.
+            div(class="mt-3 flex gap-2")
+                input(id="pwInput", type="password", maxlength="64", autocomplete="new-password", placeholder="Mật khẩu mới", class="flex-1 min-w-0 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300")
+                button(type="button", data-pw-toggle="pwInput", class="px-3 py-2 rounded-lg border border-gray-300 text-sm") Hiện
+            div(id="pwMsg", class="mt-2 text-xs text-gray-500")
+            div(class="mt-3 flex justify-end gap-2")
+                button(type="button", id="pwCancel", class="px-3 py-2 text-sm text-gray-600") Huỷ
+                button(type="button", id="pwSave", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700") Lưu mật khẩu
     script#payload(type="application/json")!= payloadJson
     script(src="/js/mnhaFiles.js")
+    script(src="/js/zipKit.js")
+    script(src="/js/pwToggle.js")
     script(src="/js/fileStorage.js")

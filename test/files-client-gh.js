@@ -40,6 +40,7 @@ const edBtn = { dataset: { edit: 'Ghi chú.txt' }, textContent: 'Xem / Sửa', d
 const saved = [];
 global.window = global;
 global.document = {
+  addEventListener() { },
   getElementById: (id) => els[id] || null,
   querySelectorAll: (sel) => (sel === '[data-dl]' ? [dlBtn] : sel === '[data-edit]' ? [edBtn] : []),
   createElement: () => { const r = el({ innerHTML: '', className: '', style: {}, remove() { }, click() { saved.push(this.download); } }); rows.push(r); return r; },

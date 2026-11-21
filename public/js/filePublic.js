@@ -15,8 +15,9 @@
     }
     function getInfo() {
         if (info) return Promise.resolve(info);
-        return fetch(b.dataset.key, { credentials: 'omit', cache: 'no-store' }).then(function (r) {
+        return fetch(b.dataset.key, { credentials: 'same-origin', cache: 'no-store' }).then(function (r) {
             return r.json().catch(function () { return {}; }).then(function (j) {
+                if (r.status === 401 && j.code === 'LOCKED') { location.reload(); }
                 if (!r.ok) { var e = new Error(j.error || ('Lỗi ' + r.status)); e.fatal = true; throw e; }
                 return (info = j);
             });
@@ -49,4 +50,12 @@
     } else {
         say(kind === 'image' || kind === 'pdf' || kind === 'text' ? 'File lớn — bấm "Tải về" (tải và giải mã ngay trong trình duyệt).' : 'File Word / Excel / PowerPoint không xem trực tiếp được trên web — bấm "Tải về" để mở bằng ứng dụng Office. File được tải và giải mã ngay trong trình duyệt của bạn.');
     }
+
+    // Ảnh trước / sau bằng phím ← → (và nút Trước / Sau trên đầu trang)
+    document.addEventListener('keydown', function (e) {
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        var t = e.target && e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return;
+        var go = e.key === 'ArrowLeft' ? b.dataset.prev : e.key === 'ArrowRight' ? b.dataset.next : '';
+        if (go) { e.preventDefault(); location.href = go; }
+    });
 })();
