@@ -584,6 +584,15 @@ async function publicFolder(uid, dir) {
     return v;
 }
 
+/** Thư mục (hoặc thư mục cha) đang bật "Chia sẻ thư mục"? — để trang xem file hiện nút "Thư mục" (chỉ đọc vài sổ file, không quét cây). */
+async function isFolderShared(uid, dir) {
+    const id = String(uid || '');
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) return false;
+    let segs; try { segs = cleanDir(dir); } catch (_) { return false; }
+    for (let k = 0; k <= segs.length; k++) { const m = await readManifest(id, segs.slice(0, k)); if (m.shared === true) return true; }
+    return false;
+}
+
 // ---------------------------------------------------------------- giải mã Ở TRÌNH DUYỆT
 const NOT_PUBLIC = 'Không tìm thấy file hoặc file không công khai.';
 /** Mục trong sổ file (không kiểm cây GitHub). publicOnly: file riêng tư và file không có đều báo cùng một lỗi 404. */
@@ -805,5 +814,5 @@ module.exports = {
     cleanDir, cleanName, manifestPath, partPath, uploadIdFor, partsCount, mimeOf,
     list, mkdir, init, putPart, commitBlobs, finish, remove, rename, removeFolder, signDownload, verifyDownload, open, readManifest,
     setVisibility, openPublic, search, fold, release, publicInfo, saltFor, setFolderShared, publicFolder,
-    setFolderPassword, publicAccess, unlock, publicSiblings, accessCookieName, signAccess, effectivePass
+    setFolderPassword, isFolderShared, publicAccess, unlock, publicSiblings, accessCookieName, signAccess, effectivePass
 };

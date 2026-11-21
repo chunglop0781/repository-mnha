@@ -53,6 +53,11 @@ const pub = (q, cookies, extra) => ({ query: q, headers: {}, cookies: cookies ||
   r = mkRes(); await ctl.publicPageAt('/f/raw')(pub(q('a.png')), r); assert(!/id="aPrev"/.test(r.body) && /id="aNext"/.test(r.body), 'ảnh đầu: chỉ có Sau');
   r = mkRes(); await ctl.publicPageAt('/f/raw')(pub(q('c.png')), r); assert(/id="aPrev"/.test(r.body) && !/id="aNext"/.test(r.body), 'ảnh cuối: chỉ có Trước');
 
+  r = mkRes(); await ctl.publicPageAt('/f/raw')(pub(q('b.png')), r);
+  assert(/id="aFolder"[^>]*href="\/f\/d\?u=u9&amp;d=anh"/.test(r.body), 'có nút thoát ra thư mục (thư mục đã chia sẻ)');
+  r = mkRes(); await ctl.publicFolderPage(pub({ u: 'u9', d: 'anh' }), r);
+  assert(/\.bc a\.c\{display:inline/.test(r.body), 'breadcrumb hiển thị trên 1 dòng');
+
   // ---- mặc định KHÔNG mật khẩu
   r = mkRes(); await ctl.page(owner({ method: 'GET', query: { dir: 'anh' } }), r); assert.strictEqual(r.data.hasPass, false);
   r = mkRes(); await ctl.publicKey(pub(q('a.png')), r); assert.strictEqual(r.code, 200, 'công khai mặc định xem không cần mật khẩu');

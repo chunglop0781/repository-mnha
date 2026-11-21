@@ -55,7 +55,7 @@
     document.addEventListener('keydown', function (e) {
         if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
         var t = e.target && e.target.tagName; if (t === 'INPUT' || t === 'TEXTAREA') return;
-        var go = e.key === 'ArrowLeft' ? b.dataset.prev : e.key === 'ArrowRight' ? b.dataset.next : '';
+        var go = e.key === 'ArrowLeft' ? b.dataset.prev : e.key === 'ArrowRight' ? b.dataset.next : e.key === 'Escape' ? b.dataset.folder : '';
         if (go) { e.preventDefault(); location.href = go; }
     });
 })();
