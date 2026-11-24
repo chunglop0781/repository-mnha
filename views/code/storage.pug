@@ -86,6 +86,8 @@ block content
                         button(type="button", class="text-xs text-indigo-600 hover:underline", data-edit=f.name)= canUpload ? "Xem / Sửa" : "Xem"
                     if f.kind === "image" || f.kind === "pdf"
                         button(type="button", class="text-xs text-indigo-600 hover:underline", data-view=f.name, data-kind=f.kind) Xem
+                    if f.kind === "excel" && /\.(xlsx|xlsm|xltx|xltm)$/i.test(f.name)
+                        button(type="button", class="text-xs text-emerald-700 hover:underline", data-view=f.name, data-kind="excel", title="Xem bảng tính ngay trên web, như Google Sheets") Xem bảng
                     button(type="button", class="text-xs text-indigo-600 hover:underline", data-dl=f.name) Tải
                     button(type="button", class="text-xs text-gray-600 hover:underline", data-ren=f.name) Đổi tên
                     button(type="button", class="text-xs text-red-500 hover:underline", data-del=f.name) Xoá
@@ -144,5 +146,6 @@ block content
     script#payload(type="application/json")!= payloadJson
     script(src="/js/mnhaFiles.js")
     script(src="/js/zipKit.js")
+    script(src="/js/xlsxView.js")
     script(src="/js/pwToggle.js")
     script(src="/js/fileStorage.js")

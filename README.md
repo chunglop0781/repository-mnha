@@ -62,6 +62,15 @@ Mục **Lưu trữ file** ở menu chính để cất tài liệu (có thư mụ
 - Giới hạn: tối đa 200MB/file (đổi bằng `FILES_MAX_BYTES`). **Ai được tải lên**: chỉ **admin** và **student đã được duyệt** (`canUploadFiles` trong `middleware/uploadAuth.js`). Tài khoản **client** / chưa duyệt (pending) / bị từ chối / vô hiệu hoá không tải lên được — trang chỉ hiện thông báo nhắn quản trị viên, và cả 4 bước tải lên đều bị chặn ở máy chủ; vẫn xem danh sách và tải file đã có. Quy tắc này chỉ áp cho Lưu trữ file (ảnh/âm thanh/video của dạng code HTML vẫn theo `canUploadMedia`).
 - Code: `services/code/fileStore.js`, `controllers/files.controller.js`, `views/code/storage.pug`, `public/js/fileStorage.js`, cấu hình `FILES` trong `config/codeConfig.js`. Test: `node -r ./test/_stubs.js test/files-store.js`, `test/files-controller.js`, `test/files-client.js`.
 
+
+### Xem file Excel (.xlsx) như Google Sheets — `public/js/xlsxView.js`
+Trang Lưu trữ file (nút **Xem bảng**) và trang chia sẻ công khai `/f` mở được `.xlsx .xlsm .xltx .xltm` ngay trên web, **đọc hoàn toàn trong trình duyệt** (file đã được giải mã ở máy người xem, không gửi gì thêm lên máy chủ).
+- Cách đọc giống openpyxl: `.xlsx` là zip → giải nén bằng `DecompressionStream('deflate-raw')` → đọc `workbook.xml`, `sharedStrings.xml`, `styles.xml`, `theme1.xml`, `worksheets/sheetN.xml` bằng `DOMParser`.
+- Hiển thị: tiêu đề cột A, B, C…, số dòng, ô gộp, màu nền/viền/chữ đậm-nghiêng, căn lề, độ rộng cột/chiều cao dòng, chữ dài tràn sang ô trống, định dạng số–ngày–%–tiền như Excel, nhiều sheet ở thanh tab dưới, thanh `fx` hiện công thức/giá trị ô đang chọn, phím mũi tên/Tab di chuyển ô, Ctrl+C chép ô. Sheet dài hiện 300 dòng đầu + nút "Hiện thêm dòng".
+- Công thức hiện **giá trị đã lưu sẵn** trong file (Excel/Sheets lưu kèm khi ghi); file do thư viện không tính công thức (vd openpyxl) sẽ có ô công thức trống.
+- Chưa vẽ: biểu đồ, ảnh, định dạng có điều kiện (có ghi chú ở thanh dưới). `.xls` cũ, `.xlsb`, `.ods` chỉ Tải về.
+- Test: `node test/xlsx-format.js` (định dạng số/ngày).
+
 ## Cloudflare R2 cho video / âm thanh + dự phòng GitHub
 - **Ảnh** vẫn tải lên GitHub như cũ. **Video / âm thanh mới** lưu trên **Cloudflare R2** (S3-compatible), không ghi vào tài khoản GitHub media đang bị khoá.
 - Cấu hình ở trang `/connect` (chỉ admin mặc định): Account ID, bucket, Access Key/Secret, prefix, cách trả link (`public` / `presign` / `proxy`) và **repo GitHub dự phòng** (owner/repo/branch/token riêng). Khoá R2 + token dự phòng được **mã hoá 2 chiều** trong `v-s/cloudflare.json` bằng `CONNECT_ENC_KEY`; trang chỉ hiện 4 ký tự cuối của Access Key ID; Secret và token dự phòng không hiện (không lưu cả 4 ký tự cuối).

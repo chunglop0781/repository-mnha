@@ -266,7 +266,7 @@ main{padding:16px;text-align:center}img{max-width:100%;max-height:calc(100vh - 1
 </style></head><body data-key="${esc(keyUrl)}" data-kind="${esc(kind || '')}" data-size="${esc(o.size)}" data-name="${esc(o.name)}" data-srv-view="${esc(srvView)}" data-srv-dl="${esc(srvDl)}" data-prev="${esc(prevHref)}" data-next="${esc(nextHref)}" data-folder="${esc(folderHref)}">
 <header>${folderHref ? `<a id="aFolder" class="btn alt" href="${esc(folderHref)}" title="Về thư mục (phím Esc)">📁 Thư mục</a>` : ''}<h1>${esc(o.name)}</h1><span class="meta">${esc(fmtSize(o.size))}${counter ? ' · ' + esc(counter) : ''}</span>${prevHref ? `<a id="aPrev" class="btn alt" href="${esc(prevHref)}" title="Trước (phím ←)">‹ Trước</a>` : ''}${nextHref ? `<a id="aNext" class="btn alt" href="${esc(nextHref)}" title="Sau (phím →)">Sau ›</a>` : ''}<button id="btnDl" class="btn" type="button">Tải về</button><a id="aSrv" class="btn alt hide" href="${esc(srvDl)}">Tải qua máy chủ</a></header>
 <main><p id="msg" class="note">Đang tải và giải mã ngay trong trình duyệt…</p><div id="view"></div></main>
-<script src="/js/mnhaFiles.js"></script><script src="/js/filePublic.js"></script></body></html>`);
+<script src="/js/mnhaFiles.js"></script><script src="/js/xlsxView.js"></script><script src="/js/filePublic.js"></script></body></html>`);
     } catch (e) { textErr(res, e.status || 500, e.status === 404 ? NOT_FOUND : (e.message || 'Lỗi')); }
 };
 

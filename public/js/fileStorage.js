@@ -181,8 +181,13 @@
         vw.box.classList.remove('hidden'); vw.title.textContent = it.name; vw.count.textContent = vwList.length > 1 ? (i + 1) + ' / ' + vwList.length : '';
         vw.prev.disabled = i <= 0; vw.next.disabled = i >= vwList.length - 1;
         vw.body.innerHTML = '<div class="text-sm text-gray-500">Đang tải & giải mã…</div>';
+        var card = vw.box.firstElementChild; if (card) { card.classList.toggle('max-w-5xl', it.kind !== 'excel'); card.classList.toggle('max-w-[96vw]', it.kind === 'excel'); }
         fetchBlob(dir, it.name).then(function (bl) {
             if (seq !== vwSeq) return;
+            if (it.kind === 'excel') {          // bảng tính: đọc .xlsx ngay trong trình duyệt (public/js/xlsxView.js)
+                if (!window.XlsxView) throw new Error('Thiếu xlsxView.js');
+                return bl.arrayBuffer().then(function (ab) { if (seq !== vwSeq) return; vw.body.innerHTML = ''; return window.XlsxView.render(vw.body, ab, { height: 'calc(95vh - 130px)' }); });
+            }
             vwUrl = URL.createObjectURL(bl);
             vw.body.innerHTML = '';
             var el = document.createElement(it.kind === 'image' ? 'img' : 'iframe');

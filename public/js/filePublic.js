@@ -4,7 +4,7 @@
     'use strict';
     var b = document.body, msg = document.getElementById('msg'), view = document.getElementById('view'), btn = document.getElementById('btnDl'), srv = document.getElementById('aSrv');
     var kind = b.dataset.kind, size = Number(b.dataset.size) || 0, name = b.dataset.name, AUTO_MAX = 25 * 1024 * 1024, TEXT_MAX = 2 * 1024 * 1024;
-    var info = null, blob = null;
+    var info = null, blob = null, isSheet = kind === 'excel' && /\.(xlsx|xlsm|xltx|xltm)$/i.test(name);
 
     function say(t, err) { msg.textContent = t; msg.className = err ? 'note err' : 'note'; msg.style.display = t ? '' : 'none'; }
     function fallback(e) {
@@ -36,6 +36,12 @@
             bl.arrayBuffer().then(function (ab) { var pre = document.createElement('pre'); pre.textContent = new TextDecoder('utf-8').decode(ab); pre.style.cssText = 'text-align:left;white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace'; view.appendChild(pre); });
             return;
         }
+        if (isSheet && window.XlsxView) {       // Excel: vẽ thành lưới như Google Sheets (đọc .xlsx ngay trong trình duyệt)
+            view.style.textAlign = 'left';
+            bl.arrayBuffer().then(function (ab) { return window.XlsxView.render(view, ab, { height: 'calc(100vh - 150px)' }); })
+                .catch(function (e) { say((e && e.message ? e.message : 'Không đọc được file Excel.') + ' Bạn có thể bấm "Tải về" để mở bằng Excel.', true); });
+            return;
+        }
         var url = URL.createObjectURL(bl);
         if (kind === 'image') { var im = document.createElement('img'); im.src = url; im.alt = name; view.appendChild(im); }
         else if (kind === 'pdf') { var f = document.createElement('iframe'); f.src = url; f.title = name; view.appendChild(f); }
@@ -45,7 +51,7 @@
         load().then(function (bl) { window.MnhaFiles.save(bl, name); say(''); }).catch(function (e) { if (e.fatal) say(e.message, true); else fallback(e); }).then(function () { btn.disabled = false; });
     };
     if (!window.MnhaFiles || !window.MnhaFiles.supported()) { fallback(new Error('Trình duyệt không hỗ trợ giải mã (WebCrypto).')); return; }
-    if (((kind === 'image' || kind === 'pdf') && size <= AUTO_MAX) || (kind === 'text' && size <= TEXT_MAX)) {
+    if (((kind === 'image' || kind === 'pdf' || isSheet) && size <= AUTO_MAX) || (kind === 'text' && size <= TEXT_MAX)) {
         load().then(show).catch(function (e) { if (e.fatal) say(e.message, true); else fallback(e); });
     } else {
         say(kind === 'image' || kind === 'pdf' || kind === 'text' ? 'File lớn — bấm "Tải về" (tải và giải mã ngay trong trình duyệt).' : 'File Word / Excel / PowerPoint không xem trực tiếp được trên web — bấm "Tải về" để mở bằng ứng dụng Office. File được tải và giải mã ngay trong trình duyệt của bạn.');
