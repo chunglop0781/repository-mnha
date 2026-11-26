@@ -433,7 +433,7 @@
         var ws = doc.documentElement, out = { name: name, rows: [], rowPx: {}, rowHidden: {}, rowCustom: {}, cols: {}, merges: [], maxR: 0, maxC: 0, defRowPx: 20, defColPx: 64, hasDrawing: false, hasCondFmt: false, freeze: null };
         var fp = kid(ws, 'sheetFormatPr');
         if (fp) {
-            if (fp.getAttribute('defaultRowHeight')) out.defRowPx = Math.round(parseFloat(fp.getAttribute('defaultRowHeight')) * 96 / 72);
+            if (fp.getAttribute('defaultRowHeight')) out.defRowPx = Math.round(parseFloat(fp.getAttribute('defaultRowHeight')) * 96 / 72 * 100) / 100;
             if (fp.getAttribute('defaultColWidth')) out.defColPx = Math.round(parseFloat(fp.getAttribute('defaultColWidth')) * 7);
             else if (fp.getAttribute('baseColWidth')) out.defColPx = Math.round((parseFloat(fp.getAttribute('baseColWidth')) * 7 + 5));
         }
@@ -447,7 +447,7 @@
         kids(sd, 'row').forEach(function (row) {
             var r = +row.getAttribute('r') || (runR + 1); runR = r;
             var ht = row.getAttribute('ht'), hid = row.getAttribute('hidden') === '1' || row.getAttribute('hidden') === 'true';
-            if (ht) { out.rowPx[r] = Math.round(parseFloat(ht) * 96 / 72); if (row.getAttribute('customHeight') === '1' || row.getAttribute('customHeight') === 'true') out.rowCustom[r] = true; }
+            if (ht) { out.rowPx[r] = Math.round(parseFloat(ht) * 96 / 72 * 100) / 100; if (row.getAttribute('customHeight') === '1' || row.getAttribute('customHeight') === 'true') out.rowCustom[r] = true; }
             if (hid) out.rowHidden[r] = true;
             var arr = out.rows[r] || (out.rows[r] = []), runC = 0;
             kids(row, 'c').forEach(function (c) {
@@ -532,7 +532,11 @@
         return undefined;
     }
     function unwrapMc(el) {                   // <mc:AlternateContent><mc:Choice>…</mc:Choice></mc:AlternateContent> → phần tử bên trong
-        while (el && el.localName === 'AlternateContent') { var ch = kid(el, 'Choice') || kid(el, 'Fallback'); el = firstEl(ch); }
+        while (el && el.localName === 'AlternateContent') {
+            var ch = kid(el, 'Choice'), inner = ch && firstEl(ch);
+            if (!inner || !SHAPE_TAGS[inner.localName]) { var fb = kid(el, 'Fallback'); if (fb && firstEl(fb)) inner = firstEl(fb); }      // nét viết tay (ink) / contentPart: Excel lưu sẵn ảnh có màu ở Fallback
+            el = inner;
+        }
         return el;
     }
     var SHAPE_TAGS = { sp: 1, cxnSp: 1, pic: 1, grpSp: 1, graphicFrame: 1 };
@@ -777,12 +781,16 @@
             '.xv-t td.xv-n{text-align:right}.xv-t td.xv-c{text-align:center}',
             '.xv-t td.xv-sel{outline:2px solid #1a73e8;outline-offset:-2px;position:relative;z-index:1}',
             '.xv-draw{position:absolute;left:0;top:0;z-index:1;pointer-events:none;overflow:visible}',
+            '.xv-zoom{position:relative;width:max-content}',
+            '.xv-zb{margin-left:auto;flex:none;align-self:center;display:flex;gap:2px;padding:0 6px}',
+            '.xv-zb button{border:1px solid #dadce0;background:#fff;border-radius:6px;min-width:28px;height:24px;font:13px Arial,sans-serif;color:#3c4043;cursor:pointer;padding:0 6px}',
+            '.xv-zb button:hover{background:#eceff1}',
             '.xv-more{display:block;margin:10px auto;padding:7px 14px;border:1px solid #dadce0;border-radius:16px;background:#fff;color:#1a73e8;font:13px Arial,sans-serif;cursor:pointer}',
             '.xv-tabs{display:flex;align-items:stretch;gap:2px;border-top:1px solid #dadce0;background:#f8f9fa;flex:none;min-height:34px;overflow-x:auto}',
             '.xv-tab{flex:none;border:0;background:transparent;padding:0 16px;font:500 13px Arial,sans-serif;color:#5f6368;cursor:pointer;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:3px solid transparent}',
             '.xv-tab:hover{background:#eceff1}',
             '.xv-tab.on{background:#e6f4ea;color:#137333;border-bottom-color:#188038}',
-            '.xv-info{margin-left:auto;flex:none;align-self:center;padding:0 12px;font-size:11px;color:#80868b;white-space:nowrap}',
+            '.xv-info{flex:none;align-self:center;padding:0 12px;font-size:11px;color:#80868b;white-space:nowrap}',
             '.xv-note{padding:6px 12px;background:#fef7e0;border-top:1px solid #f9e8a8;color:#7a5b00;font-size:12px;flex:none}'
         ].join('\n');
         document.head.appendChild(st);
@@ -798,7 +806,7 @@
         rootEl.innerHTML = '<div class="xv-bar"><div class="xv-name">A1</div><div class="xv-fx">fx</div><div class="xv-formula"></div></div><div class="xv-scroll"></div><div class="xv-note" hidden></div><div class="xv-tabs"></div>';
         host.appendChild(rootEl); host.appendChild(ruleEl);
         var elName = rootEl.querySelector('.xv-name'), elFormula = rootEl.querySelector('.xv-formula'), elScroll = rootEl.querySelector('.xv-scroll'), elNote = rootEl.querySelector('.xv-note'), elTabs = rootEl.querySelector('.xv-tabs');
-        var cv = document.createElement('canvas').getContext('2d'), cur = { urls: [], idx: -1, sheet: null, shown: 0, last: 0, colPx: [], hidCol: [], maxC: 0, merges: null, covered: null, sel: null, tbody: null };
+        var cv = document.createElement('canvas').getContext('2d'), cur = { zoom: 100, urls: [], idx: -1, sheet: null, shown: 0, last: 0, colPx: [], hidCol: [], maxC: 0, merges: null, covered: null, sel: null, tbody: null };
 
         function fontCss(xf) {
             var f = styles.fonts[xf.fontId] || styles.fonts[0] || { sz: 11, name: 'Calibri' };
@@ -830,11 +838,18 @@
         function colHidden(c) { var d = cur.sheet.cols[c]; return !!(d && d.hidden); }
         function visSpan(c1, c2) { var n = 0; for (var c = c1; c <= c2; c++) if (!colHidden(c)) n++; return n || 1; }
 
+        // chiều cao dòng: dòng có "ht" thì theo đó; không có thì tự giãn theo cỡ chữ lớn nhất trong dòng như Excel (11pt → 15pt, 14pt → 18pt, 16pt → 21pt)
+        function rowH(r) {
+            var sh = cur.sheet; if (sh.rowPx[r]) return sh.rowPx[r];
+            var row = sh.rows[r], m = 0, h = sh.defRowPx;
+            if (row) row.forEach(function (cell) { if (cell && cell.k !== null) { var f = styles.fonts[(styles.xfs[cell.s] || styles.xfs[0]).fontId]; if (f && f.sz > m) m = f.sz; } });
+            return m ? Math.max(h, Math.round(m * 1.3636 * 96 / 72 * 100) / 100) : h;
+        }
         function chunkHtml(from, to) {
             var sh = cur.sheet, html = '', r, c;
             for (r = from; r <= to; r++) {
                 if (sh.rowHidden[r]) continue;
-                var row = sh.rows[r] || [], h = sh.rowPx[r] || sh.defRowPx, skipUntil = 0;
+                var row = sh.rows[r] || [], h = rowH(r), skipUntil = 0;
                 html += '<tr' + (sh.rowCustom[r] ? ' style="height:' + h + 'px"' : ' style="height:' + h + 'px"') + '><th class="xv-rh" data-rh="' + r + '">' + r + '</th>';
                 for (c = 1; c <= cur.maxC; c++) {
                     if (colHidden(c) || c < skipUntil) continue;
@@ -902,9 +917,9 @@
             var head = '<th class="xv-corner"></th>', cols = '<col style="width:46px">', total = 46, c;
             for (c = 1; c <= cur.maxC; c++) { if (colHidden(c)) continue; var w = colWidth(c); total += w; cols += '<col style="width:' + w + 'px">'; head += '<th data-ch="' + c + '">' + colName(c) + '</th>'; }
             var end = nextEnd(1, 300);
-            elScroll.innerHTML = '<table class="xv-t" style="width:' + total + 'px"><colgroup>' + cols + '</colgroup><thead><tr>' + head + '</tr></thead><tbody>' + chunkHtml(1, end) + '</tbody></table>';
+            elScroll.innerHTML = '<div class="xv-zoom"><table class="xv-t" style="width:' + total + 'px"><colgroup>' + cols + '</colgroup><thead><tr>' + head + '</tr></thead><tbody>' + chunkHtml(1, end) + '</tbody></table></div>';
             cur.tbody = elScroll.querySelector('tbody'); cur.last = end;
-            drawOverlay();
+            drawOverlay(); applyZoom();
             if (end < cur.totalR) addMore();
             var first = cellAt(1, 1) || elScroll.querySelector('td'); if (first) selectCell(first);
             elScroll.scrollTop = 0; elScroll.scrollLeft = 0;
@@ -920,14 +935,14 @@
             var d = cur.sheet.drawing; if (!d || !d.items.length) return;
             var cx = [0], ry = [0];
             function colX(c0) { for (var c = cx.length; c <= c0; c++) cx[c] = cx[c - 1] + (colHidden(c) ? 0 : colWidth(c)); return cx[c0]; }
-            function rowY(r0) { for (var r = ry.length; r <= r0; r++) ry[r] = ry[r - 1] + (cur.sheet.rowHidden[r] ? 0 : (cur.sheet.rowPx[r] || cur.sheet.defRowPx)); return ry[r0]; }
+            function rowY(r0) { for (var r = ry.length; r <= r0; r++) ry[r] = ry[r - 1] + (cur.sheet.rowHidden[r] ? 0 : rowH(r)); return ry[r0]; }
             var urlOf = new Map();
             function imgUrl(im) { if (!urlOf.has(im)) { var u = URL.createObjectURL(new Blob([im.data], { type: im.mime })); cur.urls.push(u); urlOf.set(im, u); } return urlOf.get(im); }
             var laid = layoutItems(d.items, { colX: colX, rowY: rowY }), r = drawingSvg(laid, imgUrl, function (t, font) { cv.font = font; return cv.measureText(t).width; }, defFont);
             var tb = elScroll.querySelector('table'), corner = tb && tb.querySelector('th.xv-corner'), host = document.createElement('div');
             host.innerHTML = r.svg; var svg = host.firstChild;
             svg.style.left = (corner ? corner.offsetWidth : 46) + 'px'; svg.style.top = (tb && tb.tHead ? tb.tHead.offsetHeight : 21) + 'px';
-            elScroll.appendChild(svg);
+            elScroll.querySelector('.xv-zoom').appendChild(svg);
         }
         function addMore() {
             var old = elScroll.querySelector('.xv-more'); if (old) old.remove();
@@ -937,8 +952,11 @@
                 var end = nextEnd(cur.last + 1, 400); cur.tbody.insertAdjacentHTML('beforeend', chunkHtml(cur.last + 1, end)); cur.last = end;
                 if (end >= cur.totalR) b.remove(); else b.textContent = 'Hiện thêm dòng (đã hiện ' + cur.last + ' / ' + cur.totalR + ')';
             };
-            elScroll.appendChild(b);
+            elScroll.querySelector('.xv-zoom').appendChild(b);
         }
+        // ---- phóng to / thu nhỏ (nút − + ở thanh dưới, hoặc Ctrl + lăn chuột / chụm hai ngón)
+        function applyZoom() { var w = elScroll.querySelector('.xv-zoom'); if (w) w.style.zoom = cur.zoom / 100; elZoomTxt.textContent = cur.zoom + '%'; }
+        function setZoom(z) { z = Math.max(30, Math.min(300, Math.round(z / 5) * 5)); if (z === cur.zoom) return; var cx = elScroll.scrollLeft + elScroll.clientWidth / 2, cy = elScroll.scrollTop + elScroll.clientHeight / 2, k = z / cur.zoom; cur.zoom = z; applyZoom(); elScroll.scrollLeft = cx * k - elScroll.clientWidth / 2; elScroll.scrollTop = cy * k - elScroll.clientHeight / 2; try { localStorage.setItem('xvZoom', String(z)); } catch (_) { } }
         // tab sheet
         book.sheetNames.forEach(function (nm, i) {
             var b = document.createElement('button'); b.type = 'button'; b.className = 'xv-tab'; b.textContent = nm; b.title = nm;
@@ -946,6 +964,12 @@
             elTabs.appendChild(b);
         });
         var info = document.createElement('span'); info.className = 'xv-info'; elTabs.appendChild(info);
+        var zb = document.createElement('span'); zb.className = 'xv-zb'; zb.innerHTML = '<button type="button" title="Thu nhỏ">−</button><button type="button" class="xv-zt" title="Về 100%">100%</button><button type="button" title="Phóng to">+</button>';
+        elTabs.insertBefore(zb, info);
+        var elZoomTxt = zb.querySelector('.xv-zt'), zbs = zb.querySelectorAll('button');
+        try { var z0 = +localStorage.getItem('xvZoom'); if (z0 >= 30 && z0 <= 300) cur.zoom = z0; } catch (_) { }
+        zbs[0].onclick = function () { setZoom(cur.zoom - 10); }; zbs[2].onclick = function () { setZoom(cur.zoom + 10); }; zbs[1].onclick = function () { setZoom(100); };
+        elScroll.addEventListener('wheel', function (e) { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); setZoom(cur.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)); }, { passive: false });
 
         elScroll.addEventListener('click', function (e) { var td = e.target.closest && e.target.closest('td[data-r]'); if (td) { selectCell(td); rootEl.focus({ preventScroll: true }); } });
         rootEl.addEventListener('keydown', function (e) {
