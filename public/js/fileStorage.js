@@ -154,17 +154,26 @@
         });
     }
 
-    // ---------------------------------------------------------------- tải TẤT CẢ file của thư mục (.zip, gói ngay ở trình duyệt)
+    // ---------------------------------------------------------------- tải CẢ THƯ MỤC (.zip, gói ngay ở trình duyệt): gồm mọi thư mục con, giữ nguyên cấu trúc — kể cả thư mục mẹ không có file trực tiếp
     var bz = document.getElementById('btnZipAll');
     if (bz) bz.onclick = function () {
-        var names = (P.files || []).map(function (f) { return { name: f.name }; });
-        if (!names.length) { alert('Thư mục này chưa có file.'); return; }
         if (!window.MnhaFiles || !window.MnhaFiles.supported() || !window.MnhaZip) { alert('Trình duyệt không hỗ trợ giải mã (cần https:// hoặc localhost).'); return; }
-        var old = bz.textContent; bz.disabled = true;
-        window.MnhaFiles.zipAll(names, function (it) { return fetchInfo(dir, it.name); }, { onFile: function (i, n, nm) { bz.textContent = 'Đang tải ' + (i + 1) + '/' + n + '…'; say('Đang tải & giải mã: ' + nm); } })
-            .then(function (r) {
-                window.MnhaZip.save(r.blob, (dir ? dir.split('/').pop() : 'luu-tru-file') + '.zip');
-                say(r.failed.length ? 'Đã gói ' + r.count + ' file; ' + r.failed.length + ' file lỗi (' + r.failed[0].name + ': ' + r.failed[0].error + ').' : 'Xong — đã gói ' + r.count + ' file.');
+        var old = bz.textContent, zipName = dir ? dir.split('/').pop() : 'luu-tru-file';
+        function sub(rel) { return dir ? (rel ? dir + '/' + rel : dir) : rel; }
+        bz.disabled = true; bz.textContent = 'Đang quét thư mục…'; say('Đang quét thư mục con…');
+        fetch('/code/files/tree?dir=' + encodeURIComponent(dir), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+            .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j.error || ('Lỗi ' + r.status)); return j; }); })
+            .then(function (t) {
+                if (!t.files.length && !(t.emptyDirs || []).length) throw new Error('Thư mục này chưa có file.');
+                return window.MnhaFiles.zipAll(t.files, function (it) { return fetchInfo(sub(it.dir), it.name); }, {
+                    root: zipName, emptyDirs: t.emptyDirs,
+                    onFile: function (i, n, nm) { bz.textContent = 'Đang tải ' + (i + 1) + '/' + n + '…'; say('Đang tải & giải mã: ' + nm); }
+                }).then(function (r) { return { r: r, t: t }; });
+            })
+            .then(function (x) {
+                var r = x.r;
+                window.MnhaZip.save(r.blob, zipName + '.zip');
+                say((r.failed.length ? 'Đã gói ' + r.count + ' file; ' + r.failed.length + ' file lỗi (' + r.failed[0].name + ': ' + r.failed[0].error + ').' : 'Xong — đã gói ' + r.count + ' file cùng thư mục con.') + (x.t.truncated ? ' (cây rất lớn — chỉ quét ' + 500 + ' thư mục đầu)' : ''));
             })
             .catch(function (e) { alert(e.message); })
             .then(function () { bz.textContent = old; bz.disabled = false; });

@@ -54,6 +54,7 @@ router.post('/files/upload/finish', requireLocalData, requireFileUploader, files
 router.post('/files/upload/commit', requireLocalData, requireFileUploader, files.uploadCommit);
 router.post('/files/visibility', files.visibility);
 router.get('/files/search', files.search);
+router.get('/files/tree', files.tree);                          // cả cây thư mục (gồm thư mục con) để tải thư mục mẹ thành .zip
 router.post('/files/folder/share', files.shareFolder);
 router.post('/files/folder/password', files.folderPassword);       // đặt / đổi / xoá mật khẩu chia sẻ (băm một chiều)
 router.post('/files/folder', files.createFolder);

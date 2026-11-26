@@ -763,6 +763,52 @@ async function search(uid, query) {
     return { q: String(query).trim(), folders: foundFolders, files: files.slice(0, 300), truncated: files.length > 300 || manifests.length > 200 };
 }
 
+// ---------------------------------------------------------------- cả CÂY thư mục (để tải thư mục mẹ thành .zip gồm mọi thư mục con)
+const TREE_MAX_MANIFESTS = 500;
+/** Duyệt mọi thư mục con (mọi độ sâu) của segs → { folders:[đường dẫn tương đối], files:[{dir, name, size}], emptyDirs:[thư mục không chứa file nào], truncated }.
+ *  keep(entry) quyết định file nào được lấy (chủ: mọi file đã tải xong; công khai: chỉ file công khai). */
+async function walkTree(uid, segs, keep) {
+    const prefix = join(root(uid), segs.join('/')) + '/';
+    const t = await gh.getRepoTree({ force: true });
+    const folders = new Set(), mf = new Map([['', []]]);          // thư mục hiện tại luôn được đọc, kể cả khi sổ file chưa nằm trong cây
+    for (const [p] of t.files) {
+        if (!p.startsWith(prefix)) continue;
+        const parts = p.slice(prefix.length).split('/');
+        if (parts.includes(FILES.DATA_DIR)) continue;
+        for (let i = 0; i < parts.length - 1; i++) folders.add(parts.slice(0, i + 1).join('/'));
+        if (parts[parts.length - 1] === FILES.MANIFEST) mf.set(parts.slice(0, -1).join('/'), parts.slice(0, -1));
+    }
+    const todo = [...mf.values()].slice(0, TREE_MAX_MANIFESTS), files = [];
+    await pool(todo, 6, async (rel) => {
+        const m = await readManifest(uid, [...segs, ...rel]).catch(() => null);
+        if (!m) return;
+        for (const e of Object.values(m.files)) if (e && e.name && e.state !== 'uploading' && keep(e)) files.push({ dir: rel.join('/'), name: e.name, size: e.size, kind: e.kind || fileKind(e.name) });
+    });
+    files.sort((a, b) => (a.dir + '/' + a.name).localeCompare(b.dir + '/' + b.name, 'vi'));
+    const withFiles = new Set();
+    for (const f of files) { const parts = f.dir ? f.dir.split('/') : []; for (let i = 1; i <= parts.length; i++) withFiles.add(parts.slice(0, i).join('/')); }
+    const all = [...folders].sort((a, b) => a.localeCompare(b, 'vi'));
+    return { folders: all, files, emptyDirs: all.filter((f) => !withFiles.has(f)), truncated: mf.size > TREE_MAX_MANIFESTS };
+}
+/** Chủ: toàn bộ file + thư mục con của thư mục dir. */
+async function tree(uid, dir) {
+    const segs = cleanDir(dir);
+    return { dir: segs.join('/'), ...(await walkTree(uid, segs, () => true)) };
+}
+/** Công khai: như tree nhưng chỉ file đang công khai và chỉ khi thư mục (hoặc thư mục cha) đã "Chia sẻ thư mục". */
+async function publicTree(uid, dir) {
+    const id = String(uid || '');
+    const nf = () => bad('Không tìm thấy thư mục hoặc thư mục không được chia sẻ.', 404);
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) throw nf();
+    let segs; try { segs = cleanDir(dir); } catch (_) { throw nf(); }
+    let shared = false;
+    for (let k = 0; k <= segs.length && !shared; k++) shared = (await readManifest(id, segs.slice(0, k))).shared === true;
+    if (!shared) throw nf();
+    const r = await walkTree(id, segs, (e) => e.public === true);
+    // thư mục rỗng ở bản công khai = không có file công khai nào → bỏ khỏi zip (không lộ thư mục riêng tư)
+    return { dir: segs.join('/'), files: r.files, emptyDirs: [], truncated: r.truncated };
+}
+
 // ---------------------------------------------------------------- tải về
 /** Phiếu tải về ký HMAC (không cần cookie — web kết nối khác origin nhận được). */
 function signDownload(uid, dir, name, ttlMs = FILES.DOWNLOAD_TTL_MS) {
@@ -812,7 +858,7 @@ async function open(uid, dir, name) {
 
 module.exports = {
     cleanDir, cleanName, manifestPath, partPath, uploadIdFor, partsCount, mimeOf,
-    list, mkdir, init, putPart, commitBlobs, finish, remove, rename, removeFolder, signDownload, verifyDownload, open, readManifest,
+    list, tree, publicTree, mkdir, init, putPart, commitBlobs, finish, remove, rename, removeFolder, signDownload, verifyDownload, open, readManifest,
     setVisibility, openPublic, search, fold, release, publicInfo, saltFor, setFolderShared, publicFolder,
     setFolderPassword, isFolderShared, publicAccess, unlock, publicSiblings, accessCookieName, signAccess, effectivePass
 };

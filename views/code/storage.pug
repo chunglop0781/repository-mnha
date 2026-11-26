@@ -26,8 +26,8 @@ block content
             if shared
                 a(href=folderHref, target="_blank", rel="noopener", class="px-3 py-2 text-sm text-emerald-700 hover:underline") Mở trang thư mục
                 button(type="button", id="btnCopyFolder", data-copy=folderHref, class="px-3 py-2 text-sm text-emerald-700 hover:underline") Sao chép link thư mục
-            if files.length
-                button(id="btnZipAll", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700", title="Giải mã và gói mọi file của thư mục này thành 1 file .zip ngay trong trình duyệt") ⬇ Tải tất cả (#{files.length} file, .zip)
+            if files.length || folders.length
+                button(id="btnZipAll", class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700", title="Giải mã và gói mọi file của thư mục này CÙNG TOÀN BỘ thư mục con (giữ nguyên cấu trúc) thành 1 file .zip ngay trong trình duyệt") ⬇ Tải thư mục (.zip#{folders.length ? ", gồm thư mục con" : ", " + files.length + " file"})
             button(id="btnPass", class="px-4 py-2 rounded-lg bg-white border text-sm font-medium " + (hasPass ? "border-amber-300 text-amber-700 hover:bg-amber-50" : "border-gray-300 text-gray-700 hover:bg-gray-50"), title="Khoá link chia sẻ bằng mật khẩu. Quên mật khẩu cũ thì cứ đặt mật khẩu mới để thay.") #{hasPass ? "🔒 Đổi mật khẩu chia sẻ" : "🔓 Đặt mật khẩu chia sẻ"}
             if hasPass
                 button(id="btnPassRemove", class="px-3 py-2 text-sm text-red-600 hover:underline") Xoá mật khẩu

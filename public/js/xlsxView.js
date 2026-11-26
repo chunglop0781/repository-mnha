@@ -12,7 +12,8 @@
 //         XlsxView.render(phầnTử, ArrayBuffer, { height, name, onError }) → Promise<{ destroy(), workbook }>
 //         XlsxView.load(ArrayBuffer) → Promise<workbook>  (workbook.sheetNames, workbook.sheet(i) → Promise<sheet>)  — dùng cho kiểm thử
 //         XlsxView.formatNumber(giáTrị, mãĐịnhDạng, date1904) → chuỗi hiển thị
-//   Không hỗ trợ: .xls đời cũ, .xlsb, .ods; biểu đồ / ảnh / định dạng có điều kiện không được vẽ (có ghi chú ở thanh dưới).
+//   Hình vẽ trong sheet (ảnh PNG/JPG/GIF/SVG, oval / chữ nhật / tam giác…, đường nối + mũi tên, hộp chữ, nhóm hình) được vẽ thành lớp SVG đúng vị trí ô.
+//   Không hỗ trợ: .xls đời cũ, .xlsb, .ods; biểu đồ (chart), ảnh EMF/WMF và định dạng có điều kiện không được vẽ (có ghi chú ở thanh dưới).
 (function (root) {
     'use strict';
     var VIEW_EXTS = ['xlsx', 'xlsm', 'xltx', 'xltm'];
@@ -405,9 +406,14 @@
         sheets = sheets.filter(function (s) { return s.state === 'visible' && z.has(s.path); });
         if (!sheets.length) throw fail('File Excel không có sheet nào để hiển thị.', 'NO_SHEET');
         var cache = {};
+        async function buildSheet(i) {
+            var sh = parseSheet(parseXml(await z.text(sheets[i].path)), shared, sheets[i].name);
+            if (sh.drawRid) { try { sh.drawing = await loadDrawing(z, sheets[i].path, sh.drawRid, theme); } catch (e) { sh.drawing = null; sh.drawErr = e.message; } }
+            return sh;
+        }
         var book = {
             sheetNames: sheets.map(function (s) { return s.name; }), styles: styles, date1904: date1904,
-            sheet: async function (i) { return cache[i] || (cache[i] = parseSheet(parseXml(await z.text(sheets[i].path)), shared, sheets[i].name)); },
+            sheet: async function (i) { return cache[i] || (cache[i] = buildSheet(i)); },
             display: function (cell) { return cellDisplay(cell, styles, date1904); }
         };
         return book;
@@ -466,11 +472,288 @@
             var p = (m.getAttribute('ref') || '').split(':'), a = parseRef(p[0]), b = parseRef(p[1] || p[0]);
             if (a && b && (b.r > a.r || b.c > a.c)) { out.merges.push({ r1: a.r, c1: a.c, r2: b.r, c2: Math.min(b.c, 16384) }); if (b.c > out.maxC && b.c < 200) out.maxC = b.c; if (b.r > out.maxR) out.maxR = Math.min(b.r, a.r + 5000); }
         });
-        out.hasDrawing = !!kid(ws, 'drawing') || !!kid(ws, 'legacyDrawing');
+        var drEl = kid(ws, 'drawing'); out.drawRid = drEl ? relId(drEl) : '';
+        out.hasDrawing = !!drEl || !!kid(ws, 'legacyDrawing');
         out.hasCondFmt = !!kid(ws, 'conditionalFormatting');
         var sv = kid(kid(ws, 'sheetViews'), 'sheetView'), pane = sv && kid(sv, 'pane');
         if (pane && /frozen/.test(pane.getAttribute('state') || '')) out.freeze = { x: +pane.getAttribute('xSplit') || 0, y: +pane.getAttribute('ySplit') || 0 };
         return out;
+    }
+
+    // ================================================================ HÌNH VẼ TRONG SHEET (xl/drawings/drawingN.xml): ảnh, hình khối (oval, chữ nhật…), đường nối + mũi tên, hộp chữ
+    //   Mỗi hình có "neo" (từ ô nào đến ô nào) → quy ra pixel theo độ rộng cột / chiều cao dòng của sheet → vẽ thành 1 lớp SVG phủ lên bảng, cuộn cùng bảng.
+    var THEME_IDX = { lt1: 0, bg1: 0, dk1: 1, tx1: 1, lt2: 2, bg2: 2, dk2: 3, tx2: 3, accent1: 4, accent2: 5, accent3: 6, accent4: 7, accent5: 8, accent6: 9, hlink: 10, folHlink: 11 };
+    var PRESET_RGB = { black: '000000', white: 'FFFFFF', red: 'FF0000', green: '008000', lime: '00FF00', blue: '0000FF', yellow: 'FFFF00', gray: '808080', grey: '808080', orange: 'FFA500', purple: '800080', cyan: '00FFFF', magenta: 'FF00FF', pink: 'FFC0CB', brown: 'A52A2A', navy: '000080' };
+    var IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml' };
+    var LN_PX = [0, 0.67, 1.33, 2];          // độ dày đường theo lnRef idx (theme Office: 0.5 / 1 / 1.5 pt)
+    function toHsl(hex) {
+        var c = hexToRgb(hex), r = c[0] / 255, g = c[1] / 255, b = c[2] / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b), h = 0, s = 0, l = (mx + mn) / 2;
+        if (mx !== mn) { var d = mx - mn; s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn); h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; h /= 6; }
+        return [h, s, l];
+    }
+    function fromHsl(h, s, l) {
+        if (s === 0) return rgbToHex(l * 255, l * 255, l * 255);
+        function hue(p, q, t) { if (t < 0) t += 1; if (t > 1) t -= 1; if (t < 1 / 6) return p + (q - p) * 6 * t; if (t < 1 / 2) return q; if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6; return p; }
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+        return rgbToHex(hue(p, q, h + 1 / 3) * 255, hue(p, q, h) * 255, hue(p, q, h - 1 / 3) * 255);
+    }
+    function drawColor(ce, theme) {          // <a:schemeClr val="accent1"><a:lumMod …/></a:schemeClr> → { c:'#4472c4', a:1 }
+        if (!ce) return null;
+        var n = ce.localName, hex = null, v = ce.getAttribute('val');
+        if (n === 'srgbClr') hex = v;
+        else if (n === 'schemeClr') hex = THEME_IDX[v] !== undefined ? theme[THEME_IDX[v]] : null;
+        else if (n === 'sysClr') hex = ce.getAttribute('lastClr') || (v === 'window' ? 'FFFFFF' : '000000');
+        else if (n === 'prstClr') hex = PRESET_RGB[v] || '000000';
+        else if (n === 'scrgbClr') hex = rgbToHex(+ce.getAttribute('r') / 1000, +ce.getAttribute('g') / 1000, +ce.getAttribute('b') / 1000) ;
+        if (!hex || !/^[0-9a-fA-F]{6}$/.test(String(hex).replace('#', ''))) return null;
+        hex = String(hex).replace('#', '').toUpperCase();
+        var alpha = 1;
+        for (var t = ce.firstChild; t; t = t.nextSibling) {
+            if (t.nodeType !== 1) continue;
+            var x = (+t.getAttribute('val')) / 100000, k = t.localName;
+            if (k === 'lumMod') { var a = toHsl(hex); hex = fromHsl(a[0], a[1], Math.min(1, a[2] * x)); }
+            else if (k === 'lumOff') { var b = toHsl(hex); hex = fromHsl(b[0], b[1], Math.max(0, Math.min(1, b[2] + x))); }
+            else if (k === 'tint') { var c1 = hexToRgb(hex); hex = rgbToHex(c1[0] * x + 255 * (1 - x), c1[1] * x + 255 * (1 - x), c1[2] * x + 255 * (1 - x)); }
+            else if (k === 'shade') { var c2 = hexToRgb(hex); hex = rgbToHex(c2[0] * x, c2[1] * x, c2[2] * x); }
+            else if (k === 'alpha') alpha = x;
+        }
+        return { c: '#' + hex, a: alpha };
+    }
+    function firstEl(el) { for (var n = el && el.firstChild; n; n = n.nextSibling) if (n.nodeType === 1) return n; return null; }
+    function paintOf(holder, theme) {        // undefined = không nói gì · null = noFill · {c,a}
+        if (!holder) return undefined;
+        for (var n = holder.firstChild; n; n = n.nextSibling) {
+            if (n.nodeType !== 1) continue;
+            if (n.localName === 'noFill') return null;
+            if (n.localName === 'solidFill') return drawColor(firstEl(n), theme) || undefined;
+            if (n.localName === 'gradFill') { var gs = kid(kid(n, 'gsLst'), 'gs'); return (gs && drawColor(firstEl(gs), theme)) || undefined; }
+            if (n.localName === 'pattFill') return drawColor(firstEl(kid(n, 'fgClr')), theme) || undefined;
+        }
+        return undefined;
+    }
+    function unwrapMc(el) {                   // <mc:AlternateContent><mc:Choice>…</mc:Choice></mc:AlternateContent> → phần tử bên trong
+        while (el && el.localName === 'AlternateContent') { var ch = kid(el, 'Choice') || kid(el, 'Fallback'); el = firstEl(ch); }
+        return el;
+    }
+    var SHAPE_TAGS = { sp: 1, cxnSp: 1, pic: 1, grpSp: 1, graphicFrame: 1 };
+    function parseXfrm(x) {
+        if (!x) return null;
+        var off = kid(x, 'off'), ext = kid(x, 'ext'), co = kid(x, 'chOff'), ce = kid(x, 'chExt');
+        return {
+            x: off ? +off.getAttribute('x') || 0 : 0, y: off ? +off.getAttribute('y') || 0 : 0, cx: ext ? +ext.getAttribute('cx') || 0 : 0, cy: ext ? +ext.getAttribute('cy') || 0 : 0,
+            chx: co ? +co.getAttribute('x') || 0 : 0, chy: co ? +co.getAttribute('y') || 0 : 0, chcx: ce ? +ce.getAttribute('cx') || 0 : 0, chcy: ce ? +ce.getAttribute('cy') || 0 : 0,
+            rot: (+x.getAttribute('rot') || 0) / 60000, flipH: x.getAttribute('flipH') === '1' || x.getAttribute('flipH') === 'true', flipV: x.getAttribute('flipV') === '1' || x.getAttribute('flipV') === 'true'
+        };
+    }
+    function parseEnd(e) { var t = e && e.getAttribute('type'); return t && t !== 'none' ? { type: t, w: e.getAttribute('w') || 'med' } : null; }
+    function parseText(tx, style, theme) {
+        if (!tx) return null;
+        var bp = kid(tx, 'bodyPr'), fontRefColor = null;
+        if (style) { var fr = kid(style, 'fontRef'); fontRefColor = fr ? drawColor(firstEl(fr), theme) : null; }
+        var paras = [], any = false;
+        kids(tx, 'p').forEach(function (p) {
+            var pp = kid(p, 'pPr'), runs = [], endSz = kid(p, 'endParaRPr');
+            for (var n = p.firstChild; n; n = n.nextSibling) {
+                if (n.nodeType !== 1) continue;
+                if (n.localName === 'br') { runs.push({ br: true }); continue; }
+                if (n.localName !== 'r' && n.localName !== 'fld') continue;
+                var rp = kid(n, 'rPr'), t = kid(n, 't'), txt = t ? t.textContent : '';
+                var col = paintOf(rp, theme), lat = rp && kid(rp, 'latin');
+                runs.push({ t: txt, sz: rp && rp.getAttribute('sz') ? +rp.getAttribute('sz') / 100 : 0, b: !!rp && (rp.getAttribute('b') === '1' || rp.getAttribute('b') === 'true'), i: !!rp && (rp.getAttribute('i') === '1' || rp.getAttribute('i') === 'true'), u: !!rp && !!rp.getAttribute('u') && rp.getAttribute('u') !== 'none', c: col ? col.c : (fontRefColor ? fontRefColor.c : null), f: lat && lat.getAttribute('typeface') && lat.getAttribute('typeface').charAt(0) !== '+' ? lat.getAttribute('typeface') : null });
+                if (txt) any = true;
+            }
+            paras.push({ algn: pp ? pp.getAttribute('algn') || 'l' : 'l', runs: runs, endSz: endSz && endSz.getAttribute('sz') ? +endSz.getAttribute('sz') / 100 : 0 });
+        });
+        if (!any) return null;
+        function ins(a, d) { var v = bp && bp.getAttribute(a); return v !== null && v !== undefined && v !== '' ? +v / 9525 : d; }
+        return { paras: paras, anchor: (bp && bp.getAttribute('anchor')) || 't', l: ins('lIns', 9.6), t: ins('tIns', 4.8), r: ins('rIns', 9.6), b: ins('bIns', 4.8), wrap: !(bp && bp.getAttribute('wrap') === 'none') };
+    }
+    function parseShape(el, theme, rels, dir) {
+        var tag = el.localName, spPr = kid(el, 'spPr') || kid(el, 'grpSpPr'), xf = parseXfrm(spPr && kid(spPr, 'xfrm') || (tag === 'graphicFrame' ? kid(el, 'xfrm') : null));
+        var nv = firstEl(el), cNv = nv && kid(nv, 'cNvPr'), style = kid(el, 'style');
+        var sh = { kind: tag, name: cNv ? cNv.getAttribute('name') || '' : '', xf: xf, geom: 'rect', fill: null, line: null, text: null, img: null, children: [], hidden: !!cNv && (cNv.getAttribute('hidden') === '1' || cNv.getAttribute('hidden') === 'true') };
+        if (tag === 'grpSp') { for (var n = el.firstChild; n; n = n.nextSibling) { var inner = n.nodeType === 1 ? unwrapMc(n) : null; if (inner && SHAPE_TAGS[inner.localName]) { var c = parseShape(inner, theme, rels, dir); if (c) sh.children.push(c); } } return sh; }
+        if (tag === 'graphicFrame') { sh.chart = /chart/.test((kid(kid(el, 'graphic'), 'graphicData') || { getAttribute: function () { return ''; } }).getAttribute('uri') || ''); return sh; }
+        var pg = spPr && kid(spPr, 'prstGeom'); sh.geom = pg ? pg.getAttribute('prst') || 'rect' : (spPr && kid(spPr, 'custGeom') ? 'rect' : 'rect');
+        var av = pg && kid(pg, 'avLst'), gd = av && kid(av, 'gd'); if (gd) { var m = /val\s+(-?\d+)/.exec(gd.getAttribute('fmla') || ''); if (m) sh.adj = +m[1]; }
+        // nền
+        var fl = paintOf(spPr, theme);
+        if (fl === undefined && style && tag === 'sp') { var fr = kid(style, 'fillRef'); if (fr && +fr.getAttribute('idx') > 0) fl = drawColor(firstEl(fr), theme) || null; else fl = null; }
+        sh.fill = fl || null;
+        // viền
+        var ln = spPr && kid(spPr, 'ln'), lp = paintOf(ln, theme), lr = style && kid(style, 'lnRef'), lidx = lr ? +lr.getAttribute('idx') || 0 : 0;
+        if (lp === undefined) lp = lidx > 0 ? (drawColor(firstEl(lr), theme) || null) : null;
+        if (lp) {
+            var w = ln && ln.getAttribute('w') ? +ln.getAttribute('w') / 9525 : (LN_PX[lidx] || 1), pd = ln && kid(ln, 'prstDash');
+            sh.line = { c: lp.c, a: lp.a, w: Math.max(1, w), dash: pd ? pd.getAttribute('val') : 'solid', head: parseEnd(ln && kid(ln, 'headEnd')), tail: parseEnd(ln && kid(ln, 'tailEnd')) };
+        }
+        var er = style && kid(style, 'effectRef'); if (er && +er.getAttribute('idx') >= 3) sh.shadow = true;
+        if (tag === 'pic') {
+            var blip = el.getElementsByTagNameNS('*', 'blip')[0], rid = blip && (blip.getAttributeNS(NS_R, 'embed') || blip.getAttribute('r:embed')), rel = rid && rels[rid], sr = el.getElementsByTagNameNS('*', 'srcRect')[0];
+            if (rel) {
+                var path = resolvePath(dir, rel.target);
+                sh.img = { path: path, mime: IMG_MIME[path.split('.').pop().toLowerCase()] || '', data: null, crop: sr ? { l: (+sr.getAttribute('l') || 0) / 100000, t: (+sr.getAttribute('t') || 0) / 100000, r: (+sr.getAttribute('r') || 0) / 100000, b: (+sr.getAttribute('b') || 0) / 100000 } : null };
+            }
+            return sh;
+        }
+        sh.text = parseText(kid(el, 'txBody'), style, theme);
+        return sh;
+    }
+    async function loadDrawing(z, sheetPath, rid, theme) {
+        var sDir = sheetPath.indexOf('/') >= 0 ? sheetPath.slice(0, sheetPath.lastIndexOf('/') + 1) : '', sRels = parseRels(await z.text(sDir + '_rels/' + sheetPath.split('/').pop() + '.rels'));
+        var rel = sRels[rid]; if (!rel) return null;
+        var dPath = resolvePath(sDir, rel.target), dText = await z.text(dPath); if (!dText) return null;
+        var dDir = dPath.slice(0, dPath.lastIndexOf('/') + 1), dRels = parseRels(await z.text(dDir + '_rels/' + dPath.split('/').pop() + '.rels'));
+        var root = parseXml(dText).documentElement, items = [], maxRow = 0, maxCol = 0, hasChart = false, badPics = 0;
+        function pt(el) { return el ? { col: +(kid(el, 'col') || { textContent: 0 }).textContent, co: +(kid(el, 'colOff') || { textContent: 0 }).textContent, row: +(kid(el, 'row') || { textContent: 0 }).textContent, ro: +(kid(el, 'rowOff') || { textContent: 0 }).textContent } : null; }
+        for (var a = root.firstChild; a; a = a.nextSibling) {
+            if (a.nodeType !== 1 || !/Anchor$/.test(a.localName)) continue;
+            var content = null;
+            for (var n = a.firstChild; n; n = n.nextSibling) { var u = n.nodeType === 1 ? unwrapMc(n) : null; if (u && SHAPE_TAGS[u.localName]) { content = u; break; } }
+            if (!content) continue;
+            var sh = parseShape(content, theme, dRels, dDir); if (!sh || sh.hidden) continue;
+            var ext = kid(a, 'ext'), pos = kid(a, 'pos');
+            var anc = { type: a.localName, from: pt(kid(a, 'from')), to: pt(kid(a, 'to')), cx: ext ? +ext.getAttribute('cx') || 0 : 0, cy: ext ? +ext.getAttribute('cy') || 0 : 0, px: pos ? +pos.getAttribute('x') || 0 : 0, py: pos ? +pos.getAttribute('y') || 0 : 0 };
+            sh.anchor = anc; items.push(sh);
+            if (anc.from) { maxRow = Math.max(maxRow, anc.from.row + 1); maxCol = Math.max(maxCol, anc.from.col + 1); }
+            if (anc.to) { maxRow = Math.max(maxRow, anc.to.row + 1); maxCol = Math.max(maxCol, anc.to.col + 1); }
+        }
+        async function fill(list) {
+            for (var i = 0; i < list.length; i++) {
+                var s = list[i];
+                if (s.chart) hasChart = true;
+                if (s.img) { try { s.img.data = await z.read(s.img.path); } catch (_) { s.img.data = null; } if (!s.img.data || !s.img.mime) { badPics++; s.img.data = null; } }
+                if (s.children.length) await fill(s.children);
+            }
+        }
+        await fill(items);
+        return { items: items, maxRow: maxRow, maxCol: maxCol, hasChart: hasChart, badPics: badPics };
+    }
+
+    // ---- bố trí + vẽ SVG
+    function layoutItems(items, geo) {         // → danh sách phẳng [{ sh, x, y, w, h }] (px, gốc = góc trên-trái ô A1)
+        var out = [];
+        function box(sh) {
+            var a = sh.anchor, E = 9525;
+            if (a.type === 'twoCellAnchor' && a.from && a.to) { var x1 = geo.colX(a.from.col) + a.from.co / E, y1 = geo.rowY(a.from.row) + a.from.ro / E, x2 = geo.colX(a.to.col) + a.to.co / E, y2 = geo.rowY(a.to.row) + a.to.ro / E; return { x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) }; }
+            if (a.type === 'oneCellAnchor' && a.from) return { x: geo.colX(a.from.col) + a.from.co / E, y: geo.rowY(a.from.row) + a.from.ro / E, w: a.cx / E, h: a.cy / E };
+            if (a.type === 'absoluteAnchor') return { x: a.px / E, y: a.py / E, w: a.cx / E, h: a.cy / E };
+            return { x: sh.xf ? sh.xf.x / E : 0, y: sh.xf ? sh.xf.y / E : 0, w: sh.xf ? sh.xf.cx / E : 0, h: sh.xf ? sh.xf.cy / E : 0 };
+        }
+        function walk(sh, b, parent) {
+            if (sh.kind === 'grpSp') {
+                var x = sh.xf || {}, sx = x.chcx ? b.w / (x.chcx / 9525) : 1, sy = x.chcy ? b.h / (x.chcy / 9525) : 1;
+                sh.children.forEach(function (c) {
+                    if (!c.xf) return;
+                    walk(c, { x: b.x + (c.xf.x - (x.chx || 0)) / 9525 * sx, y: b.y + (c.xf.y - (x.chy || 0)) / 9525 * sy, w: c.xf.cx / 9525 * sx, h: c.xf.cy / 9525 * sy }, sh);
+                });
+                return;
+            }
+            out.push({ sh: sh, x: b.x, y: b.y, w: b.w, h: b.h });
+        }
+        items.forEach(function (sh) { walk(sh, box(sh), null); });
+        return out;
+    }
+    var SVGNS = 'http://www.w3.org/2000/svg';
+    function f1(n) { return Math.round(n * 100) / 100; }
+    function drawingSvg(laid, imgUrl, measure, defFont) {
+        var defs = {}, body = '', maxX = 0, maxY = 0, uid = 'xd' + (++UID);
+        function marker(end, color, lw, which) {
+            var id = uid + 'm' + which + end.type + color.replace('#', '') + end.w;
+            if (defs[id]) return id;
+            var size = Math.max(8, lw * 3.5) * (end.w === 'sm' ? 0.7 : end.w === 'lg' ? 1.5 : 1), shape, ref = 10;
+            if (end.type === 'arrow') shape = '<path d="M1,1 L10,5 L1,9" fill="none" stroke="' + color + '" stroke-width="1.4" stroke-linejoin="round"/>';
+            else if (end.type === 'stealth') shape = '<path d="M0,0 L10,5 L0,10 L3,5 z" fill="' + color + '"/>';
+            else if (end.type === 'diamond') { shape = '<path d="M0,5 L5,0 L10,5 L5,10 z" fill="' + color + '"/>'; ref = 5; }
+            else if (end.type === 'oval') { shape = '<circle cx="5" cy="5" r="4.5" fill="' + color + '"/>'; ref = 5; }
+            else shape = '<path d="M0,0 L10,5 L0,10 z" fill="' + color + '"/>';
+            defs[id] = '<marker id="' + id + '" viewBox="0 0 10 10" refX="' + ref + '" refY="5" markerUnits="userSpaceOnUse" markerWidth="' + f1(size) + '" markerHeight="' + f1(size) + '" orient="auto-start-reverse" overflow="visible">' + shape + '</marker>';
+            return id;
+        }
+        function strokeAttrs(ln) {
+            if (!ln) return ' stroke="none"';
+            var d = { dash: '4 3', sysDash: '3 1', dot: '1 2', sysDot: '1 1', lgDash: '8 3', dashDot: '4 3 1 3', lgDashDot: '8 3 1 3', lgDashDotDot: '8 3 1 3 1 3', sysDashDot: '3 1 1 1', sysDashDotDot: '3 1 1 1 1 1' }[ln.dash];
+            return ' stroke="' + ln.c + '" stroke-width="' + f1(ln.w) + '"' + (ln.a < 1 ? ' stroke-opacity="' + ln.a + '"' : '') + (d ? ' stroke-dasharray="' + d.split(' ').map(function (v) { return f1(v * Math.max(1, ln.w)); }).join(' ') + '"' : '');
+        }
+        function textSvg(sh, w, h, inset) {
+            var t = sh.text; if (!t) return '';
+            var L = t.l + inset.x, R = t.r + inset.x, T = t.t + inset.y, B = t.b + inset.y, avail = Math.max(10, w - L - R), lines = [], total = 0;
+            t.paras.forEach(function (p) {
+                var toks = [];
+                p.runs.forEach(function (r) {
+                    if (r.br) { toks.push({ br: true }); return; }
+                    String(r.t).split(/(\s+)/).forEach(function (piece) { if (piece !== '') toks.push({ t: piece, r: r }); });
+                });
+                var cur = { toks: [], w: 0, sz: 0 }, plines = [cur];
+                function fontOf(r) { var sz = (r.sz || p.endSz || 11); return { sz: sz, css: (r.i ? 'italic ' : '') + (r.b ? 'bold ' : '') + f1(sz * 96 / 72) + 'px ' + (r.f ? '"' + r.f.replace(/"/g, '') + '",' : '') + '"' + defFont + '",Arial,sans-serif' }; }
+                toks.forEach(function (k) {
+                    if (k.br) { cur = { toks: [], w: 0, sz: cur.sz }; plines.push(cur); return; }
+                    var fo = fontOf(k.r), wd = measure(k.t, fo.css), ws = /^\s+$/.test(k.t);
+                    if (t.wrap && !ws && cur.w + wd > avail && cur.toks.length) { cur = { toks: [], w: 0, sz: 0 }; plines.push(cur); }
+                    if (ws && !cur.toks.length && plines.length > 1 && t.wrap) return;
+                    cur.toks.push({ t: k.t, r: k.r, css: fo.css, sz: fo.sz }); cur.w += wd; cur.sz = Math.max(cur.sz, fo.sz);
+                });
+                plines.forEach(function (ln) { ln.px = (ln.sz || p.endSz || 11) * 96 / 72; ln.algn = p.algn; lines.push(ln); total += ln.px * 1.22; });
+            });
+            var y0 = t.anchor === 'ctr' ? (h - total) / 2 : t.anchor === 'b' ? h - B - total : T, s = '', y = y0;
+            lines.forEach(function (ln) {
+                var lh = ln.px * 1.22, base = y + ln.px * 1.0, x, anchor;
+                if (ln.algn === 'ctr') { x = L + avail / 2; anchor = 'middle'; } else if (ln.algn === 'r') { x = w - R; anchor = 'end'; } else { x = L; anchor = 'start'; }
+                if (ln.toks.length) {
+                    s += '<text x="' + f1(x) + '" y="' + f1(base) + '" text-anchor="' + anchor + '" xml:space="preserve">';
+                    ln.toks.forEach(function (k) {
+                        var fam = k.css.replace(/^(italic )?(bold )?[\d.]+px /, '');
+                        s += '<tspan font-size="' + f1(k.sz * 96 / 72) + '"' + (k.r.b ? ' font-weight="bold"' : '') + (k.r.i ? ' font-style="italic"' : '') + (k.r.u ? ' text-decoration="underline"' : '') + ' font-family="' + esc(fam) + '" fill="' + (k.r.c || '#000') + '">' + esc(k.t) + '</tspan>';
+                    });
+                    s += '</text>';
+                }
+                y += lh;
+            });
+            return s;
+        }
+        laid.forEach(function (it) {
+            var sh = it.sh, x = it.x, y = it.y, w = it.w, h = it.h, xf = sh.xf || {}, rot = xf.rot || 0, g = '', geom = sh.geom;
+            maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+            var cx = x + w / 2, cy = y + h / 2, uw = w, uh = h;
+            if (rot) { var q = ((Math.round(rot / 90) % 4) + 4) % 4; if (Math.abs(rot - Math.round(rot / 90) * 90) < 1 && q % 2 === 1) { uw = h; uh = w; } }
+            var tf = 'translate(' + f1(cx - uw / 2) + ',' + f1(cy - uh / 2) + ')' + (rot ? ' rotate(' + f1(rot) + ',' + f1(uw / 2) + ',' + f1(uh / 2) + ')' : '');
+            w = uw; h = uh;
+            if (sh.kind === 'graphicFrame') {
+                g = '<rect x="0" y="0" width="' + f1(w) + '" height="' + f1(h) + '" fill="#f8f9fa" stroke="#9aa0a6" stroke-dasharray="4 3"/><text x="' + f1(w / 2) + '" y="' + f1(h / 2) + '" text-anchor="middle" font-size="12" fill="#5f6368">' + (sh.chart ? 'Biểu đồ — bấm Tải để xem đầy đủ bằng Excel' : 'Đối tượng nhúng') + '</text>';
+            } else if (sh.kind === 'pic') {
+                var im = sh.img;
+                if (im && im.data && imgUrl(im)) {
+                    var cr = im.crop || { l: 0, t: 0, r: 0, b: 0 }, fw = w / Math.max(0.01, 1 - cr.l - cr.r), fh = h / Math.max(0.01, 1 - cr.t - cr.b);
+                    g = '<svg x="0" y="0" width="' + f1(w) + '" height="' + f1(h) + '" overflow="hidden"><image href="' + imgUrl(im) + '" x="' + f1(-cr.l * fw) + '" y="' + f1(-cr.t * fh) + '" width="' + f1(fw) + '" height="' + f1(fh) + '" preserveAspectRatio="none"/></svg>';
+                    if (sh.line) g += '<rect x="0" y="0" width="' + f1(w) + '" height="' + f1(h) + '" fill="none"' + strokeAttrs(sh.line) + '/>';
+                } else g = '<rect x="0" y="0" width="' + f1(w) + '" height="' + f1(h) + '" fill="#f1f3f4" stroke="#9aa0a6" stroke-dasharray="4 3"/><text x="' + f1(w / 2) + '" y="' + f1(h / 2) + '" text-anchor="middle" font-size="12" fill="#5f6368">Ảnh định dạng chưa xem được trên web (EMF/WMF…)</text>';
+            } else {
+                var fill = sh.fill ? ' fill="' + sh.fill.c + '"' + (sh.fill.a < 1 ? ' fill-opacity="' + sh.fill.a + '"' : '') : ' fill="none"', st = strokeAttrs(sh.line), inset = { x: 0, y: 0 };
+                var isLine = sh.kind === 'cxnSp' || /^(line|straightConnector1)$/.test(geom), isBent = /^bentConnector/.test(geom), isCurve = /^curvedConnector/.test(geom);
+                if (isLine || isBent || isCurve) {
+                    var x1 = xf.flipH ? w : 0, x2 = xf.flipH ? 0 : w, y1 = xf.flipV ? h : 0, y2 = xf.flipV ? 0 : h, mk = '';
+                    if (sh.line && sh.line.head) mk += ' marker-start="url(#' + marker(sh.line.head, sh.line.c, sh.line.w, 'h') + ')"';
+                    if (sh.line && sh.line.tail) mk += ' marker-end="url(#' + marker(sh.line.tail, sh.line.c, sh.line.w, 't') + ')"';
+                    if (isBent) { var ad = (sh.adj !== undefined ? sh.adj : 50000) / 100000, xm = x1 + (x2 - x1) * ad; g = '<path d="M' + f1(x1) + ',' + f1(y1) + ' L' + f1(xm) + ',' + f1(y1) + ' L' + f1(xm) + ',' + f1(y2) + ' L' + f1(x2) + ',' + f1(y2) + '" fill="none"' + st + mk + '/>'; }
+                    else if (isCurve) g = '<path d="M' + f1(x1) + ',' + f1(y1) + ' C' + f1((x1 + x2) / 2) + ',' + f1(y1) + ' ' + f1((x1 + x2) / 2) + ',' + f1(y2) + ' ' + f1(x2) + ',' + f1(y2) + '" fill="none"' + st + mk + '/>';
+                    else g = '<line x1="' + f1(x1) + '" y1="' + f1(y1) + '" x2="' + f1(x2) + '" y2="' + f1(y2) + '"' + st + mk + ' stroke-linecap="round"/>';
+                } else if (geom === 'ellipse') {
+                    g = '<ellipse cx="' + f1(w / 2) + '" cy="' + f1(h / 2) + '" rx="' + f1(w / 2) + '" ry="' + f1(h / 2) + '"' + fill + st + '/>'; inset = { x: w * 0.1464, y: h * 0.1464 };
+                } else if (geom === 'roundRect') {
+                    var rr = Math.min(w, h) * ((sh.adj !== undefined ? sh.adj : 16667) / 100000);
+                    g = '<rect x="0" y="0" width="' + f1(w) + '" height="' + f1(h) + '" rx="' + f1(rr) + '"' + fill + st + '/>';
+                } else if (geom === 'triangle') g = '<path d="M' + f1(w / 2) + ',0 L' + f1(w) + ',' + f1(h) + ' L0,' + f1(h) + ' z"' + fill + st + '/>';
+                else if (geom === 'diamond') g = '<path d="M' + f1(w / 2) + ',0 L' + f1(w) + ',' + f1(h / 2) + ' L' + f1(w / 2) + ',' + f1(h) + ' L0,' + f1(h / 2) + ' z"' + fill + st + '/>';
+                else if (geom === 'rightArrow') g = '<path d="M0,' + f1(h * 0.25) + ' L' + f1(w * 0.6) + ',' + f1(h * 0.25) + ' L' + f1(w * 0.6) + ',0 L' + f1(w) + ',' + f1(h / 2) + ' L' + f1(w * 0.6) + ',' + f1(h) + ' L' + f1(w * 0.6) + ',' + f1(h * 0.75) + ' L0,' + f1(h * 0.75) + ' z"' + fill + st + '/>';
+                else g = '<rect x="0" y="0" width="' + f1(w) + '" height="' + f1(h) + '"' + fill + st + '/>';
+                if (sh.shadow && sh.fill) g = '<g filter="url(#' + uid + 'sh)">' + g + '</g>';
+                g += textSvg(sh, w, h, inset);
+            }
+            body += '<g transform="' + tf + '">' + g + '</g>';
+        });
+        var dstr = Object.keys(defs).map(function (k) { return defs[k]; }).join('');
+        dstr += '<filter id="' + uid + 'sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#000" flood-opacity="0.45"/></filter>';
+        return { svg: '<svg class="xv-draw" xmlns="' + SVGNS + '" width="' + Math.ceil(maxX + 2) + '" height="' + Math.ceil(maxY + 2) + '" style="font-family:\'' + defFont.replace(/['"]/g, '') + '\',Arial,sans-serif"><defs>' + dstr + '</defs>' + body + '</svg>', w: maxX, h: maxY };
     }
 
     // ================================================================ GIAO DIỆN
@@ -493,6 +776,7 @@
             '.xv-t td{padding:0 3px;border-right:1px solid #e2e3e3;border-bottom:1px solid #e2e3e3;white-space:nowrap;overflow:hidden;vertical-align:bottom;background:#fff;scroll-margin:26px 0 0 50px}',
             '.xv-t td.xv-n{text-align:right}.xv-t td.xv-c{text-align:center}',
             '.xv-t td.xv-sel{outline:2px solid #1a73e8;outline-offset:-2px;position:relative;z-index:1}',
+            '.xv-draw{position:absolute;left:0;top:0;z-index:1;pointer-events:none;overflow:visible}',
             '.xv-more{display:block;margin:10px auto;padding:7px 14px;border:1px solid #dadce0;border-radius:16px;background:#fff;color:#1a73e8;font:13px Arial,sans-serif;cursor:pointer}',
             '.xv-tabs{display:flex;align-items:stretch;gap:2px;border-top:1px solid #dadce0;background:#f8f9fa;flex:none;min-height:34px;overflow-x:auto}',
             '.xv-tab{flex:none;border:0;background:transparent;padding:0 16px;font:500 13px Arial,sans-serif;color:#5f6368;cursor:pointer;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:3px solid transparent}',
@@ -514,7 +798,7 @@
         rootEl.innerHTML = '<div class="xv-bar"><div class="xv-name">A1</div><div class="xv-fx">fx</div><div class="xv-formula"></div></div><div class="xv-scroll"></div><div class="xv-note" hidden></div><div class="xv-tabs"></div>';
         host.appendChild(rootEl); host.appendChild(ruleEl);
         var elName = rootEl.querySelector('.xv-name'), elFormula = rootEl.querySelector('.xv-formula'), elScroll = rootEl.querySelector('.xv-scroll'), elNote = rootEl.querySelector('.xv-note'), elTabs = rootEl.querySelector('.xv-tabs');
-        var cv = document.createElement('canvas').getContext('2d'), cur = { idx: -1, sheet: null, shown: 0, last: 0, colPx: [], hidCol: [], maxC: 0, merges: null, covered: null, sel: null, tbody: null };
+        var cv = document.createElement('canvas').getContext('2d'), cur = { urls: [], idx: -1, sheet: null, shown: 0, last: 0, colPx: [], hidCol: [], maxC: 0, merges: null, covered: null, sel: null, tbody: null };
 
         function fontCss(xf) {
             var f = styles.fonts[xf.fontId] || styles.fonts[0] || { sz: 11, name: 'Calibri' };
@@ -607,7 +891,8 @@
         async function showSheet(i) {
             var sh = await book.sheet(i);
             cur.idx = i; cur.sheet = sh; cur.sel = null;
-            cur.maxC = Math.min(Math.max(sh.maxC, 26), 1000); cur.totalR = Math.max(sh.maxR, 40);
+            var dr = sh.drawing || { maxRow: 0, maxCol: 0 };
+            cur.maxC = Math.min(Math.max(sh.maxC, 26, dr.maxCol), 1000); cur.totalR = Math.max(sh.maxR, 40, Math.min(dr.maxRow, sh.maxR + 3000));
             cur.merges = new Map(); cur.covered = new Set();
             sh.merges.forEach(function (m) {
                 cur.merges.set(m.r1 * 20000 + m.c1, m);
@@ -619,13 +904,30 @@
             var end = nextEnd(1, 300);
             elScroll.innerHTML = '<table class="xv-t" style="width:' + total + 'px"><colgroup>' + cols + '</colgroup><thead><tr>' + head + '</tr></thead><tbody>' + chunkHtml(1, end) + '</tbody></table>';
             cur.tbody = elScroll.querySelector('tbody'); cur.last = end;
+            drawOverlay();
             if (end < cur.totalR) addMore();
             var first = cellAt(1, 1) || elScroll.querySelector('td'); if (first) selectCell(first);
             elScroll.scrollTop = 0; elScroll.scrollLeft = 0;
             Array.prototype.forEach.call(elTabs.querySelectorAll('.xv-tab'), function (b, k) { b.classList.toggle('on', k === i); });
             var info = elTabs.querySelector('.xv-info'); if (info) info.textContent = sh.maxR + ' dòng × ' + sh.maxC + ' cột (' + colName(Math.max(sh.maxC, 1)) + ')';
-            var notes = []; if (sh.hasDrawing) notes.push('biểu đồ / hình ảnh'); if (sh.hasCondFmt) notes.push('định dạng có điều kiện');
-            elNote.hidden = !notes.length; elNote.textContent = notes.length ? 'Sheet này có ' + notes.join(' và ') + ' — chưa hiển thị ở chế độ xem nhanh; bấm Tải để mở đầy đủ bằng Excel.' : '';
+            var notes = []; if (sh.hasDrawing && !sh.drawing) notes.push('hình vẽ / biểu đồ'); else if (sh.drawing && sh.drawing.hasChart) notes.push('biểu đồ'); if (sh.hasCondFmt) notes.push('định dạng có điều kiện');
+            elNote.hidden = !notes.length; elNote.textContent = notes.length ? 'Sheet này có ' + notes.join(' và ') + ' — chưa hiển thị đầy đủ ở chế độ xem nhanh; bấm Tải để mở bằng Excel.' : '';
+        }
+        // ---- lớp hình vẽ (ảnh, hình khối, đường nối) phủ lên bảng
+        function revokeUrls() { cur.urls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) { } }); cur.urls = []; }
+        function drawOverlay() {
+            revokeUrls();
+            var d = cur.sheet.drawing; if (!d || !d.items.length) return;
+            var cx = [0], ry = [0];
+            function colX(c0) { for (var c = cx.length; c <= c0; c++) cx[c] = cx[c - 1] + (colHidden(c) ? 0 : colWidth(c)); return cx[c0]; }
+            function rowY(r0) { for (var r = ry.length; r <= r0; r++) ry[r] = ry[r - 1] + (cur.sheet.rowHidden[r] ? 0 : (cur.sheet.rowPx[r] || cur.sheet.defRowPx)); return ry[r0]; }
+            var urlOf = new Map();
+            function imgUrl(im) { if (!urlOf.has(im)) { var u = URL.createObjectURL(new Blob([im.data], { type: im.mime })); cur.urls.push(u); urlOf.set(im, u); } return urlOf.get(im); }
+            var laid = layoutItems(d.items, { colX: colX, rowY: rowY }), r = drawingSvg(laid, imgUrl, function (t, font) { cv.font = font; return cv.measureText(t).width; }, defFont);
+            var tb = elScroll.querySelector('table'), corner = tb && tb.querySelector('th.xv-corner'), host = document.createElement('div');
+            host.innerHTML = r.svg; var svg = host.firstChild;
+            svg.style.left = (corner ? corner.offsetWidth : 46) + 'px'; svg.style.top = (tb && tb.tHead ? tb.tHead.offsetHeight : 21) + 'px';
+            elScroll.appendChild(svg);
         }
         function addMore() {
             var old = elScroll.querySelector('.xv-more'); if (old) old.remove();
@@ -659,7 +961,7 @@
         });
         await showSheet(0);
         var tab0 = elTabs.querySelector('.xv-tab'); if (tab0) tab0.classList.add('on');
-        return { workbook: book, destroy: function () { rootEl.remove(); ruleEl.remove(); } };
+        return { workbook: book, destroy: function () { revokeUrls(); rootEl.remove(); ruleEl.remove(); } };
     }
 
     var api = { canView: canView, render: render, load: load, formatNumber: formatNumber, openZip: openZip, VIEW_EXTS: VIEW_EXTS };

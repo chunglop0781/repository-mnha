@@ -177,6 +177,7 @@ exports.folderPassword = wrap(async (req, res) => {          // đặt / ĐỔI 
     if (typeof b.password !== 'string' || !b.password) throw Object.assign(new Error('Nhập mật khẩu mới.'), { status: 400 });
     res.json(await store.setFolderPassword(uidOf(req), b.dir || '', b.password));
 });
+exports.tree = wrap(async (req, res) => { res.set('Cache-Control', 'no-store').json({ ok: true, ...(await store.tree(uidOf(req), req.query.dir || '')) }); });
 exports.search = wrap(async (req, res) => { res.set('Cache-Control', 'no-store').json({ ok: true, ...(await store.search(uidOf(req), req.query.q)) }); });
 
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -230,6 +231,17 @@ exports.publicKey = async (req, res) => {
         if (await blockedByPassword(req, res, 'json')) return;
         const info = await store.release(req.query.u, req.query.d || '', req.query.n, { publicOnly: true });
         res.set('Cache-Control', 'no-store').json({ ok: true, ...info });
+    } catch (e) {
+        res.set('Cache-Control', 'no-store').status(e.status || 500).json({ error: e.status === 404 ? NOT_FOUND : (e.message || 'Lỗi'), code: e.code || undefined });
+    }
+};
+
+/** Cây file CÔNG KHAI của thư mục đã chia sẻ (gồm mọi thư mục con) — để nút "Tải tất cả" gói cả thư mục con. */
+exports.publicTree = async (req, res) => {
+    try {
+        keyService.throttle('files-pubtree:' + (req.ip || (req.headers && req.headers['x-forwarded-for']) || 'x'), 120);
+        if (await blockedByPassword(req, res, 'json')) return;
+        res.set('Cache-Control', 'no-store').json({ ok: true, ...(await store.publicTree(req.query.u, req.query.d || '')) });
     } catch (e) {
         res.set('Cache-Control', 'no-store').status(e.status || 500).json({ error: e.status === 404 ? NOT_FOUND : (e.message || 'Lỗi'), code: e.code || undefined });
     }
@@ -301,8 +313,8 @@ body{margin:0;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a}
 main{max-width:760px;margin:16px auto;padding:0 16px}ul{list-style:none;margin:0;padding:0;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}li+li{border-top:1px solid #f1f5f9}
 a{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;padding:12px 14px;color:#0f172a;text-decoration:none}li a:hover{background:#f8fafc}.n{word-break:break-all;font-weight:500}.m{font-size:12px;color:#64748b}.empty{padding:24px;text-align:center;color:#64748b}.tools{max-width:760px;margin:12px auto 0;padding:0 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tools button{background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:9px 14px;font-size:14px;cursor:pointer}.tools button:disabled{opacity:.6}#zmsg{font-size:13px;color:#475569}#zmsg.err{color:#b91c1c}
 </style></head><body data-u="${esc(u)}" data-d="${esc(f.dir)}" data-zip="${esc(f.name)}" data-files="${esc(JSON.stringify(f.files.map((x) => x.name)))}"><header><h1>${esc(f.name)}</h1><div class="bc">${crumbs.join('<i>/</i>')}</div><div class="meta">${f.folders.length} thư mục · ${f.files.length} file công khai — bấm để mở; file giải mã ngay trong trình duyệt${f.truncated ? ' · (cây lớn — chỉ quét 200 thư mục đầu)' : ''}</div></header>
-${f.files.length ? '<div class="tools"><button id="btnZipAll" type="button">⬇ Tải tất cả file (' + f.files.length + ') — .zip</button><span id="zmsg"></span></div>' : ''}
-<main>${body ? `<ul>${body}</ul>` : '<div class="empty">Thư mục này chưa có file nào công khai.</div>'}</main>${f.files.length ? '<script src="/js/mnhaFiles.js"></script><script src="/js/zipKit.js"></script><script src="/js/filePublicFolder.js"></script>' : ''}</body></html>`);
+${f.files.length || f.folders.length ? '<div class="tools"><button id="btnZipAll" type="button">⬇ Tải tất cả' + (f.folders.length ? ' (kèm thư mục con)' : ' (' + f.files.length + ' file)') + ' — .zip</button><span id="zmsg"></span></div>' : ''}
+<main>${body ? `<ul>${body}</ul>` : '<div class="empty">Thư mục này chưa có file nào công khai.</div>'}</main>${f.files.length || f.folders.length ? '<script src="/js/mnhaFiles.js"></script><script src="/js/zipKit.js"></script><script src="/js/filePublicFolder.js"></script>' : ''}</body></html>`);
     } catch (e) { textErr(res, e.status || 500, e.status === 404 ? 'Không tìm thấy thư mục hoặc thư mục không được chia sẻ.' : (e.message || 'Lỗi')); }
 };
 

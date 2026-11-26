@@ -107,27 +107,32 @@
     }
     async function toBlob(info, opt) { return new Blob(await readAll(info, opt), { type: info.mime || 'application/octet-stream' }); }
 
-    // Gói nhiều file thành 1 .zip ngay ở trình duyệt. items: [{ name, ... }]; infoOf(item) → Promise<info của /open hoặc /f/key>; cần MnhaZip (zipKit.js).
+    // Gói nhiều file thành 1 .zip ngay ở trình duyệt. items: [{ name, dir? }] — dir = đường dẫn thư mục con tương đối ("a/b") để zip giữ nguyên cấu trúc thư mục;
+    // infoOf(item) → Promise<info của /open hoặc /f/key>; cần MnhaZip (zipKit.js).
+    // opt.root: tên thư mục gốc đặt trong zip · opt.emptyDirs: các thư mục con rỗng vẫn được tạo trong zip.
     // Tên trùng được đánh số; 1 file lỗi không làm hỏng cả gói (được ghi vào failed).
     async function zipAll(items, infoOf, opt) {
         opt = opt || {};
         var Z = root.MnhaZip; if (!Z) throw fail('Thiếu zipKit.js', 'NO_ZIP');
-        var entries = [], failed = [], used = {}, i;
+        var entries = [], failed = [], used = {}, i, top = opt.root ? String(opt.root).replace(/[\\/:*?"<>|]+/g, '_') + '/' : '';
         for (i = 0; i < items.length; i++) {
-            var it = items[i], nm = String(it.name || 'file');
-            if (opt.onFile) opt.onFile(i, items.length, nm);
+            var it = items[i], nm = String(it.name || 'file'), base = top + (it.dir ? String(it.dir).replace(/^\/+|\/+$/g, '') + '/' : '');
+            if (opt.onFile) opt.onFile(i, items.length, (it.dir ? it.dir + '/' : '') + nm);
             try {
                 var info = await infoOf(it), blob;
                 if (info && info.mode === 'direct') blob = await toBlob(info, {});
                 else if (info && info.blob) blob = info.blob;
                 else throw fail('Không tải thẳng được từ GitHub.', 'NO_RAW');
                 var u8 = new Uint8Array(await blob.arrayBuffer()), out = nm, k = 1;
-                while (used[out.toLowerCase()]) { var dot = nm.lastIndexOf('.'); out = dot > 0 ? nm.slice(0, dot) + ' (' + (++k) + ')' + nm.slice(dot) : nm + ' (' + (++k) + ')'; }
-                used[out.toLowerCase()] = 1; entries.push({ name: out, data: u8 });
-            } catch (e) { failed.push({ name: nm, error: e && e.message ? e.message : String(e) }); }
+                while (used[(base + out).toLowerCase()]) { var dot = nm.lastIndexOf('.'); out = dot > 0 ? nm.slice(0, dot) + ' (' + (++k) + ')' + nm.slice(dot) : nm + ' (' + (++k) + ')'; }
+                used[(base + out).toLowerCase()] = 1; entries.push({ name: base + out, data: u8 });
+            } catch (e) { failed.push({ name: (it.dir ? it.dir + '/' : '') + nm, error: e && e.message ? e.message : String(e) }); }
         }
-        if (!entries.length) throw fail(failed.length ? 'Không tải được file nào: ' + failed[0].error : 'Thư mục không có file.', 'EMPTY');
-        return { blob: Z.zip(entries), count: entries.length, failed: failed };
+        if (!entries.length && !(opt.emptyDirs && opt.emptyDirs.length)) throw fail(failed.length ? 'Không tải được file nào: ' + failed[0].error : 'Thư mục không có file.', 'EMPTY');
+        var files = entries.length;
+        if (opt.root) entries.unshift({ name: top, data: new Uint8Array(0) });
+        (opt.emptyDirs || []).forEach(function (d) { entries.push({ name: top + String(d).replace(/^\/+|\/+$/g, '') + '/', data: new Uint8Array(0) }); });   // mục thư mục (tên kết thúc bằng /) → giải nén ra thư mục rỗng
+        return { blob: Z.zip(entries), count: files, failed: failed };
     }
 
     function save(blob, name) {

@@ -73,6 +73,7 @@ const filesCtl = require('./controllers/files.controller');
 app.get('/f', filesCtl.publicGate(false));
 app.get('/f/d', filesCtl.publicFolderPage);
 app.get('/f/key', filesCtl.publicKey);
+app.get('/f/tree', filesCtl.publicTree);
 app.get('/f/raw', filesCtl.publicGate(true));
 app.post('/f/unlock', filesCtl.publicUnlock);        // nhập mật khẩu link chia sẻ → cookie mở khoá 12 giờ
 
