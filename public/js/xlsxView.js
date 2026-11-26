@@ -98,6 +98,21 @@
         return s;
     }
 
+    function richRuns(si, theme) {   // chữ có định dạng từng đoạn (đỏ / đậm / cỡ riêng…) → [{t, c, b, i, u, strike, sz, f}] hoặc null nếu cả ô cùng 1 kiểu
+        var runs = [], fmt = false;
+        for (var n = si.firstChild; n; n = n.nextSibling) {
+            if (n.nodeType !== 1 || n.localName !== 'r') continue;
+            var t = kid(n, 't'), rp = kid(n, 'rPr'), run = { t: t ? t.textContent : '' };
+            if (rp) {
+                function flag(nm) { var e = kid(rp, nm); return !!e && e.getAttribute('val') !== '0' && e.getAttribute('val') !== 'false'; }
+                var col = colorOf(kid(rp, 'color'), theme), sz = kid(rp, 'sz'), fn = kid(rp, 'rFont');
+                run.c = col; run.b = flag('b'); run.i = flag('i'); run.u = flag('u'); run.strike = flag('strike'); run.sz = sz ? parseFloat(sz.getAttribute('val')) : 0; run.f = fn ? fn.getAttribute('val') : '';
+                fmt = true;
+            }
+            runs.push(run);
+        }
+        return fmt ? runs : null;
+    }
     // ================================================================ MÀU
     var INDEXED = ['000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF', 'FFFF00', 'FF00FF', '00FFFF', '000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF', 'FFFF00', 'FF00FF', '00FFFF', '800000', '008000', '000080', '808000', '800080', '008080', 'C0C0C0', '808080', '9999FF', '993366', 'FFFFCC', 'CCFFFF', '660066', 'FF8080', '0066CC', 'CCCCFF', '000080', 'FF00FF', 'FFFF00', '00FFFF', '800080', '800000', '008080', '0000FF', '00CCFF', 'CCFFFF', 'CCFFCC', 'FFFF99', '99CCFF', 'FF99CC', 'CC99FF', 'FFCC99', '3366FF', '33CCCC', '99CC00', 'FFCC00', 'FF9900', 'FF6600', '666699', '969696', '003366', '339966', '003300', '333300', '993300', '993366', '333399', '333333', '000000', 'FFFFFF'];
     var DEFAULT_THEME = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47', '0563C1', '954F72'];
@@ -396,8 +411,8 @@
         var pr = kid(wb, 'workbookPr'), date1904 = !!pr && (pr.getAttribute('date1904') === '1' || pr.getAttribute('date1904') === 'true');
         var theme = parseTheme(await z.text(pathOfType(/\/theme$/) || 'xl/theme/theme1.xml'));
         var styles = parseStyles(await z.text(pathOfType(/\/styles$/) || 'xl/styles.xml'), theme);
-        var shared = [], ssPath = pathOfType(/\/sharedStrings$/) || 'xl/sharedStrings.xml', ssText = await z.text(ssPath);
-        if (ssText) kids(parseXml(ssText).documentElement, 'si').forEach(function (si) { shared.push(richText(si)); });
+        var shared = [], sharedRich = [], ssPath = pathOfType(/\/sharedStrings$/) || 'xl/sharedStrings.xml', ssText = await z.text(ssPath);
+        if (ssText) kids(parseXml(ssText).documentElement, 'si').forEach(function (si) { shared.push(richText(si)); sharedRich.push(richRuns(si, theme)); });
         var sheets = [];
         kids(kid(wb, 'sheets'), 'sheet').forEach(function (s) {
             var rel = rels[relId(s)];
@@ -407,7 +422,7 @@
         if (!sheets.length) throw fail('File Excel không có sheet nào để hiển thị.', 'NO_SHEET');
         var cache = {};
         async function buildSheet(i) {
-            var sh = parseSheet(parseXml(await z.text(sheets[i].path)), shared, sheets[i].name);
+            var sh = parseSheet(parseXml(await z.text(sheets[i].path)), shared, sheets[i].name, sharedRich, theme);
             if (sh.drawRid) { try { sh.drawing = await loadDrawing(z, sheets[i].path, sh.drawRid, theme); } catch (e) { sh.drawing = null; sh.drawErr = e.message; } }
             return sh;
         }
@@ -429,7 +444,7 @@
         if (cell.k === 's') return formatText(String(cell.v), code);
         try { return formatNumber(cell.v, code, d1904); } catch (_) { return fmtGeneral(cell.v); }
     }
-    function parseSheet(doc, shared, name) {
+    function parseSheet(doc, shared, name, sharedRich, theme) {
         var ws = doc.documentElement, out = { name: name, rows: [], rowPx: {}, rowHidden: {}, rowCustom: {}, cols: {}, merges: [], maxR: 0, maxC: 0, defRowPx: 20, defColPx: 64, hasDrawing: false, hasCondFmt: false, freeze: null };
         var fp = kid(ws, 'sheetFormatPr');
         if (fp) {
@@ -452,10 +467,10 @@
             var arr = out.rows[r] || (out.rows[r] = []), runC = 0;
             kids(row, 'c').forEach(function (c) {
                 var ref = parseRef(c.getAttribute('r')), col = ref ? ref.c : runC + 1; runC = col;
-                var t = c.getAttribute('t') || 'n', s = +c.getAttribute('s') || 0, vEl = kid(c, 'v'), fEl = kid(c, 'f'), v = vEl ? vEl.textContent : null, k = null, val = null;
-                if (t === 'inlineStr') { var is = kid(c, 'is'); if (is) { k = 's'; val = richText(is); } }
+                var t = c.getAttribute('t') || 'n', s = +c.getAttribute('s') || 0, vEl = kid(c, 'v'), fEl = kid(c, 'f'), v = vEl ? vEl.textContent : null, k = null, val = null, rich = null;
+                if (t === 'inlineStr') { var is = kid(c, 'is'); if (is) { k = 's'; val = richText(is); rich = richRuns(is, theme); } }
                 else if (v !== null && v !== '') {
-                    if (t === 's') { k = 's'; val = shared[+v]; if (val === undefined) val = ''; }
+                    if (t === 's') { k = 's'; val = shared[+v]; if (val === undefined) val = ''; rich = (sharedRich && sharedRich[+v]) || null; }
                     else if (t === 'str' || t === 'd') { k = 's'; val = v; }
                     else if (t === 'b') { k = 'b'; val = v === '1' || v === 'true'; }
                     else if (t === 'e') { k = 'e'; val = v; }
@@ -463,7 +478,7 @@
                 }
                 var f = fEl ? fEl.textContent : null;
                 if (k === null && !s && !f) return;
-                arr[col] = { k: k, v: val, f: f || null, s: s };
+                arr[col] = { k: k, v: val, f: f || null, s: s, rich: rich, maxSz: rich ? Math.max.apply(null, rich.map(function (x) { return x.sz || 0; })) : 0 };
                 if (k !== null && col > out.maxC) out.maxC = col;
                 if (k !== null && r > out.maxR) out.maxR = r;
             });
@@ -550,6 +565,18 @@
         };
     }
     function parseEnd(e) { var t = e && e.getAttribute('type'); return t && t !== 'none' ? { type: t, w: e.getAttribute('w') || 'med' } : null; }
+    var NS_M = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
+    function mathRuns(node, out, pos, fontRefColor, theme) {      // công thức Office Math (a14:m) → các đoạn chữ; chỉ số dưới / trên được đánh dấu pos
+        for (var n = node.firstChild; n; n = n.nextSibling) {
+            if (n.nodeType !== 1 || n.localName === 'rPr' || n.localName === 'ctrlPr') continue;
+            if (n.namespaceURI === NS_M && n.localName === 'r') {
+                var t = kid(n, 't'), rp = n.getElementsByTagNameNS('*', 'rPr')[0], col = rp ? paintOf(rp, theme) : null, lat = rp && kid(rp, 'latin');
+                out.push({ t: t ? t.textContent : '', sz: rp && rp.getAttribute('sz') ? +rp.getAttribute('sz') / 100 : 0, b: false, i: !!rp && rp.getAttribute('i') === '1', u: false, c: col ? col.c : fontRefColor, f: lat ? lat.getAttribute('typeface') : null, pos: pos });
+            } else if (n.localName === 'sSub') { mathRuns(kid(n, 'e') || n, out, pos, fontRefColor, theme); mathRuns(kid(n, 'sub') || n, out, 'sub', fontRefColor, theme); }
+            else if (n.localName === 'sSup') { mathRuns(kid(n, 'e') || n, out, pos, fontRefColor, theme); mathRuns(kid(n, 'sup') || n, out, 'sup', fontRefColor, theme); }
+            else mathRuns(n, out, pos, fontRefColor, theme);
+        }
+    }
     function parseText(tx, style, theme) {
         if (!tx) return null;
         var bp = kid(tx, 'bodyPr'), fontRefColor = null;
@@ -560,6 +587,7 @@
             for (var n = p.firstChild; n; n = n.nextSibling) {
                 if (n.nodeType !== 1) continue;
                 if (n.localName === 'br') { runs.push({ br: true }); continue; }
+                if (n.localName === 'm') { var mr = []; mathRuns(n, mr, '', fontRefColor ? fontRefColor.c : null, theme); mr.forEach(function (x) { runs.push(x); if (x.t) any = true; }); continue; }
                 if (n.localName !== 'r' && n.localName !== 'fld') continue;
                 var rp = kid(n, 'rPr'), t = kid(n, 't'), txt = t ? t.textContent : '';
                 var col = paintOf(rp, theme), lat = rp && kid(rp, 'latin');
@@ -707,7 +735,7 @@
                     s += '<text x="' + f1(x) + '" y="' + f1(base) + '" text-anchor="' + anchor + '" xml:space="preserve">';
                     ln.toks.forEach(function (k) {
                         var fam = k.css.replace(/^(italic )?(bold )?[\d.]+px /, '');
-                        s += '<tspan font-size="' + f1(k.sz * 96 / 72) + '"' + (k.r.b ? ' font-weight="bold"' : '') + (k.r.i ? ' font-style="italic"' : '') + (k.r.u ? ' text-decoration="underline"' : '') + ' font-family="' + esc(fam) + '" fill="' + (k.r.c || '#000') + '">' + esc(k.t) + '</tspan>';
+                        s += '<tspan font-size="' + f1(k.sz * 96 / 72 * (k.r.pos ? 0.72 : 1)) + '"' + (k.r.pos ? ' baseline-shift="' + (k.r.pos === 'sub' ? 'sub' : 'super') + '"' : '') + (k.r.b ? ' font-weight="bold"' : '') + (k.r.i ? ' font-style="italic"' : '') + (k.r.u ? ' text-decoration="underline"' : '') + ' font-family="' + esc(fam) + '" fill="' + (k.r.c || '#000') + '">' + esc(k.t) + '</tspan>';
                     });
                     s += '</text>';
                 }
@@ -826,8 +854,8 @@
             if (xf.v) css += 'vertical-align:' + (xf.v === 'center' ? 'middle' : xf.v === 'justify' ? 'top' : xf.v) + ';';
             if (xf.wrap) css += 'white-space:pre-wrap;word-break:break-word;';
             if (xf.indent) css += 'padding-' + (xf.h === 'right' ? 'right' : 'left') + ':' + (3 + xf.indent * 9) + 'px;';
-            var cls = '';
-            if (css) { cls = uid + 's' + s; ruleText += '.' + uid + ' .' + cls + '{' + css + '}\n'; ruleEl.textContent = ruleText; }
+            var cls = '';      // quy tắc 'td.lớp' có độ ưu tiên cao hơn font mặc định của bảng → cỡ chữ / phông riêng từng ô mới có tác dụng
+            if (css) { cls = uid + 's' + s; ruleText += '.' + uid + ' .xv-t td.' + cls + '{' + css + '}\n'; ruleEl.textContent = ruleText; }
             classes[s] = cls; return cls;
         }
         var defFont = (styles.fonts[0] && styles.fonts[0].name) || 'Calibri', defSz = (styles.fonts[0] && styles.fonts[0].sz) || 11;
@@ -842,8 +870,17 @@
         function rowH(r) {
             var sh = cur.sheet; if (sh.rowPx[r]) return sh.rowPx[r];
             var row = sh.rows[r], m = 0, h = sh.defRowPx;
-            if (row) row.forEach(function (cell) { if (cell && cell.k !== null) { var f = styles.fonts[(styles.xfs[cell.s] || styles.xfs[0]).fontId]; if (f && f.sz > m) m = f.sz; } });
+            if (row) row.forEach(function (cell) { if (cell && cell.k !== null) { var f = styles.fonts[(styles.xfs[cell.s] || styles.xfs[0]).fontId]; if (f && f.sz > m) m = f.sz; if (cell.maxSz > m) m = cell.maxSz; } });
             return m ? Math.max(h, Math.round(m * 1.3636 * 96 / 72 * 100) / 100) : h;
+        }
+        function richHtml(runs) {
+            return runs.map(function (r) {
+                var css = (r.c ? 'color:' + r.c + ';' : '') + (r.b ? 'font-weight:700;' : '') + (r.i ? 'font-style:italic;' : '') + ((r.u || r.strike) ? 'text-decoration:' + (r.u ? 'underline ' : '') + (r.strike ? 'line-through' : '') + ';' : '') + (r.sz ? 'font-size:' + r.sz + 'pt;' : '') + (r.f ? 'font-family:"' + r.f.replace(/"/g, '') + '",Arial,sans-serif;' : '');
+                return css ? '<span style="' + css + '">' + esc(r.t) + '</span>' : esc(r.t);
+            }).join('');
+        }
+        function richWidth(runs, xf) {
+            var w = 0; runs.forEach(function (r) { var f = fontCss(xf); cv.font = (r.i ? 'italic ' : '') + (r.b ? 'bold ' : '') + (r.sz ? Math.round(r.sz * 96 / 72 * 10) / 10 + 'px ' : f.replace(/^(italic )?(bold )?/, '')) + (r.sz ? (r.f ? '"' + r.f + '",' : '') + 'Arial,sans-serif' : ''); w += cv.measureText(r.t).width; }); return w;
         }
         function chunkHtml(from, to) {
             var sh = cur.sheet, html = '', r, c;
@@ -863,7 +900,7 @@
                     } else if (cell && cell.k === 's' && txt && !(xf && xf.wrap) && (!xf || !xf.h || xf.h === 'general' || xf.h === 'left')) {          // chữ dài tràn sang các ô trống bên phải
                         var avail = colWidth(c), est = txt.length * 7 + 8;
                         if (est > avail) {
-                            cv.font = fontCss(xf); var need = cv.measureText(txt).width + 8, c2 = c + 1;
+                            var need = (cell.rich ? richWidth(cell.rich, xf) : (cv.font = fontCss(xf), cv.measureText(txt).width)) + 8, c2 = c + 1;
                             while (avail < need && c2 <= cur.maxC) {
                                 if (cur.covered.has(r * 20000 + c2) || cur.merges.has(r * 20000 + c2) || (row[c2] && row[c2].k !== null)) break;
                                 if (!colHidden(c2)) { avail += colWidth(c2); span++; } c2++;
@@ -873,7 +910,7 @@
                     }
                     var al = cls ? ' ' + cls : '';
                     if (cell && cell.k !== null && !(xf && xf.h && xf.h !== 'general')) al += cell.k === 'n' ? ' xv-n' : (cell.k === 'b' || cell.k === 'e') ? ' xv-c' : '';
-                    html += '<td data-r="' + r + '" data-c="' + c + '"' + (al ? ' class="' + al.trim() + '"' : '') + attrs + '>' + esc(txt) + '</td>';
+                    html += '<td data-r="' + r + '" data-c="' + c + '"' + (al ? ' class="' + al.trim() + '"' : '') + attrs + '>' + (cell && cell.rich && cell.k === 's' ? richHtml(cell.rich) : esc(txt)) + '</td>';
                 }
                 html += '</tr>';
             }
