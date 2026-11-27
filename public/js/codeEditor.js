@@ -140,8 +140,12 @@
             if (r.finished) { r.pumping = false; return; }
             var m = r.m;
             if (Date.now() - r.startedAt > 240000 && !m.waiting) m.fault('Chạy quá thời gian cho phép.');
-            var st = m.run(100000);
-            if (st === 'running') { if (Date.now() - r.lastDraw > 80) emuDraw(r); return void setTimeout(tick, 0); }
+            // Lát chạy tự chỉnh ≈ 12ms (PerfKit.nextBatch) và nhường bằng MessageChannel: không bị khoá ≥ 4ms của setTimeout(0)
+            // (Chrome/Safari) nên vòng lặp nặng chạy nhanh hơn mà ô nhập/nút Dừng vẫn mượt. Không có PerfKit → như cũ (100000 lệnh).
+            var PKit = window.PerfKit, t0 = PKit ? performance.now() : 0;
+            var st = m.run(PKit ? (r.batch || (r.batch = 20000)) : 100000);
+            if (PKit) r.batch = PKit.nextBatch(r.batch, performance.now() - t0);
+            if (st === 'running') { if (Date.now() - r.lastDraw > 80) emuDraw(r); return void (PKit ? PKit.yieldNow(tick) : setTimeout(tick, 0)); }
             r.pumping = false;
             if (st === 'halted' || st === 'error') emuFinish(r); else emuDraw(r);
         })();

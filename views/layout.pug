@@ -4,8 +4,10 @@ html(lang="vi")
         meta(charset="utf-8")
         meta(name="viewport", content="width=device-width, initial-scale=1")
         title #{title || 'repository-mnha'} · repository-mnha
-        script(src="https://cdn.tailwindcss.com")
-        script(src="https://unpkg.com/lucide@latest")
+        // Third-party CDN scripts are proxied to same-origin /vendor/* so Safari + COEP=require-corp does not depend on CDN CORS.
+        // If the proxy is unreachable, fall back to the CDN (crossorigin only when the page is cross-origin isolated, i.e. COEP=require-corp).
+        script(src="/vendor/tailwind.js", onerror="var s=document.createElement('script');s.src='https://cdn.tailwindcss.com/3.4.17';if(window.crossOriginIsolated)s.crossOrigin='anonymous';document.head.appendChild(s)")
+        script(src="/vendor/lucide.js", onerror="var s=document.createElement('script');s.src='https://unpkg.com/lucide@latest/dist/umd/lucide.js';if(window.crossOriginIsolated)s.crossOrigin='anonymous';s.onload=function(){if(window.lucide)lucide.createIcons()};document.head.appendChild(s)")
     body(class="bg-gray-50 text-gray-900")
         header(class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 sm:px-6")
             a(href="/", class="flex items-center gap-2 font-bold text-indigo-600")

@@ -26,7 +26,16 @@ Mặc định tự bật khi có biến `VERCEL` (đặt `CPP_RUN_MODE=server|br
 (vài chục MB, cache lại), dịch `main.cpp` → wasm rồi chạy; `cin` nhập qua ô nhập, `freopen` dùng các .txt cùng thư mục (nạp qua `/code/cpp/siblings`).
 - `public/js/cppShims.js`: header giả `bits/stdc++.h`, `conio.h`, `windows.h` và `system("pause"/"cls")` (không đổi số dòng code người dùng).
 - `public/js/cppWasm.js`: tải SDK, dịch, chạy. Cờ clang ở đầu file (`CLANG_ARGS`, `LINK_ARGS`) — chỉnh nếu clang báo thiếu libc++.
-- Trang sửa code C++ gửi COOP `same-origin` + COEP `credentialless` (cần cho SDK). Kết quả lưu qua `POST /code/cpp/client-result`.
+- Trang sửa code C++ gửi COOP `same-origin` + COEP (cần cho SDK). Kết quả lưu qua `POST /code/cpp/client-result`.
+- **Chrome/Edge/Firefox ↔ Safari/iOS** (`utils/isolation.js`): Chrome/Edge/Firefox dùng COEP `credentialless`; **Safari (macOS) và mọi trình duyệt trên iPhone/iPad** (WebKit) chưa hỗ trợ nên dùng `require-corp`
+  (khi đó `layout.pug` gắn `crossorigin="anonymous"` cho script Tailwind/Lucide từ CDN). Đoán theo User-Agent; đoán sai thì client (`cppWasm.js`) tự xin lại trang với `?coep=rc` đúng 1 lần
+  (ép tay: `?coep=rc` / `?coep=cl`). Response có `Vary: User-Agent`.
+- **Tự host SDK** (khuyên dùng, không phụ thuộc unpkg, cùng origin nên `require-corp` không bị CDN chặn): `node scripts/vendor-wasmer.js` → `public/vendor/wasmer/`, redeploy là tự dùng
+  (`WASMER_SDK_URL` ép nguồn khác). `server.js` gắn COEP + cache cho `/vendor/**` vì Worker nạp từ URL thật phải tự mang COEP.
+- **Tối ưu**: tải trước SDK+clang khi trình duyệt rảnh (bỏ qua nếu Tiết kiệm dữ liệu/2G) · cache bản dịch `main.wasm` theo nội dung code + header đi kèm (bộ nhớ + Cache Storage `mnha-wasm-v1`, giữ 6 bản, sống qua tải lại trang;
+  lỗi dịch không cache; file `.txt` không làm mất cache) · ghi file thư mục ảo song song · emu8086: lát chạy tự chỉnh ≈12ms + nhường bằng MessageChannel (`public/js/perfKit.js`).
+- **Tự kiểm tra trên trình duyệt thật**: mở `/code/cpp/iso-check` (cần đăng nhập) trên Chrome và Safari → bảng môi trường (crossOriginIsolated, SharedArrayBuffer…) + dịch thử 3 lần (lạnh / trúng cache / code khác) + báo cáo để gửi lại.
+- Test: `node test/isolation.js`, `test/perf-kit.js`, `test/cpp-wasm.js` (chạy nguyên `cppWasm.js` với SDK giả), `node -r ./test/_stubs.js test/code-isolation.js`, `test/emu-pump.js`.
 - Giới hạn: không `std::thread`, không exception (wasi-libc++), nút Dừng chỉ ngừng hiển thị, hết 60 giây tự dừng.
 
 ## C++ kiểu OnlineGDB: runner riêng + web ở Vercel (khuyên dùng) — `runner/`

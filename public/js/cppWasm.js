@@ -1,22 +1,78 @@
 // public/js/cppWasm.js — biên dịch + chạy C++ NGAY TRONG TRÌNH DUYỆT (clang chạy bằng WebAssembly, qua Wasmer JS SDK).
-// Dùng khi máy chủ không có g++ (Vercel). Cần: trang gửi header COOP/COEP (controller đã làm), và tải được
-// SDK + gói "clang/clang" từ mạng (~vài chục MB, trình duyệt cache lại sau lần đầu).
+// Dùng khi máy chủ không có g++ (Vercel). Cần: trang gửi header COOP/COEP (controller đã làm — utils/isolation.js chọn
+// `credentialless` cho Chrome/Edge/Firefox và `require-corp` cho Safari/iOS), và tải được SDK + gói "clang/clang"
+// (~vài chục MB, trình duyệt cache lại sau lần đầu; muốn khỏi phụ thuộc unpkg: `node scripts/vendor-wasmer.js`).
+// Tối ưu: (1) tải trước SDK+clang lúc trình duyệt rảnh · (2) cache bản dịch wasm theo nội dung code (chạy lại cùng code = 0 giây dịch)
+//         (3) tự đổi COEP sang require-corp nếu trình duyệt không cô lập được · (4) ghi file vào thư mục ảo song song.
 (function (root) {
-    var SDK_URL = root.WASMER_SDK_URL || 'https://unpkg.com/@wasmer/sdk@0.8.0-beta.1/dist/index.mjs';
+    var PK = root.PerfKit;                                     // perfKit.js phải nạp trước
+    function readPayload() { try { var el = root.document && root.document.getElementById('payload'); return el ? JSON.parse(el.textContent) : {}; } catch (_) { return {}; } }
+    var PAYLOAD = readPayload();
+    var SDK_URL = root.WASMER_SDK_URL || PAYLOAD.sdkUrl || 'https://unpkg.com/@wasmer/sdk@0.8.0-beta.1/dist/index.mjs';
+    var REGISTRY_URL = root.WASMER_REGISTRY_URL || PAYLOAD.wasmerRegistryUrl || '/api/wasmer/registry';
     var CLANG_PKG = root.WASMER_CLANG_PKG || 'clang/clang';
     // ⚠ Nếu clang báo thiếu thư viện C++ khi link, chỉnh các cờ ở đây (xem thông báo lỗi hiện ra khi dịch).
     var CLANG_ARGS = ['-x', 'c++', '-std=c++17', '-O0', '-w', '-I/project', '-include', '/project/mnha_prelude.h'];
     var LINK_ARGS = ['-lc++', '-lc++abi'];
     var RUN_LIMIT_MS = 60000, COMPILE_LIMIT_MS = 240000;
+    var CACHE_VER = 'v1', CACHE_NAME = 'mnha-wasm-' + CACHE_VER, CACHE_MAX = 6;
+
+    // ---- (3) Cô lập origin: Safari không hiểu COEP credentialless. Nếu UA bị đoán sai thì trình duyệt tự xin lại trang với ?coep=rc (1 lần).
+    function ensureIsolation() {
+        try {
+            if (!root.location || root.crossOriginIsolated || root.isSecureContext === false) return false;
+            if ((PAYLOAD.coep || root.MNHA_COEP) === 'require-corp') return false;       // đã là chế độ chặt nhất, đổi nữa cũng vậy
+            var u = new URL(root.location.href);
+            if (u.searchParams.has('coep')) return false;                                  // đã thử rồi, không lặp
+            u.searchParams.set('coep', 'rc');
+            root.location.replace(u.href);
+            return true;
+        } catch (_) { return false; }
+    }
+    var reloading = ensureIsolation();
 
     var sdkP = null, clangP = null;
     function loadSdk(onStatus) {
-        if (!sdkP) sdkP = import(SDK_URL).then(function (m) { return m.init().then(function () { return m; }); });
+        if (!sdkP) sdkP = import(SDK_URL).then(function (m) { return m.init({ registry: REGISTRY_URL }).then(function () { return m; }); });
         return sdkP.then(function (m) {
             if (!clangP) { onStatus('Đang tải trình biên dịch clang (lần đầu hơi lâu, các lần sau nhanh hơn)...'); clangP = m.Wasmer.fromRegistry(CLANG_PKG); }
             return clangP.then(function (clang) { return { sdk: m, clang: clang }; });
         }).catch(function (e) { sdkP = clangP = null; throw e; });
     }
+    // ---- (1) Tải trước: vừa mở trang là nạp SDK + clang lúc rảnh, bấm Chạy là dịch được ngay.
+    function preload(onStatus) { return loadSdk(onStatus || function () { }).then(function () { return true; }, function () { return false; }); }
+    if (PK && !reloading && root.document && root.crossOriginIsolated && PK.shouldPreload(root.navigator)) PK.idle(function () { preload(); });
+
+    // ---- (2) Cache bản dịch: cùng code + cùng header đi kèm + cùng cờ → dùng lại main.wasm (bộ nhớ + Cache Storage, giữ qua lần tải lại trang).
+    var mem = PK ? new PK.Lru(CACHE_MAX) : null;
+    function cacheReq(key) { var path = '/__mnha_wasm/' + key; return new Request(root.location && root.location.href ? new URL(path, root.location.href).href : path); }   // URL tuyệt đối: chạy được cả ngoài trình duyệt
+    async function cacheGet(key) {
+        var b = mem && mem.get(key); if (b) return b;
+        try {
+            if (!root.caches) return null;
+            var c = await root.caches.open(CACHE_NAME), r = await c.match(cacheReq(key));
+            if (!r) return null;
+            b = new Uint8Array(await r.arrayBuffer()); if (mem) mem.set(key, b); return b;
+        } catch (_) { return null; }
+    }
+    async function cachePut(key, bytes) {
+        if (mem) mem.set(key, bytes);
+        try {
+            if (!root.caches) return;
+            var c = await root.caches.open(CACHE_NAME);
+            await c.put(cacheReq(key), new Response(bytes, { headers: { 'content-type': 'application/wasm' } }));
+            var ks = await c.keys();
+            for (var i = 0; i < ks.length - CACHE_MAX; i++) await c.delete(ks[i]);     // giữ CACHE_MAX bản gần nhất
+        } catch (_) { /* Safari chế độ riêng tư / hết chỗ → bỏ qua, vẫn có cache bộ nhớ */ }
+    }
+    function cacheKey(code, srcFiles, lean) {
+        var shim = root.CppShims.files, names = Object.keys(shim).sort();
+        var parts = [CACHE_VER, CLANG_ARGS.join(' '), LINK_ARGS.join(' '), lean, code];
+        names.forEach(function (n) { parts.push(n, n === 'bits/stdc++.h' ? '' : shim[n]); });
+        srcFiles.slice().sort(function (a, b) { return a.name < b.name ? -1 : 1; }).forEach(function (f) { parts.push(f.name, f.unit ? 'U' : 'H', f.content); });
+        return PK.hash(parts);
+    }
+
     var dec = new TextDecoder();
     function td(x) { return typeof x === 'string' ? x : dec.decode(x); }
 
@@ -37,8 +93,8 @@
                 var allCode = opts.code + '\n' + srcFiles.map(function (f) { return f.content; }).join('\n');
                 var unitPaths = srcFiles.filter(function (f) { return f.unit; }).map(function (f) { return '/project/' + f.name; });
                 var shim = root.CppShims.files;
-                for (var n in shim) if (n !== 'bits/stdc++.h') await project.writeFile(n, shim[n]);
-                await project.writeFile('bits/stdc++.h', root.CppShims.leanStdcpp(allCode));   // chỉ include header code thực sự dùng → dịch nhanh hơn nhiều
+                var lean = root.CppShims.leanStdcpp(allCode);
+                await Promise.all(Object.keys(shim).filter(function (n) { return n !== 'bits/stdc++.h'; }).map(function (n) { return project.writeFile(n, shim[n]); }).concat([project.writeFile('bits/stdc++.h', lean)]));   // chỉ include header code thực sự dùng → dịch nhanh hơn nhiều
                 if (!root.crossOriginIsolated) opts.onOut('[Cảnh báo] Trang chưa ở chế độ cô lập (crossOriginIsolated=false) nên clang WASM có thể treo. Tải lại bằng Ctrl+F5; nếu vẫn vậy, máy chủ chưa gửi header COOP/COEP.\n', 'err');
                 await project.writeFile('main.cpp', opts.code);
                 (opts.files || []).forEach(function (f) { if (!f.src) userFiles[f.name] = f.content; });
@@ -47,25 +103,34 @@
                     for (var pi = 1; pi <= parts.length; pi++) { try { await project.createDir(parts.slice(0, pi).join('/')); } catch (_) { /* đã có */ } }
                     await project.writeFile(srcFiles[si].name, srcFiles[si].content);
                 }
-                for (var fn in userFiles) await project.writeFile(fn, userFiles[fn]);
+                await Promise.all(Object.keys(userFiles).map(function (fn) { return project.writeFile(fn, userFiles[fn]); }));
 
-                opts.onStatus('Đang biên dịch...');
-                var tryCompile = async function (link) {
-                    var ci = await env.clang.entrypoint.run({ args: CLANG_ARGS.concat(['/project/main.cpp'], unitPaths, link, ['-o', '/project/main.wasm']), mount: { '/project': project } });
-                    return ci.wait();
-                };
-                var t0 = Date.now(), tick = setInterval(function () { opts.onStatus('Đang biên dịch... ' + Math.round((Date.now() - t0) / 1000) + ' giây (lần đầu có thể mất 1–3 phút vì phải nạp clang)'); }, 1000);
-                var limit = new Promise(function (_, rej) { setTimeout(function () { rej(new Error('Biên dịch quá ' + COMPILE_LIMIT_MS / 1000 + ' giây — clang WASM không phản hồi. Thử Ctrl+F5, dùng Chrome/Edge bản mới, và kiểm tra tab Console (F12) xem có lỗi SharedArrayBuffer/COEP.')); }, COMPILE_LIMIT_MS); });
-                var co;
-                try { co = await Promise.race([tryCompile(LINK_ARGS), limit]); } finally { clearInterval(tick); }
-                // gói clang đã tự gắn libc++ thì cờ -lc++ có thể báo "không tìm thấy" → thử lại không có LINK_ARGS
-                if (!co.ok && /(-lc\+\+|unable to find library|cannot find -l)/.test(td(co.stderr || ''))) co = await Promise.race([tryCompile([]), limit]);
-                var cerr = td(co.stderr || '').split('/project/').join('');
-                if (!co.ok) { opts.onOut('Lỗi biên dịch:\n' + cerr + (co.stdout ? td(co.stdout) : ''), 'err'); return finish({ status: 'compile-error', exitCode: co.code, files: {}, error: 'Lỗi biên dịch' }); }
-                if (cerr.trim()) opts.onOut(cerr, 'err');
+                var key = PK ? cacheKey(opts.code, srcFiles, lean) : null;
+                var bytes = key ? await cacheGet(key) : null;
+                if (opts.onCache) opts.onCache(!!bytes);
+                if (bytes) opts.onStatus('Code không đổi — dùng lại bản đã dịch (bỏ qua biên dịch)...');
+                else {
+                    opts.onStatus('Đang biên dịch...');
+                    var tryCompile = async function (link) {
+                        var ci = await env.clang.entrypoint.run({ args: CLANG_ARGS.concat(['/project/main.cpp'], unitPaths, link, ['-o', '/project/main.wasm']), mount: { '/project': project } });
+                        return ci.wait();
+                    };
+                    var t0 = Date.now(), tick = setInterval(function () { opts.onStatus('Đang biên dịch... ' + Math.round((Date.now() - t0) / 1000) + ' giây (lần đầu có thể mất 1–3 phút vì phải nạp clang)'); }, 1000);
+                    var limitT, limit = new Promise(function (_, rej) { limitT = setTimeout(function () { rej(new Error('Biên dịch quá ' + COMPILE_LIMIT_MS / 1000 + ' giây — clang WASM không phản hồi. Thử Ctrl+F5, dùng Chrome/Edge bản mới, và kiểm tra tab Console (F12) xem có lỗi SharedArrayBuffer/COEP.')); }, COMPILE_LIMIT_MS); });
+                    var co;
+                    try { co = await Promise.race([tryCompile(LINK_ARGS), limit]); } catch (e) { clearTimeout(limitT); throw e; } finally { clearInterval(tick); }
+                    // gói clang đã tự gắn libc++ thì cờ -lc++ có thể báo "không tìm thấy" → thử lại không có LINK_ARGS
+                    if (!co.ok && /(-lc\+\+|unable to find library|cannot find -l)/.test(td(co.stderr || ''))) co = await Promise.race([tryCompile([]), limit]);
+                    clearTimeout(limitT);
+                    var cerr = td(co.stderr || '').split('/project/').join('');
+                    if (!co.ok) { opts.onOut('Lỗi biên dịch:\n' + cerr + (co.stdout ? td(co.stdout) : ''), 'err'); return finish({ status: 'compile-error', exitCode: co.code, files: {}, error: 'Lỗi biên dịch' }); }
+                    if (cerr.trim()) opts.onOut(cerr, 'err');
+                    if (st.stopped) return finish({ status: 'stopped', exitCode: null, files: {}, error: 'Đã dừng bởi người dùng.' });
+
+                    bytes = await project.readFile('main.wasm');
+                    if (key) cachePut(key, bytes);      // không await: không làm chậm lúc chạy
+                }
                 if (st.stopped) return finish({ status: 'stopped', exitCode: null, files: {}, error: 'Đã dừng bởi người dùng.' });
-
-                var bytes = await project.readFile('main.wasm');
                 var prog = await env.sdk.Wasmer.fromFile(bytes);
                 opts.onStatus('Đang chạy...'); if (opts.onCompiled) opts.onCompiled();
                 var inst = await prog.entrypoint.run({ mount: { '/project': project }, cwd: '/project' });
@@ -110,5 +175,5 @@
             stop: function () { st.stopped = true; finish({ status: 'stopped', exitCode: null, files: {}, error: 'Đã dừng bởi người dùng.' }); }
         };
     }
-    root.CppWasm = { start: start };
+    root.CppWasm = { start: start, preload: preload, _cacheKey: cacheKey, _isolationReload: reloading };
 })(window);

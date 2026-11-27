@@ -16,6 +16,7 @@ router.get('/session/:sid', ctrl.poll);
 router.post('/session/:sid/input', ctrl.input);
 router.post('/session/:sid/stop', ctrl.stop);
 
+router.get('/cpp/iso-check', ctrl.isoCheck);          // tự kiểm tra C++ WASM trên Chrome/Safari (đặt TRƯỚC /:lang)
 router.get('/emu8086/engine.js', ctrl.emuEngine);      // bộ máy emu8086 chạy ở trình duyệt (mỗi người một máy ảo riêng, không cần phiên trên máy chủ)
 
 // HTML + CSS (đặt TRƯỚC /:lang; các thao tác chung như folder/save/delete rơi xuống route chung bên dưới)

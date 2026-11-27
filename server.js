@@ -55,8 +55,23 @@ app.use((req, res, next) => {
 });
 app.use(cookieParser());
 app.use(express.json({ limit: '4.4mb' }));      // html lưu tối đa 3MB (xem LANGS.html.maxFileBytes); Vercel chặn request > 4.5MB
+// Vendor same-origin: tránh COEP=require-corp chặn CDN script (Tailwind/Lucide) trên Safari/iOS.
+app.get('/vendor/tailwind.js', require('./utils/vendorProxy').handler('tailwind'));
+app.get('/vendor/lucide.js', require('./utils/vendorProxy').handler('lucide'));
+// Wasmer GraphQL registry same-origin: SDK có thể query registry mà không cần CORS từ trang Safari.
+app.post('/api/wasmer/registry', require('./services/wasmerProxy').graphql);
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    setHeaders(res, filePath) {
+        // public/vendor/** = thư viện tự host (scripts/vendor-wasmer.js): cache 1 giờ + làm mới ngầm 1 ngày (đường dẫn cố định nên không dùng immutable).
+        // Worker nạp từ URL thật phải tự mang COEP khi trang cha đã cô lập (Chrome/Safari kiểm tra), nên gắn luôn cho cả thư mục.
+        if (/[\\/]public[\\/]vendor[\\/]/.test(filePath)) {
+            res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+            res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+            res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        }
+    }
+}));
 
 // Đếm lưu lượng trình duyệt ⇄ web (xấp xỉ) cho trang /connect — xem services/connect/usage.js
 app.use(require('./services/connect/usage').middleware());

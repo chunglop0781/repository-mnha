@@ -4,7 +4,7 @@ const Module = require('module'); const orig = Module._load;
 Module._load = function (request, ...rest) {
   if (request === '@octokit/rest') {
     try { return orig.call(this, request, ...rest); } catch (_) {
-      return { Octokit: class { constructor() { this.hook = { error() {}, after() {} }; this.git = {}; this.repos = {}; } } };
+      return { Octokit: class { constructor() { this.hook = { before() {}, error() {}, after() {}, wrap() {} }; this.git = {}; this.repos = {}; } } };
     }
   }
   return orig.call(this, request, ...rest);

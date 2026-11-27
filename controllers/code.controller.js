@@ -17,6 +17,7 @@ const remote = require('../services/code/remoteRunner');
 const remoteSource = require('../services/code/remoteSource');
 const includeResolver = require('../services/code/includeResolver');
 const { LANGS, CPP_RUN_MODE, EMPTY_TXT_PLACEHOLDER } = require('../config/codeConfig');
+const isolation = require('../utils/isolation');
 
 const uidOf = (req) => String(req.user._id);
 const wrap = (fn) => async (req, res) => {
@@ -75,12 +76,13 @@ exports.createFile = wrap(async (req, res) => {
 function renderEditor(req, res, { lang, dir, file, content, results, online, githubUrl, shareLabel, folderUrl }) {
     const runnable = file.toLowerCase().endsWith('.' + lang.runExt);
     const cppMode = lang.key === 'cpp' ? CPP_RUN_MODE : null;
-    if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin
-        res.set('Cross-Origin-Opener-Policy', 'same-origin');
-        res.set('Cross-Origin-Embedder-Policy', 'credentialless');
+    let coep = null, sdkUrl = null;
+    if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin: Chrome/Firefox → credentialless, Safari/iOS → require-corp (utils/isolation.js)
+        coep = isolation.apply(req, res);
+        sdkUrl = isolation.sdkUrl();
     }
-    const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode, online: online || null };
-    res.render('code/editor', { cppMode, title: file, user: req.user, lang, dir, file, runnable, online: online || null, githubUrl, shareLabel, folderUrl: folderUrl || null, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
+    const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode, online: online || null, coep, sdkUrl };
+    res.render('code/editor', { cppMode, coep, sdkUrl, title: file, user: req.user, lang, dir, file, runnable, online: online || null, githubUrl, shareLabel, folderUrl: folderUrl || null, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
 }
 
 exports.edit = wrap(async (req, res) => {
@@ -371,6 +373,46 @@ exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy tr
 
 // Bộ máy emu8086 (assembler + machine) gửi cho trình duyệt: dùng lại ĐÚNG mã trong services/emu8086 (không nhân đôi) → window.Emu8086 = { Machine, AsmError, assemble }
 let _emuBundle = null;
+// GET /code/cpp/iso-check — trang tự kiểm tra C++ WASM ngay trên Chrome / Safari (cô lập origin, SharedArrayBuffer, dịch thử 3 lần: lạnh → trúng cache → code khác)
+exports.isoCheck = (req, res) => {
+    const coep = isolation.apply(req, res);
+    const cfg = JSON.stringify({ coep, sdkUrl: isolation.sdkUrl(), wasmerRegistryUrl: '/api/wasmer/registry', cppMode: CPP_RUN_MODE, ua: req.get('user-agent') || '' }).replace(/</g, '\\u003c');
+    const cors = coep === 'require-corp' ? ' crossorigin="anonymous"' : '';
+    res.set('Cache-Control', 'no-store').type('html').send(`<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kiểm tra C++ WASM</title>
+<style>body{font:14px/1.5 system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 14px;color:#0f172a}table{border-collapse:collapse;width:100%}td{border:1px solid #e2e8f0;padding:4px 8px;vertical-align:top}.ok{color:#15803d;font-weight:600}.bad{color:#b91c1c;font-weight:600}button{padding:8px 14px;border-radius:8px;border:0;background:#4f46e5;color:#fff;font-size:14px}pre{background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;white-space:pre-wrap}</style></head><body>
+<h2>Kiểm tra C++ trong trình duyệt (WASM)</h2><p>Mở trang này trên <b>Chrome</b>, <b>Safari</b> (cả iPhone) và Firefox Android nếu có, bấm nút rồi gửi lại báo cáo ở cuối trang.</p>
+<table id="env"></table><p><button id="go">Chạy thử biên dịch (tải vài chục MB lần đầu)</button> <span id="st"></span></p><pre id="rep">(chưa chạy)</pre>
+<script>window.__CFG=${cfg};window.WASMER_SDK_URL=__CFG.sdkUrl;window.WASMER_REGISTRY_URL=__CFG.wasmerRegistryUrl;window.MNHA_COEP=__CFG.coep;</script>
+<script src="/js/perfKit.js"${cors}></script><script src="/js/cppShims.js"${cors}></script><script src="/js/cppWasm.js"${cors}></script>
+<script>
+(function(){var C=window.__CFG,$=function(i){return document.getElementById(i)},rep=[];
+function log(l){rep.push(l);$('rep').textContent=rep.join('\\n')}
+var env=[['User-Agent',C.ua],['Trang gửi COEP',C.coep+(location.search?'  (URL: '+location.search+')':'')],['Chế độ C++ của máy chủ',C.cppMode+(C.cppMode==='browser'?'':'  ⚠ không phải "browser" nên trang C++ thật sẽ dùng runner, không dùng WASM')],['Nguồn SDK',C.sdkUrl],
+['Secure context (https/localhost)',window.isSecureContext],['crossOriginIsolated',window.crossOriginIsolated],['SharedArrayBuffer',typeof SharedArrayBuffer!=='undefined'],['Atomics',typeof Atomics!=='undefined'],['WebAssembly',typeof WebAssembly!=='undefined'],['Worker',typeof Worker!=='undefined'],['Cache Storage',!!window.caches],['MessageChannel',typeof MessageChannel!=='undefined']];
+$('env').innerHTML=env.map(function(r){var v=r[1],c=v===true?'ok':v===false?'bad':'';return '<tr><td>'+r[0]+'</td><td class="'+c+'">'+String(v).replace(/</g,'&lt;')+'</td></tr>'}).join('');
+env.forEach(function(r){log(r[0]+': '+r[1])});
+fetch(location.pathname+location.search,{method:'HEAD',cache:'no-store'}).then(function(r){log('Header máy chủ thực gửi: COOP='+r.headers.get('cross-origin-opener-policy')+' · COEP='+r.headers.get('cross-origin-embedder-policy'))},function(){});
+function netReport(){try{var hosts={},px=0;performance.getEntriesByType('resource').forEach(function(e){try{var u=new URL(e.name);if(u.pathname.indexOf('/api/wasmer/registry')===0)px++;if(u.origin!==location.origin)hosts[u.host]=(hosts[u.host]||0)+1}catch(_){}});
+log((px?'✔ ':'✘ ')+'Truy vấn registry đi qua proxy cùng origin: '+px+' lần'+(px?'':' — SDK đang gọi thẳng registry (tuỳ chọn registry không có tác dụng); khi đó cần registry/CDN gửi CORS dưới COEP '+C.coep));
+log('Host ngoài đã tải (luồng chính): '+(Object.keys(hosts).join(', ')||'(không có)')+' — request do Worker của SDK phát ra không hiện ở đây; nếu clang không tải được, xem Console/Network.')}catch(e){log('Không đọc được Resource Timing: '+e.message)}}
+$('go').onclick=function(){
+  if(!window.crossOriginIsolated){log('✘ Chưa cô lập origin → clang WASM sẽ không chạy. (Nếu trang vừa tự tải lại với ?coep=rc mà vẫn thế: trình duyệt/CDN đang chặn tài nguyên — xem Console.)');return}
+  $('go').disabled=true;
+  var T=[['1) dịch lạnh','#include <bits/stdc++.h>\\nusing namespace std;\\nint main(){string s;cin>>s;cout<<"hello "<<s<<endl;return 0;}'],['2) cùng code → phải trúng cache (không dịch lại)',null],['3) code khác → dịch lại','#include <iostream>\\nint main(){std::cout<<"v2"<<std::endl;}']],last;
+  (function next(i){
+    if(i>=T.length){netReport();$('go').disabled=false;$('st').textContent='xong';return}
+    var code=T[i][1]||last;last=code;var t0=performance.now(),tc=null,hit=null,out='';
+    var h=CppWasm.start({code:code,files:[],onStatus:function(m){$('st').textContent=m},onOut:function(t){out+=t},onCache:function(x){hit=x},onCompiled:function(){tc=performance.now()-t0}});
+    setTimeout(function(){try{h.send('MNHA\\n')}catch(e){}},50);
+    h.done.then(function(r){var ms=Math.round(performance.now()-t0);var ok=r.status==='finished'&&(i===2?/v2/.test(out):/hello MNHA/.test(out));
+      var cacheOk=i===1?hit===true:hit===false;
+      log((ok&&cacheOk?'✔ ':'✘ ')+T[i][0]+': '+ms+' ms (tới lúc chạy: '+(tc==null?'-':Math.round(tc))+' ms), cache='+hit+', trạng thái='+r.status+', đầu ra='+JSON.stringify(out.trim().slice(0,80)));
+      next(i+1)});
+  })(0);
+};})();
+</script></body></html>`);
+};
+
 exports.emuEngine = (req, res) => {
     if (!_emuBundle) {
         const fs = require('fs'), path = require('path');
