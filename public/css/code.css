@@ -17,7 +17,8 @@
 .code-panel-title{padding:6px 12px;font-size:12px;color:#94a3b8;background:#0b1220;border-bottom:1px solid #1e293b}
 .emu-regs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 10px;padding:8px 12px;font:12px ui-monospace,Consolas,monospace;border-bottom:1px solid #1e293b}
 .emu-regs b{color:#38bdf8}.emu-regs .fl-on{color:#4ade80}.emu-regs .fl-off{color:#64748b}
-.code-term{display:flex;flex-direction:column;flex:1;min-height:160px;padding:10px 12px;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+.code-right>*{flex-shrink:0}      /* khung phải cuộn dọc: không co các khối con lại, nếu không kết quả dài tràn ra đè lên dòng trạng thái / lịch sử */
+.code-term{display:flex;flex-direction:column;flex:1 0 auto;min-height:160px;padding:10px 12px;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
 .code-term-out{white-space:pre-wrap;word-break:break-all;flex:0 1 auto}
 .code-term-out .t-err{color:#f87171}.code-term-out .t-in{color:#fde047}
 .code-input{display:flex;gap:6px;align-items:center;margin-top:6px}
