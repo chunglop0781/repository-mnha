@@ -154,7 +154,7 @@ class Assembler {
         for (let n = 0; n < this.src.length; n++) {
             let line = stripComment(this.src[n]).trim();
             if (!line) continue;
-            const ln = n + 1;
+            const ln = this.lineMap ? (this.lineMap[n] || n + 1) : n + 1;
             // nhãn
             let m;
             while ((m = /^([A-Za-z_@$?.][\w@$?.]*)\s*:(?!:)\s*(.*)$/.exec(line)) && !SREG.includes(m[1].toUpperCase())) {
@@ -497,8 +497,314 @@ class Assembler {
     }
 }
 
+
+// ====================================================================== TIỀN XỬ LÝ: MACRO ... ENDM + thư viện emu8086.inc
+// Trả về { text, map } ; map[i] = số dòng gốc của dòng i trong text (để báo lỗi đúng dòng).
+const INC_PROCS = {
+    PRINT_NUM_UNS: `PRINT_NUM_UNS PROC NEAR
+ PUSH AX
+ PUSH BX
+ PUSH CX
+ PUSH DX
+ XOR CX,CX
+ MOV BX,10
+@pnu1: XOR DX,DX
+ DIV BX
+ PUSH DX
+ INC CX
+ CMP AX,0
+ JNE @pnu1
+@pnu2: POP DX
+ ADD DL,'0'
+ MOV AL,DL
+ MOV AH,0EH
+ INT 10H
+ LOOP @pnu2
+ POP DX
+ POP CX
+ POP BX
+ POP AX
+ RET
+PRINT_NUM_UNS ENDP`,
+    PRINT_NUM: `PRINT_NUM PROC NEAR
+ PUSH DX
+ PUSH AX
+ CMP AX,0
+ JGE @pn1
+ PUSH AX
+ MOV AL,'-'
+ MOV AH,0EH
+ INT 10H
+ POP AX
+ NEG AX
+@pn1: CALL PRINT_NUM_UNS
+ POP AX
+ POP DX
+ RET
+PRINT_NUM ENDP`,
+    PRINT_STRING: `PRINT_STRING PROC NEAR
+ PUSH AX
+ PUSH SI
+@ps1: MOV AL,[SI]
+ CMP AL,0
+ JE @ps2
+ MOV AH,0EH
+ INT 10H
+ INC SI
+ JMP @ps1
+@ps2: POP SI
+ POP AX
+ RET
+PRINT_STRING ENDP`,
+    CLEAR_SCREEN: `CLEAR_SCREEN PROC NEAR
+ PUSH AX
+ MOV AX,3
+ INT 10H
+ POP AX
+ RET
+CLEAR_SCREEN ENDP`,
+    SCAN_NUM: `SCAN_NUM PROC NEAR
+ PUSH DX
+ PUSH AX
+ PUSH SI
+ MOV CX,0
+ MOV SI,0
+@sn1: MOV AH,0
+ INT 16H
+ CMP AL,'-'
+ JNE @sn2
+ CMP SI,0
+ JNE @sn1
+ CMP CX,0
+ JNE @sn1
+ MOV SI,1
+ MOV AH,0EH
+ INT 10H
+ JMP @sn1
+@sn2: CMP AL,13
+ JE @sn9
+ CMP AL,8
+ JE @sn5
+ CMP AL,'0'
+ JB @sn1
+ CMP AL,'9'
+ JA @sn1
+ MOV AH,0EH
+ INT 10H
+ SUB AL,'0'
+ MOV AH,0
+ PUSH AX
+ MOV AX,CX
+ MOV DX,10
+ MUL DX
+ MOV CX,AX
+ POP AX
+ ADD CX,AX
+ JMP @sn1
+@sn5: MOV AX,CX
+ XOR DX,DX
+ MOV CX,10
+ DIV CX
+ MOV CX,AX
+ MOV AH,0EH
+ MOV AL,8
+ INT 10H
+ MOV AL,' '
+ INT 10H
+ MOV AL,8
+ INT 10H
+ JMP @sn1
+@sn9: CMP SI,0
+ JE @sn10
+ NEG CX
+@sn10: MOV AH,0EH
+ MOV AL,13
+ INT 10H
+ MOV AL,10
+ INT 10H
+ POP SI
+ POP AX
+ POP DX
+ RET
+SCAN_NUM ENDP`,
+    GET_STRING: `GET_STRING PROC NEAR
+ PUSH AX
+ PUSH CX
+ PUSH DI
+ PUSH DX
+ MOV CX,0
+ DEC DX
+@gs1: MOV AH,0
+ INT 16H
+ CMP AL,13
+ JE @gs9
+ CMP AL,8
+ JNE @gs3
+ CMP CX,0
+ JE @gs1
+ DEC DI
+ DEC CX
+ MOV AH,0EH
+ INT 10H
+ MOV AL,' '
+ INT 10H
+ MOV AL,8
+ INT 10H
+ JMP @gs1
+@gs3: CMP CX,DX
+ JAE @gs1
+ MOV [DI],AL
+ INC DI
+ INC CX
+ MOV AH,0EH
+ INT 10H
+ JMP @gs1
+@gs9: MOV BYTE PTR [DI],0
+ MOV AH,0EH
+ MOV AL,13
+ INT 10H
+ MOV AL,10
+ INT 10H
+ POP DX
+ POP DI
+ POP CX
+ POP AX
+ RET
+GET_STRING ENDP`,
+};
+// các macro của emu8086.inc được sinh trực tiếp (PRINT/PRINTN/PUTC/GOTOXY/CURSOROFF/CURSORON)
+function incMacroLines(name, args, uid) {
+    const up = name.toUpperCase();
+    const out = [];
+    const emitChar = (expr) => { out.push(`MOV AL,${expr}`); out.push('MOV AH,0EH'); out.push('INT 10H'); };
+    if (up === 'PUTC') { out.push('PUSH AX'); emitChar(args[0]); out.push('POP AX'); return out; }
+    if (up === 'PRINT' || up === 'PRINTN') {
+        out.push('PUSH AX');
+        let first = true;
+        for (const a of args) {
+            const t = a.trim();
+            const m = /^(['"])(.*)\1$/.exec(t);
+            if (m) { for (const ch of m[2]) emitChar(String(ch.charCodeAt(0))); }
+            else if (t) emitChar(t);
+            first = false;
+        }
+        if (up === 'PRINTN') { emitChar('13'); emitChar('10'); }
+        out.push('POP AX');
+        return out;
+    }
+    if (up === 'GOTOXY') {
+        out.push('PUSH AX'); out.push('PUSH BX'); out.push('PUSH DX');
+        out.push(`MOV DL,${args[0]}`); out.push(`MOV DH,${args[1]}`); out.push('MOV BH,0'); out.push('MOV AH,2'); out.push('INT 10H');
+        out.push('POP DX'); out.push('POP BX'); out.push('POP AX');
+        return out;
+    }
+    if (up === 'CURSOROFF' || up === 'CURSORON') return [];
+    return null;
+}
+function splitQuoted(str) {             // [[isQuoted, text], ...]
+    const parts = []; let cur = '', q = null;
+    for (const c of str) {
+        if (q) { cur += c; if (c === q) { parts.push([true, cur]); cur = ''; q = null; } }
+        else if (c === '"' || c === "'") { if (cur) parts.push([false, cur]); cur = c; q = c; }
+        else cur += c;
+    }
+    if (cur) parts.push([!!q, cur]);
+    return parts;
+}
+function preprocess(source) {
+    const raw = String(source || '').replace(/\r\n?/g, '\n').split('\n');
+    const macros = new Map();           // NAME → {params, body[], locals[]}
+    const lines = [];                   // {t, ln}
+    let i = 0, usesInc = false;
+    // ---- 1) gom định nghĩa macro, bỏ dòng include
+    while (i < raw.length) {
+        const code = stripComment(raw[i]).trim();
+        let m;
+        if ((m = /^include\s+['"<]?\s*([\w.\\\/]+)\s*['">]?\s*$/i.exec(code))) { if (/emu8086\.inc/i.test(m[1])) usesInc = true; lines.push({ t: '', ln: i + 1 }); i++; continue; }
+        if ((m = /^([A-Za-z_@$?.][\w@$?.]*)\s+MACRO\b\s*(.*)$/i.exec(code))) {
+            const def = { params: m[2].trim() ? splitTop(m[2]).map((x) => x.trim()).filter(Boolean) : [], body: [], locals: [], line: i + 1 };
+            let depth = 1; i++;
+            while (i < raw.length) {
+                const c2 = stripComment(raw[i]).trim();
+                if (/^[A-Za-z_@$?.][\w@$?.]*\s+MACRO\b/i.test(c2) || /^(REPT|IRP|IRPC)\b/i.test(c2)) depth++;
+                if (/^ENDM\b/i.test(c2)) { depth--; if (depth === 0) break; }
+                const lm = /^LOCAL\s+(.+)$/i.exec(c2);
+                if (lm) def.locals.push(...splitTop(lm[1]).map((x) => x.trim()).filter(Boolean)); else def.body.push(raw[i]);
+                i++;
+            }
+            macros.set(m[1].toUpperCase(), def);
+            for (let k = 0; k <= (i - def.line + 1) && k < 1; k++) lines.push({ t: '', ln: def.line });
+            i++; continue;
+        }
+        lines.push({ t: raw[i], ln: i + 1 }); i++;
+    }
+    const incNames = ['PRINT', 'PRINTN', 'PUTC', 'GOTOXY', 'CURSOROFF', 'CURSORON'];
+    if (!macros.size && !usesInc) return { text: source, map: null };
+    let uid = 0, budget = 60000;
+    const out = [], map = [];
+    const emit = (t, ln) => { out.push(t); map.push(ln); };
+    function expand(text, ln, depth) {
+        if (--budget < 0 || depth > 24) { emit(text, ln); return; }
+        const code = stripComment(text);
+        let m = /^(\s*(?:[A-Za-z_@$?.][\w@$?.]*\s*:\s*)*)([A-Za-z_@$?.][\w@$?.]*)\b\s*(.*)$/.exec(code);
+        if (m) {
+            const label = m[1], name = m[2], up = name.toUpperCase(), rest = m[3].trim();
+            const args = rest ? splitTop(rest).map((x) => x.trim()) : [];
+            const mac = macros.get(up);
+            if (mac) {
+                const id = ++uid;
+                if (label.trim()) emit(label, ln);
+                const map2 = new Map();
+                mac.params.forEach((p, k) => map2.set(p.toUpperCase(), args[k] !== undefined ? args[k] : ''));
+                mac.locals.forEach((l) => map2.set(l.toUpperCase(), `${l}__${id}`));
+                for (const bl of mac.body) {
+                    const rebuilt = splitQuoted(bl).map(([q, seg]) => q ? seg : seg.replace(/[A-Za-z_@$?.][\w@$?.]*/g, (w) => (map2.has(w.toUpperCase()) ? map2.get(w.toUpperCase()) : w))).join('');
+                    expand(rebuilt, ln, depth + 1);
+                }
+                return;
+            }
+            if (usesInc && incNames.includes(up) && !(/^\s*[:=]/.test(rest))) {
+                const gen = incMacroLines(up, args, ++uid);
+                if (gen) { if (label.trim()) emit(label, ln); gen.forEach((g) => emit(g, ln)); return; }
+            }
+            let dm = usesInc ? /^DEFINE_([A-Z_]+)$/i.exec(name) : null;
+            if (dm) {
+                const key = dm[1].toUpperCase();
+                if (INC_PROCS[key]) { INC_PROCS[key].split('\n').forEach((g) => emit(g, ln)); return; }
+                if (key === 'PTHIS') { emit('; define_pthis: CALL PTHIS được xử lý trực tiếp', ln); return; }
+            }
+        }
+        emit(text, ln);
+    }
+    for (let li = 0; li < lines.length; li++) {
+        const l = lines[li];
+        // CALL PTHIS + DB 'chuỗi', 0  → in thẳng chuỗi (PTHIS của emu8086.inc)
+        const pm = usesInc ? /^(\s*(?:[A-Za-z_@$?.][\w@$?.]*\s*:\s*)*)call\s+pthis\b/i.exec(stripComment(l.t)) : null;
+        if (pm) {
+            let nj = li + 1;
+            while (nj < lines.length && !stripComment(lines[nj].t).trim()) nj++;
+            const dm = nj < lines.length ? /^(?:[A-Za-z_@$?.][\w@$?.]*\s+)?db\s+(.*)$/i.exec(stripComment(lines[nj].t).trim()) : null;
+            if (dm) {
+                if (pm[1].trim()) emit(pm[1], l.ln);
+                emit('PUSH AX', l.ln);
+                for (const item of splitTop(dm[1]).map((x) => x.trim())) {
+                    const qm = /^(['"])(.*)\1$/.exec(item);
+                    if (qm) { for (const ch of qm[2]) { emit('MOV AL,' + ch.charCodeAt(0), l.ln); emit('MOV AH,0EH', l.ln); emit('INT 10H', l.ln); } }
+                    else if (item && item !== '0') { emit('MOV AL,' + item, l.ln); emit('MOV AH,0EH', l.ln); emit('INT 10H', l.ln); }
+                }
+                emit('POP AX', l.ln);
+                li = nj; continue;
+            }
+        }
+        expand(l.t, l.ln, 0);
+    }
+    return { text: out.join('\n'), map };
+}
+
 function assemble(source) {
-    const a = new Assembler(source);
+    const pp = preprocess(source);
+    const a = new Assembler(pp.text);
+    a.lineMap = pp.map;
     return a.assemble();
 }
 

@@ -1,5 +1,5 @@
-// node -r ./test/_stubs.js test/code-isolation.js — controller thật: header COOP/COEP theo trình duyệt cho trang C++ (WASM), emu8086 KHÔNG bị ảnh hưởng,
-// payload/view nhận đúng coep + sdkUrl, và trang tự kiểm tra /code/cpp/iso-check có JS hợp lệ.
+// node -r ./test/_stubs.js test/code-isolation.js — controller thật: trang soạn C++ chạy bằng trình thông dịch JS (cppJs.js) nên KHÔNG gửi COOP/COEP (mọi trình duyệt như nhau),
+// emu8086 cũng không bị ảnh hưởng; trang tự kiểm tra /code/cpp/iso-check (clang WASM, tuỳ chọn) vẫn gửi COOP/COEP theo trình duyệt và có JS hợp lệ.
 process.env.CPP_RUN_MODE = 'browser'; delete process.env.CPP_RUNNER_URL; delete process.env.WASMER_SDK_URL;
 const assert = require('assert'), vm = require('vm');
 const store = require('../services/code/codeStore');
@@ -20,18 +20,16 @@ function call(fn, lang, ua, query = {}) {
 }
 
 (async () => {
-    for (const [name, ua, coep] of [['Chrome', CHROME, 'credentialless'], ['Safari macOS', SAFARI, 'require-corp'], ['Chrome iPhone', IOS_CHROME, 'require-corp'], ['Firefox Android', FF_ANDROID, 'require-corp']]) {
+    for (const [name, ua] of [['Chrome', CHROME], ['Safari macOS', SAFARI], ['Chrome iPhone', IOS_CHROME], ['Firefox Android', FF_ANDROID]]) {
         const o = await call(ctrl.edit, 'cpp', ua);
         assert.strictEqual(o.render && o.render.view, 'code/editor', name + ': render editor (' + JSON.stringify(o.body) + ')');
-        assert.strictEqual(o.h['Cross-Origin-Embedder-Policy'], coep, name + ': COEP'); assert.strictEqual(o.h['Cross-Origin-Opener-Policy'], 'same-origin');
-        assert.deepStrictEqual(o.vary, ['User-Agent']);
-        assert.strictEqual(o.render.locals.coep, coep, name + ': view nhận coep (layout dùng để gắn crossorigin cho CDN)');
-        assert(o.render.locals.sdkUrl, 'view nhận sdkUrl (modulepreload)');
+        assert(!('Cross-Origin-Embedder-Policy' in o.h) && !('Cross-Origin-Opener-Policy' in o.h), name + ': trang C++ (JS thuần) không cần COOP/COEP');
+        assert.strictEqual(o.render.locals.coep, null, name + ': view không có coep');
+        assert.strictEqual(o.render.locals.cppMode, 'browser');
         const payload = JSON.parse(o.render.locals.payloadJson.replace(/\\u003c/g, '<'));
-        assert.strictEqual(payload.coep, coep); assert.strictEqual(payload.sdkUrl, o.render.locals.sdkUrl); assert.strictEqual(payload.cppMode, 'browser');
+        assert.strictEqual(payload.coep, null); assert.strictEqual(payload.cppMode, 'browser');
     }
-    // ép tay bằng URL (đường tự cứu của client)
-    let o = await call(ctrl.edit, 'cpp', CHROME, { coep: 'rc' }); assert.strictEqual(o.h['Cross-Origin-Embedder-Policy'], 'require-corp');
+    let o;
     // emu8086 (JS thuần) không cần cô lập → không gửi COOP/COEP
     o = await call(ctrl.edit, 'emu8086', SAFARI); assert.strictEqual(o.render.view, 'code/editor');
     assert(!('Cross-Origin-Embedder-Policy' in o.h) && !('Cross-Origin-Opener-Policy' in o.h), 'emu8086 không bị gắn COOP/COEP'); assert.strictEqual(o.render.locals.coep, null);
@@ -47,5 +45,5 @@ function call(fn, lang, ua, query = {}) {
         assert(/hello MNHA/.test(o.body) && /cache=/.test(o.body));
         assert(/\/api\/wasmer\/registry/.test(o.body) && /netReport/.test(o.body), name + ': iso-check có báo cáo proxy registry');
     }
-    console.log('code-isolation: header theo trình duyệt qua controller thật (Chrome / Safari / Chrome iPhone / ép tay / emu8086) + trang iso-check — đạt');
+    console.log('code-isolation: trang C++ (JS thuần) không gắn COOP/COEP, emu8086 không đổi, trang iso-check (WASM) vẫn theo trình duyệt — đạt');
 })().catch((e) => { console.error(e); process.exit(1); });

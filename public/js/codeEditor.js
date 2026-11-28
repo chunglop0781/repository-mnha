@@ -54,7 +54,7 @@
     function setRunning(on) { if (!btnRun) return; btnRun.classList.toggle('hidden', on); btnStop.classList.toggle('hidden', !on); }
     // ---------- C++ chạy trong trình duyệt (clang WebAssembly) khi máy chủ không có g++ ----------
     var wasmRun = null, wasmInputs = [], wasmConsole = '';
-    var browserCpp = P.lang === 'cpp' && P.cppMode === 'browser' && window.CppWasm;
+    var browserCpp = P.lang === 'cpp' && P.cppMode === 'browser' && (window.CppJs || window.CppWasm);
     function wasmOut(text, kind) {
         wasmConsole += text;
         if (/\x1b\[2J/.test(text)) { termOut.textContent = ''; text = text.slice(text.lastIndexOf('\x1b[2J') + 4); }
@@ -71,7 +71,7 @@
         }).then(function (j) {
             var code = text();
             warnMissing(j.missing);
-            wasmRun = CppWasm.start({
+            wasmRun = (window.CppJs || window.CppWasm).start({
                 code: code, files: j.files || [], onOut: wasmOut,
                 onStatus: function (m) { info.textContent = m; },
                 onCompiled: function () { showInput(true, 'line'); }
@@ -209,6 +209,18 @@
     }
     if (btnRun) btnRun.onclick = run;
     if ($('btnCompile')) $('btnCompile').onclick = function () {
+        if (browserEmu) {
+            try {
+                var res = Emu8086.assemble(text());
+                termOut.textContent = '';
+                info.innerHTML = '<span class="ok">Compile thành công — không có lỗi (' + res.instructions.length + ' lệnh). Bấm Emulate để chạy.</span>';
+            } catch (e) {
+                var errs = (e && e.errors) ? e.errors : [{ line: 1, message: e && e.message || String(e) }];
+                termOut.innerHTML = errs.map(function (er) { return '<div class="t-err">Dòng ' + er.line + ': ' + esc(er.message) + '</div>'; }).join('');
+                info.innerHTML = '<span class="bad">Có ' + errs.length + ' lỗi.</span>';
+            }
+            return;
+        }
         info.textContent = 'Đang dịch...';
         api('POST', '/code/emu8086/compile', { content: text() }).then(function (j) {
             if (j.ok) { termOut.textContent = ''; info.innerHTML = '<span class="ok">Compile thành công — không có lỗi' + (j.instructions != null ? ' (' + j.instructions + ' lệnh)' : '') + '. Bấm Emulate để chạy.</span>'; }
@@ -255,6 +267,10 @@
             return esc(l.slice(0, cur.c)) + '<span class="cur">' + (esc(l.charAt(cur.c)) || ' ') + '</span>' + esc(l.slice(cur.c + 1));
         }).join('\n');
     }
+    var eofBtn = $('eofBtn');
+    function sendEof() { if (wasmRun && wasmRun.endInput) { wasmOut('^D (EOF)\n', 'in'); wasmRun.endInput(); } }
+    if (eofBtn) { if (isEmu) eofBtn.classList.add('hidden'); eofBtn.addEventListener('click', sendEof); }
+    inputBox.addEventListener('keydown', function (e) { if (e.ctrlKey && (e.key === 'd' || e.key === 'D') && wasmRun) { e.preventDefault(); sendEof(); } });
     inputRow.addEventListener('submit', function (e) {
         e.preventDefault();
         if (wasmRun) { var w = inputBox.value; inputBox.value = ''; wasmInputs.push(w); wasmOut(w + '\n', 'in'); wasmRun.send(w + '\n'); return; }

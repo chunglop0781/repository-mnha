@@ -17,8 +17,8 @@ const LANGS = {
     },
     cpp: {
         key: 'cpp', name: 'C++ (Dev-C++)', icon: 'terminal',
-        description: 'Viết và chạy C++ như Dev-C++; tạo được file .txt (freopen) và header .h/.hpp (#include "..." cùng thư mục).',
-        runExt: 'cpp', exts: ['cpp', 'txt', 'h', 'hpp', 'hh', 'hxx', 'inl', 'ipp', 'tpp'], editorMode: 'cpp',
+        description: 'Viết và chạy C/C++ như Dev-C++ (file .cpp hoặc .c, có scanf/printf); tạo được file .txt (freopen) và header .h/.hpp (#include "..." cùng thư mục).',
+        runExt: 'cpp', runExts: ['cpp', 'c'], exts: ['cpp', 'c', 'txt', 'h', 'hpp', 'hh', 'hxx', 'inl', 'ipp', 'tpp'], editorMode: 'cpp',
         template: ['#include <bits/stdc++.h>', 'using namespace std;', '', 'int main() {', '    // freopen("input.txt", "r", stdin);', '    // freopen("output.txt", "w", stdout);', '    int a, b;', '    cout << "Nhap a, b: ";', '    cin >> a >> b;', '    cout << "Tong = " << a + b << endl;', '    return 0;', '}', ''].join('\n')
     },
     html: {
@@ -52,7 +52,10 @@ const LIMITS = {
 // CPP_RUNNER_URL (+ CPP_RUNNER_KEY): trỏ tới dịch vụ runner/ (Docker có g++) → web chính chỉ chuyển yêu cầu sang đó (giống OnlineGDB).
 const CPP_RUNNER_URL = process.env.CPP_RUNNER_URL || '';
 const CPP_RUNNER_KEY = process.env.CPP_RUNNER_KEY || '';
-const CPP_RUN_MODE = process.env.CPP_RUN_MODE || (CPP_RUNNER_URL ? 'server' : (process.env.VERCEL ? 'browser' : 'server'));
+// ★ ĐANG GHI CỨNG 'browser' (chạy clang WASM trong trình duyệt), BỎ QUA biến môi trường và CPP_RUNNER_URL.
+//   Muốn quay lại như cũ (theo env / runner g++): đổi FORCE_CPP_MODE thành null.
+const FORCE_CPP_MODE = 'browser';
+const CPP_RUN_MODE = FORCE_CPP_MODE || process.env.CPP_RUN_MODE || (CPP_RUNNER_URL ? 'server' : (process.env.VERCEL ? 'browser' : 'server'));
 const NAME_RE = /^[A-Za-z0-9_\-()]{1,60}$/;                                 // tên thư mục: chữ, số, - _ và dấu ngoặc ( ), vd "Cac_phuong_phap_toi_uu-1-1-26(N02)"
 const FILE_STEM_RE = /^(?=.{1,60}$)[A-Za-z0-9_\-]+(?: [A-Za-z0-9_\-]+)*$/;      // tên file (không đuôi): cho phép dấu cách giữa các từ, vd "Chu thuong thanh hoa"
 

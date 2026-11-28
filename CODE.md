@@ -22,6 +22,15 @@ File .txt chương trình ghi ra được hiện dưới khung kết quả (nút
   Nên chạy cả app trong container không có secret, hoặc đưa cppRunner vào nsjail/firejail/Docker riêng.
 
 ## C++ chạy trong trình duyệt (Vercel) — CPP_RUN_MODE=browser
+> **HIỆN TẠI (đã chốt): `config/codeConfig.js` ghi cứng `FORCE_CPP_MODE='browser'` và trang soạn C++ nạp `public/js/cppJs.js` — trình thông dịch C++ viết bằng JavaScript thuần (KHÔNG dùng clang/WASM).**
+> Vì vậy trang C++ không cần COOP/COEP/SharedArrayBuffer, chạy giống nhau trên Chrome/Edge/Firefox/Safari/iPhone (`renderEditor` truyền `coep=null`). `cppWasm.js`, `cppShims.js`, các đoạn về COEP/Safari/vendor-wasmer bên dưới chỉ còn dùng cho trang tự kiểm tra `/code/cpp/iso-check`; `codeEditor.js` gọi `(window.CppJs || window.CppWasm).start(...)` cùng giao diện `{code, files, onOut, onStatus, onCompiled}` → `{done, send, endInput, stop}`.
+> - `cppJs.js` hỗ trợ: `cin/cout/scanf/printf/getline`, `freopen` với .txt cùng thư mục, struct/class (kế thừa, virtual, constructor), con trỏ + `new/delete`, con trỏ cấp 2 (`N** pp = &head`), STL thường dùng, lambda/`std::function`, khởi tạo ngoặc nhọn (`N a{1,nullptr}`, `new N{...}`, `P p{1,2}`), `try/catch/throw` (kể cả `throw;`, `catch(...)`, `runtime_error/invalid_argument/out_of_range/...` + `what()`; `.at()` ném `out_of_range`; ngoại lệ không bắt → in `terminate called...`, mã thoát 134).
+> - Quy tắc dễ lỗi (ĐỪNG sửa lại): `&biến` trả **con trỏ tới chính biến** khi biến đó là con trỏ (`ty.ptr>0`, hoặc trường con trỏ của struct — `lval.fty`); chỉ khi biến là struct/đối tượng thì `&obj` là chính đối tượng. `continue` trong `switch` phải truyền ra vòng lặp ngoài.
+> - Test: `node test/cpp-js.js` (19 chương trình mẫu, chạy offline), `node checkfix.js`. Thêm chương trình lỗi mới → thêm 1 dòng vào mảng `cases` của `test/cpp-js.js`.
+> - Cũng hỗ trợ: `noexcept` / `override` / `final` (bỏ qua ở `stripSpecifiers`), gọi constructor lớp cha `B() : A(3) {}`, lớp kế thừa `std::exception` / `runtime_error`... (`what()`, catch theo lớp cha), `std::thread/jthread`, `mutex`, `lock_guard/unique_lock/scoped_lock`, `atomic<T>` (chạy như `T`, có `load/store/fetch_add/fetch_sub/exchange`), `this_thread::sleep_for`, `chrono::milliseconds(n)`, `ref(x)`.
+> - **Thread chạy TUẦN TỰ ngay lúc tạo** (1 luồng, không chờ thật) → kết quả là một thứ tự lên lịch hợp lệ của g++; chương trình cần luồng chờ nhau (condition_variable, producer–consumer vòng chờ) sẽ không chạy đúng.
+> - Chưa hỗ trợ (báo lỗi rõ khi gặp): `condition_variable`, `std::async/future`, template phức tạp. Cần chạy đúng như g++ thì dùng runner (`CPP_RUNNER_URL`, đặt `FORCE_CPP_MODE=null`).
+
 Mặc định tự bật khi có biến `VERCEL` (đặt `CPP_RUN_MODE=server|browser` để ép). Trình duyệt tải Wasmer JS SDK (unpkg) + gói `clang/clang`
 (vài chục MB, cache lại), dịch `main.cpp` → wasm rồi chạy; `cin` nhập qua ô nhập, `freopen` dùng các .txt cùng thư mục (nạp qua `/code/cpp/siblings`).
 - `public/js/cppShims.js`: header giả `bits/stdc++.h`, `conio.h`, `windows.h` và `system("pause"/"cls")` (không đổi số dòng code người dùng).

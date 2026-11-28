@@ -32,10 +32,18 @@
     var reloading = ensureIsolation();
 
     var sdkP = null, clangP = null;
+    // Địa chỉ registry phải TUYỆT ĐỐI (SDK chạy trong Worker, không có base URL như trang) — đường dẫn tương đối dễ làm SDK treo/lỗi.
+    function abs(u) { try { return new URL(u, root.location.href).href; } catch (_) { return u; } }
+    // Mỗi bước có hạn riêng để khi kẹt biết CHÍNH XÁC kẹt ở đâu (thay vì im lặng 4 phút); thời gian từng bước ghi ở Console (F12).
+    function step(p, ms, label) {
+        var t, t0 = Date.now();
+        var limit = new Promise(function (_, rej) { t = setTimeout(function () { rej(new Error('Kẹt ở bước "' + label + '" quá ' + ms / 1000 + ' giây. Mở Console/Network (F12) xem request nào đang treo hoặc bị chặn.')); }, ms); });
+        return Promise.race([p, limit]).then(function (v) { clearTimeout(t); try { console.info('[MNHA wasm] ' + label + ': ' + ((Date.now() - t0) / 1000).toFixed(1) + ' giây'); } catch (_) { } return v; }, function (e) { clearTimeout(t); throw e; });
+    }
     function loadSdk(onStatus) {
-        if (!sdkP) sdkP = import(SDK_URL).then(function (m) { return m.init({ registry: REGISTRY_URL }).then(function () { return m; }); });
+        if (!sdkP) sdkP = step(import(SDK_URL), 60000, 'tải SDK ' + SDK_URL).then(function (m) { return step(m.init({ registry: abs(REGISTRY_URL) }), 60000, 'khởi tạo SDK').then(function () { return m; }); });
         return sdkP.then(function (m) {
-            if (!clangP) { onStatus('Đang tải trình biên dịch clang (lần đầu hơi lâu, các lần sau nhanh hơn)...'); clangP = m.Wasmer.fromRegistry(CLANG_PKG); }
+            if (!clangP) { onStatus('Đang tải trình biên dịch clang (lần đầu hơi lâu, các lần sau nhanh hơn)...'); clangP = step(m.Wasmer.fromRegistry(CLANG_PKG), 180000, 'tải gói ' + CLANG_PKG + ' từ registry'); }
             return clangP.then(function (clang) { return { sdk: m, clang: clang }; });
         }).catch(function (e) { sdkP = clangP = null; throw e; });
     }
@@ -131,9 +139,19 @@
                     if (key) cachePut(key, bytes);      // không await: không làm chậm lúc chạy
                 }
                 if (st.stopped) return finish({ status: 'stopped', exitCode: null, files: {}, error: 'Đã dừng bởi người dùng.' });
-                var prog = await env.sdk.Wasmer.fromFile(bytes);
-                opts.onStatus('Đang chạy...'); if (opts.onCompiled) opts.onCompiled();
-                var inst = await prog.entrypoint.run({ mount: { '/project': project }, cwd: '/project' });
+                try { console.info('[MNHA wasm] main.wasm = ' + (bytes.length / 1048576).toFixed(2) + ' MB'); } catch (_) { }
+                var runOpts = { mount: { '/project': project }, cwd: '/project' }, inst;
+                if (typeof env.sdk.runWasix === 'function' && root.WebAssembly && typeof root.WebAssembly.compile === 'function') {
+                    // Biên dịch BẤT ĐỒNG BỘ rồi đưa Module cho SDK: Wasmer.fromFile(bytes) biên dịch ĐỒNG BỘ trên luồng chính, mà Chrome cấm với module > 8 MB
+                    // (main.wasm link libc++ thường lớn hơn) → SDK panic "module.rs: Result::unwrap() on an Err" rồi runtime chết, mọi thứ sau đó treo.
+                    var mod = await root.WebAssembly.compile(bytes);
+                    opts.onStatus('Đang chạy...'); if (opts.onCompiled) opts.onCompiled();
+                    inst = await env.sdk.runWasix(mod, runOpts);
+                } else {
+                    var prog = await env.sdk.Wasmer.fromFile(bytes);
+                    opts.onStatus('Đang chạy...'); if (opts.onCompiled) opts.onCompiled();
+                    inst = await prog.entrypoint.run(runOpts);
+                }
                 if (inst.stdin && inst.stdin.getWriter) {
                     st.writer = inst.stdin.getWriter();
                     st.pendingStdin.forEach(function (t) { st.writer.write(new TextEncoder().encode(t)); });
@@ -175,5 +193,40 @@
             stop: function () { st.stopped = true; finish({ status: 'stopped', exitCode: null, files: {}, error: 'Đã dừng bởi người dùng.' }); }
         };
     }
-    root.CppWasm = { start: start, preload: preload, _cacheKey: cacheKey, _isolationReload: reloading };
+    // Thăm dò: clang có CHẠY được không? (1) `clang --version`  (2) dịch một chương trình C rỗng (không libc++) — tách "clang hỏng/treo" khỏi "C++ nặng quá".
+    async function probe(onStatus, onLog) {
+        onLog = onLog || function () { };
+        var out = {}, env = await loadSdk(onStatus || function () { });
+        var run = function (opts) { return env.clang.entrypoint.run(opts).then(function (i) { return i.wait(); }); };
+        var t0 = Date.now();
+        var v = await step(run({ args: ['--version'] }), 90000, 'chạy clang --version');
+        out.version = (td(v.stdout || '') || td(v.stderr || '')).split('\n')[0]; out.versionCode = v.code; out.versionMs = Date.now() - t0;
+        var dir = new env.sdk.Directory(); await dir.writeFile('t.c', 'int main(){return 0;}');
+        t0 = Date.now();
+        var c = await step(run({ args: ['-x', 'c', '-O0', '-w', '/p/t.c', '-o', '/p/t.wasm'], mount: { '/p': dir } }), 150000, 'clang dịch chương trình C rỗng');
+        out.cOk = !!c.ok; out.cMs = Date.now() - t0; out.cErr = td(c.stderr || '').slice(0, 300);
+        if (!out.cOk) return out;
+        // Chia nhỏ để biết cái gì làm clang WASM sập (SDK panic = runtime chết, các bước sau sẽ treo → dừng ở lần lỗi đầu tiên).
+        var base = ['-x', 'c++', '-std=c++17', '-O0', '-w'], libs = ['-lc++', '-lc++abi'], syn = ['-fsyntax-only'];
+        var MAIN = 'int main(){return 0;}';
+        // -fsyntax-only = chỉ parse header (không link): tách "clang không đọc nổi header" khỏi "wasm-ld không link nổi libc++".
+        var cases = [
+            ['parse <string>', '#include <string>\n' + MAIN, base.concat(syn)],
+            ['parse <iostream>', '#include <iostream>\n' + MAIN, base.concat(syn)],
+            ['parse <bits/stdc++.h>-tương-đương (algorithm+vector+map+iostream)', '#include <algorithm>\n#include <vector>\n#include <map>\n#include <iostream>\n' + MAIN, base.concat(syn)],
+            ['dịch+link <vector>', '#include <vector>\nint main(){std::vector<int> v(3);return v.size()==3?0:1;}', base.concat(libs)],
+            ['dịch+link <iostream>', '#include <iostream>\nint main(){std::cout<<"hi"<<std::endl;return 0;}', base.concat(libs)]
+        ];
+        for (var k = 0; k < cases.length; k++) {
+            var nm = cases[k][0]; onLog('→ thử: ' + nm);
+            try {
+                var d2 = new env.sdk.Directory(); await d2.writeFile('t.cpp', cases[k][1]);
+                t0 = Date.now();
+                var r = await step(run({ args: cases[k][2].concat(cases[k][2].indexOf('-fsyntax-only') >= 0 ? ['/p/t.cpp'] : ['/p/t.cpp', '-o', '/p/t.wasm']), mount: { '/p': d2 } }), 60000, nm);
+                onLog((r.ok ? '✔ ' : '✘ ') + nm + ': ' + (Date.now() - t0) + ' ms' + (r.ok ? '' : ' — ' + JSON.stringify(td(r.stderr || '').slice(0, 300))));
+            } catch (e) { onLog('✘ ' + nm + ': ' + e.message + ' → dừng thăm dò (runtime có thể đã chết)'); break; }
+        }
+        return out;
+    }
+    root.CppWasm = { start: start, probe: probe, preload: preload, _cacheKey: cacheKey, _isolationReload: reloading };
 })(window);

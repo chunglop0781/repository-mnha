@@ -53,11 +53,13 @@ class Machine {
         this.error = null;
         this.steps = 0;
         this.maxTotalSteps = opts.maxTotalSteps || 20000000;
+        this.t0 = 0; this.stackWrapped = false; this.stackBase = 0; this.stackWarnMs = opts.stackWarnMs || 5000; this.stackNormal = opts.stackNormal || 0x2000;
         this.r = { AX: 0, BX: 0, CX: 0, DX: 0, SP: 0, BP: 0, SI: 0, DI: 0 };
         this.s = { ES: prog.psp, CS: prog.codeSeg, SS: prog.stackSeg, DS: prog.psp };
         this.f = { CF: 0, PF: 0, AF: 0, ZF: 0, SF: 0, TF: 0, IF: 1, DF: 0, OF: 0 };
         this.ip = prog.start;
         if (prog.mode === 'com') { this.r.SP = 0xfffe; } else { this.r.SP = (prog.stackSize - 2) & 0xffff; }
+        this.stackBase = this.r.SP;
         this.write16(this.phys('SS', this.r.SP), 0xffff); // địa chỉ trả về giả → kết thúc chương trình
         if (prog.mode === 'com') { this.s.DS = this.s.ES = this.s.SS = prog.psp; }
         this.exitCode = null;
@@ -111,7 +113,7 @@ class Machine {
         }
         throw new Error('bad destination');
     }
-    push(v) { this.r.SP = (this.r.SP - 2) & 0xffff; this.write16(this.phys('SS', this.r.SP), v); }
+    push(v) { const old = this.r.SP; this.r.SP = (old - 2) & 0xffff; if (this.r.SP > old) this.stackWrapped = true; this.write16(this.phys('SS', this.r.SP), v); }
     pop() { const v = this.read16(this.phys('SS', this.r.SP)); this.r.SP = (this.r.SP + 2) & 0xffff; return v; }
 
     // ------------------------------------------------------------------ cờ
@@ -179,6 +181,17 @@ class Machine {
         return false;
     }
 
+    // Tràn ngăn xếp (vd. PUSH vô hạn): nếu ngăn xếp phình quá mức bình thường mà đến giây thứ 5 vẫn chưa hạ xuống → dừng + cảnh báo; nếu hạ xuống (không tràn) thì chạy tiếp.
+    stackOverCheck(ins, force) {
+        const depth = (this.stackBase - this.r.SP) & 0xffff;
+        const over = this.stackWrapped || depth > this.stackNormal;
+        this.stackWrapped = false;
+        if (over && (force || Date.now() - this.t0 >= this.stackWarnMs)) {
+            this.fault(`Dòng ${ins.line}: ⚠ CẢNH BÁO TRÀN NGĂN XẾP: ngăn xếp (SS:SP) phình bất thường (~${depth} byte) và vẫn chưa giảm sau ${Math.max(1, Math.round((Date.now() - this.t0) / 1000))} giây — thường do PUSH/CALL lặp vô hạn hoặc thiếu POP/RET. Đã dừng chạy code.`);
+            return true;
+        }
+        return false;
+    }
     fault(msg) { this.status = 'error'; this.error = msg; }
 
     // ------------------------------------------------------------------ nhập
@@ -196,6 +209,7 @@ class Machine {
         if (this.status === 'halted' || this.status === 'error') return this.status;
         if (this.status === 'waiting') return 'waiting';
         let n = 0;
+        if (!this.t0) this.t0 = Date.now();
         while (n < budget) {
             if (this.ip === 0xffff || this.ip >= this.code.length || this.ip < 0) { this.status = 'halted'; break; }
             const ins = this.code[this.ip];
@@ -207,7 +221,8 @@ class Machine {
             if (r === WAIT) { this.ip = cur; this.status = 'waiting'; break; }
             if (this.status === 'halted' || this.status === 'error') break;
             n++; this.steps++;
-            if (this.steps > this.maxTotalSteps) { this.fault(`Dòng ${ins.line}: Vượt giới hạn ${this.maxTotalSteps.toLocaleString('en-US')} lệnh (nghi vòng lặp vô hạn)`); break; }
+            if ((this.steps & 4095) === 0 && this.stackOverCheck(ins)) break;
+            if (this.steps > this.maxTotalSteps) { if (this.stackOverCheck(ins, true)) break; this.fault(`Dòng ${ins.line}: Vượt giới hạn ${this.maxTotalSteps.toLocaleString('en-US')} lệnh (nghi vòng lặp vô hạn)`); break; }
         }
         return this.status;
     }

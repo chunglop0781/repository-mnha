@@ -74,13 +74,10 @@ exports.createFile = wrap(async (req, res) => {
 
 // Dựng trang trình soạn (dùng chung cho file của tôi và code xem trên mạng)
 function renderEditor(req, res, { lang, dir, file, content, results, online, githubUrl, shareLabel, folderUrl }) {
-    const runnable = file.toLowerCase().endsWith('.' + lang.runExt);
+    const runnable = (lang.runExts || [lang.runExt]).some((e) => file.toLowerCase().endsWith('.' + e));
     const cppMode = lang.key === 'cpp' ? CPP_RUN_MODE : null;
     let coep = null, sdkUrl = null;
-    if (cppMode === 'browser') {      // clang WebAssembly (Wasmer SDK) cần trang được cô lập origin: Chrome/Firefox → credentialless, Safari/iOS → require-corp (utils/isolation.js)
-        coep = isolation.apply(req, res);
-        sdkUrl = isolation.sdkUrl();
-    }
+    // Chế độ JS thuần (public/js/cppJs.js) không cần SharedArrayBuffer hay COOP/COEP → chạy ổn định trên Chrome, Safari, Firefox
     const payload = { lang: lang.key, dir, file, runnable, content, mode: lang.editorMode, results, cppMode, online: online || null, coep, sdkUrl };
     res.render('code/editor', { cppMode, coep, sdkUrl, title: file, user: req.user, lang, dir, file, runnable, online: online || null, githubUrl, shareLabel, folderUrl: folderUrl || null, payloadJson: JSON.stringify(payload).replace(/</g, '\\u003c') });
 }
@@ -169,7 +166,7 @@ exports.onlineFolder = wrap(async (req, res) => {
         if (x.type === 'dir') { list.push({ name: x.name, type: 'dir', href: base + '/online/folder?url=' + encodeURIComponent(remoteSource.treeWeb(fx, [...f.dirSegs, x.name])), other }); continue; }
         if (!lang.exts.includes(extOf(x.name))) { hidden++; continue; }
         const web = remoteSource.fromParts(fx, [...f.dirSegs, x.name]).web;
-        list.push({ name: x.name, type: 'file', size: x.size, runnable: extOf(x.name) === lang.runExt, href: base + '/online?url=' + encodeURIComponent(web), web, other });
+        list.push({ name: x.name, type: 'file', size: x.size, runnable: (lang.runExts || [lang.runExt]).includes(extOf(x.name)), href: base + '/online?url=' + encodeURIComponent(web), web, other });
     }
     const crumbs = [{ name: f.base.join('/') + ' @ ' + f.ref, href: here([]) }];
     f.dirSegs.forEach((s, i) => crumbs.push({ name: s, href: here(f.dirSegs.slice(0, i + 1)) }));
@@ -264,7 +261,7 @@ exports.run = wrap(async (req, res) => {
         file = store.cleanFileName(lang.key, req.body.file);
         code = String(req.body.content == null ? '' : req.body.content);
     }
-    if (!file.toLowerCase().endsWith('.' + lang.runExt)) throw Object.assign(new Error('File này không chạy được'), { status: 400 });
+    if (!(lang.runExts || [lang.runExt]).some((e) => file.toLowerCase().endsWith('.' + e))) throw Object.assign(new Error('File này không chạy được'), { status: 400 });
     if (code.length > 200 * 1024) throw Object.assign(new Error('Code quá dài'), { status: 400 });
     // chạy đúng code đang soạn (kể cả chưa lưu); các .txt cùng thư mục nạp vào thư mục chạy
     // cả file .cpp được nhắc trong code ("input1.cpp") cũng nạp làm dữ liệu (đổi sang .txt khi chạy, in ra thì đổi ngược lại)
@@ -399,7 +396,7 @@ $('go').onclick=function(){
   if(!window.crossOriginIsolated){log('✘ Chưa cô lập origin → clang WASM sẽ không chạy. (Nếu trang vừa tự tải lại với ?coep=rc mà vẫn thế: trình duyệt/CDN đang chặn tài nguyên — xem Console.)');return}
   $('go').disabled=true;
   var T=[['1) dịch lạnh','#include <bits/stdc++.h>\\nusing namespace std;\\nint main(){string s;cin>>s;cout<<"hello "<<s<<endl;return 0;}'],['2) cùng code → phải trúng cache (không dịch lại)',null],['3) code khác → dịch lại','#include <iostream>\\nint main(){std::cout<<"v2"<<std::endl;}']],last;
-  (function next(i){
+  function next(i){
     if(i>=T.length){netReport();$('go').disabled=false;$('st').textContent='xong';return}
     var code=T[i][1]||last;last=code;var t0=performance.now(),tc=null,hit=null,out='';
     var h=CppWasm.start({code:code,files:[],onStatus:function(m){$('st').textContent=m},onOut:function(t){out+=t},onCache:function(x){hit=x},onCompiled:function(){tc=performance.now()-t0}});
@@ -408,7 +405,9 @@ $('go').onclick=function(){
       var cacheOk=i===1?hit===true:hit===false;
       log((ok&&cacheOk?'✔ ':'✘ ')+T[i][0]+': '+ms+' ms (tới lúc chạy: '+(tc==null?'-':Math.round(tc))+' ms), cache='+hit+', trạng thái='+r.status+', đầu ra='+JSON.stringify(out.trim().slice(0,80)));
       next(i+1)});
-  })(0);
+  }
+  $('st').textContent='thăm dò clang...';
+  CppWasm.probe(function(m){$('st').textContent=m},log).then(function(p){log((p.versionCode===0?'✔ ':'✘ ')+'clang --version: '+JSON.stringify(p.version)+' ('+p.versionMs+' ms, mã '+p.versionCode+')');log((p.cOk?'✔ ':'✘ ')+'dịch C rỗng (không libc++): '+p.cMs+' ms'+(p.cOk?'':' — '+JSON.stringify(p.cErr)))},function(e){log('✘ thăm dò clang: '+e.message)}).then(function(){next(0)});
 };})();
 </script></body></html>`);
 };

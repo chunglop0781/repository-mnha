@@ -41,6 +41,7 @@ block content
                         span(id="inputPrompt", class="code-prompt") &gt;
                         input(id="inputBox", type="text", autocomplete="off", spellcheck="false")
                         button(type="submit", class="code-btn") Gửi
+                        button(type="button", class="code-btn", id="eofBtn", title="Báo hết dữ liệu nhập (Ctrl+D) để vòng lặp while(scanf(...)==1) / while(cin>>x) kết thúc") EOF
                 div(id="termInfo", class="code-info")
                 div(id="outFiles", class="code-files")
                 details(class="code-history")
@@ -49,7 +50,7 @@ block content
                     div(id="history")
         if githubUrl
             div(class="code-share")
-                i(data-lucide="github", class="w-4 h-4")
+                i(data-lucide="git-branch", class="w-4 h-4")
                 span #{shareLabel || "Link GitHub để chia sẻ:"}
                 a(id="ghLink", href=githubUrl, target="_blank", rel="noopener noreferrer") #{githubUrl}
                 button(type="button", id="btnCopyLink", class="code-btn") Sao chép
@@ -60,10 +61,7 @@ block content
         script(src="/code/emu8086/engine.js")
         script(src="/js/emuTools.js")
     if cppMode === "browser"
-        if sdkUrl
-            link(rel="modulepreload", href=sdkUrl, crossorigin="anonymous")
-        script(src="/js/cppShims.js")
-        script(src="/js/cppWasm.js")
+        script(src="/js/cppJs.js")
     script(src="/js/foldKit.js")
     script(src="/js/editorKit.js")
     script(src="/js/codeEditor.js")

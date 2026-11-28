@@ -1,0 +1,49 @@
+// node test/cpp-js.js — hồi quy trình thông dịch C++ chạy trong trình duyệt (public/js/cppJs.js): chạy nguyên file, không cần máy chủ/GitHub.
+const assert = require('assert');
+const C = require('../public/js/cppJs.js');
+
+async function run(code, { input = '', files = [] } = {}) {
+    let out = '';
+    const h = C.start({ code, files, onOut: (s) => { out += s; }, onStatus() { }, onCompiled() { } });
+    if (input) setTimeout(() => h.send(input), 5);
+    const r = await Promise.race([h.done, new Promise((res) => setTimeout(() => res({ status: 'HANG' }), 6000))]);
+    return { out, r };
+}
+const cases = [
+    ['enum C', '#include <stdio.h>\n#include <stdbool.h>\nenum Day{MON=1,TUE,WED};\nbool isEven(int x){ return x%2==0; }\nint main(){ enum Day d=WED; printf("%d %d %d\\n",d,isEven(4),isEven(5)); }', {}, '3 1 0\n'],
+    ['lambda + std::function', '#include <bits/stdc++.h>\nusing namespace std; int main(){ int k=3; auto f=[k](int x){ return x*k; }; auto g=[&](int x){ k+=x; return k; }; cout<<f(4)<<g(2)<<k<<endl; vector<int> v={1,2,3,4,5,6}; cout<<count_if(v.begin(),v.end(),[](int x){return x%2==0;})<<endl; function<int(int)> fact=[&](int n)->int{ return n<=1?1:n*fact(n-1); }; cout<<fact(6)<<endl; }', {}, '1255\n3\n720\n'],
+    ['cin tương tác + chuỗi', '#include <iostream>\nusing namespace std;\nint main(){ int n; cin>>n; long long s=0; for(int i=0;i<n;i++){int x;cin>>x;s+=x;} cout<<"sum="<<s<<endl; string name; cin>>name; cout<<"Hi "<<name<<"\\n"; }', { input: '3 1 2 3 Nam\n' }, 'sum=6\nHi Nam\n'],
+    ['scanf/printf', '#include <stdio.h>\nint main(){ int a,b; scanf("%d %d",&a,&b); printf("%d %5.2f\\n",a+b,(double)a/b); return 0; }', { input: '7 2\n' }, '9  3.50\n'],
+    ['freopen input.txt/output.txt', '#include <bits/stdc++.h>\nusing namespace std;\nint main(){ freopen("input.txt","r",stdin); freopen("output.txt","w",stdout); int n; cin>>n; vector<int>v(n); for(auto&x:v)cin>>x; sort(v.begin(),v.end()); for(int x:v)cout<<x<<" "; cout<<endl; }', { files: [{ name: 'input.txt', content: '4\n9 3 7 1\n' }] }, ''],
+    // ---- con trỏ cấp 2: &biến_con_trỏ phải trỏ tới CHÍNH biến đó (trước đây trả về nút → *pp = ... không nối lại danh sách)
+    ['xoá nút bằng N** pp', '#include <bits/stdc++.h>\nusing namespace std; struct NV{ string ten; NV* next; };\nNV* head=NULL;\nvoid them(string t){ NV* p=new NV{t,NULL}; if(!head){head=p;return;} NV* q=head; while(q->next) q=q->next; q->next=p; }\nvoid xoa(string t){ NV** pp=&head; while(*pp){ if((*pp)->ten==t){ NV* d=*pp; *pp=d->next; delete d; return;} pp=&(*pp)->next; } }\nint main(){ them("An"); them("Binh"); them("Chi"); xoa("Binh"); for(NV*p=head;p;p=p->next) cout<<p->ten<<" "; cout<<endl; xoa("An"); for(NV*p=head;p;p=p->next) cout<<p->ten<<" "; cout<<endl; }', {}, 'An Chi \nChi \n'],
+    ['N** gán lại đầu danh sách + N*& tham số', '#include <bits/stdc++.h>\nusing namespace std; struct N{int v;N*next;};\nvoid push(N*& head,int v){ N* p=new N{v,head}; head=p; }\nvoid removeFirst(N** h){ if(*h){ N*d=*h; *h=d->next; delete d; } }\nint main(){ N* h=nullptr; push(h,1); push(h,2); push(h,3); removeFirst(&h); for(N*p=h;p;p=p->next) cout<<p->v; cout<<endl; N a{1,nullptr}; N b; b.v=2; b.next=nullptr; N* hd=&a; N** pp=&hd; *pp=&b; cout<<hd->v<<endl; }', {}, '21\n2\n'],
+    // ---- khởi tạo ngoặc nhọn
+    ['N a{...}, new N{...}, lớp có constructor', '#include <bits/stdc++.h>\nusing namespace std; struct Node{ string w; Node* nx; }; class P{ public: int x,y; P(int a,int b):x(a),y(b){} }; struct Q{int a; double b;};\nNode* tab[5];\nint main(){ Node* p=new Node{"x",tab[2]}; tab[2]=p; Node q{"b",p}; cout<<tab[2]->w<<q.nx->w<<(tab[1]==NULL)<<endl; P pp{1,2}; Q qq{3,4.5}; vector<int> v{1,2,3}; int z{9}; cout<<pp.x<<pp.y<<qq.a<<qq.b<<v.size()<<z<<endl; }', {}, 'xx1\n1234.539\n'],
+    // ---- try / catch / throw
+    ['try/catch cơ bản', '#include <bits/stdc++.h>\nusing namespace std; int main(){ try{ throw runtime_error("loi"); }catch(exception&e){ cout<<e.what()<<endl; } try{ throw 5; }catch(int e){ cout<<"c"<<e<<endl; }catch(...){ cout<<"x"; } return 3; }', {}, 'loi\nc5\n', 3],
+    ['try/catch nâng cao', '#include <bits/stdc++.h>\nusing namespace std;\ndouble div2(int a,int b){ if(b==0) throw invalid_argument("chia cho 0"); return (double)a/b; }\nint main(){ try{ cout<<div2(6,3)<<endl; cout<<div2(1,0)<<endl; cout<<"no"; } catch(const invalid_argument& e){ cout<<"IA:"<<e.what()<<endl; } catch(...){ cout<<"other"; }\n try{ vector<int> v(2); v.at(5)=1; }catch(out_of_range&e){ cout<<"oor\\n"; }\n try{ throw string("s"); }catch(string s){ cout<<s<<"\\n"; }\n try{ try{ throw 1; }catch(int x){ cout<<"in"<<x<<"\\n"; throw; } }catch(int y){ cout<<"out"<<y<<"\\n"; }\n for(int i=0;i<3;i++){ try{ if(i==1) throw 7; cout<<"i"<<i<<"\\n"; }catch(int){ cout<<"c\\n"; continue; } }\n cout<<"done\\n"; }', {}, '2\nIA:chia cho 0\noor\ns\nin1\nout1\ni0\nc\ni2\ndone\n'],
+    ['ngoại lệ không bắt → mã 134', '#include <bits/stdc++.h>\nusing namespace std; int main(){ cout<<"a\\n"; throw runtime_error("boom"); }', {}, "a\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  boom\n", 134],
+    // ---- gán qua v.back()/front()/at()
+    ['v.back()=, v.front()++, v.at(i)+=', '#include <bits/stdc++.h>\nusing namespace std; int main(){ vector<int> v={1,2,3}; v.back()=9; v.front()++; v.at(1)+=5; for(int x:v)cout<<x<<" "; cout<<endl; }', {}, '2 7 9 \n'],
+    // ---- continue trong switch phải thoát ra vòng lặp ngoài
+    ['continue trong switch', '#include <bits/stdc++.h>\nusing namespace std; int main(){ for(int i=0;i<4;i++){ switch(i){ case 1: continue; default: break; } cout<<i; } cout<<endl; }', {}, '023\n'],
+    ['stringstream + getline delimiter', '#include <bits/stdc++.h>\nusing namespace std; int main(){ string s="10 20 30"; stringstream ss(s); int x,sum=0; while(ss>>x) sum+=x; cout<<sum<<endl; ostringstream os; os<<"v="<<42<<","<<3.5; cout<<os.str()<<endl; string csv="a,b,,c"; stringstream cs(csv); string tok; vector<string> parts; while(getline(cs,tok,\',\')) parts.push_back(tok); cout<<parts.size()<<endl; }', {}, '60\nv=42,3.5\n4\n'],
+    ['kế thừa + pure virtual + fixed double', '#include <bits/stdc++.h>\nusing namespace std; class Shape{ public: virtual double area()=0; virtual string name(){ return "shape"; } virtual ~Shape(){} }; class Circle: public Shape{ double r; public: Circle(double r):r(r){} double area(){ return 3.14159*r*r; } string name(){ return "circle"; } }; class Rect: public Shape{ double w,h; public: Rect(double w,double h):w(w),h(h){} double area(){ return w*h; } }; int main(){ vector<Shape*> v; v.push_back(new Circle(2)); v.push_back(new Rect(3,4)); for(Shape* s:v) cout<<s->name()<<" "<<fixed<<setprecision(2)<<s->area()<<"\\n"; }', {}, 'circle 12.57\nshape 12.00\n'],
+    ['override / noexcept / final / gọi ctor lớp cha', '#include <bits/stdc++.h>\nusing namespace std; class A{ public: explicit A(int x):x(x){} virtual int f() const noexcept { return x; } virtual ~A() noexcept {} private: int x; }; class B final : public A { public: B():A(3){} int f() const noexcept override { return 7; } void g() noexcept { cout<<"g\\n"; } };\nint main(){ A* a=new B; cout<<a->f()<<endl; B b; b.g(); A c(5); cout<<c.f()<<endl; }', {}, '7\ng\n5\n'],
+    ['lớp con của std::exception / runtime_error', '#include <bits/stdc++.h>\nusing namespace std; struct E1: std::runtime_error{ E1(): std::runtime_error("e1") {} }; class E2: public std::exception{ public: const char* what() const noexcept override { return "e2"; } }; struct Err: runtime_error{ int code; Err(int c):runtime_error("err"),code(c){} };\nint main(){ try{ throw E1(); }catch(const std::exception& e){ cout<<e.what()<<endl; } try{ throw E2(); }catch(E2& e){ cout<<e.what()<<endl; } try{ throw E1(); }catch(logic_error&){ cout<<"no"; }catch(runtime_error& e){ cout<<"rt "<<e.what()<<endl; } try{ throw Err(4); }catch(Err& e){ cout<<e.what()<<e.code<<endl; } }', {}, 'e1\ne2\nrt e1\nerr4\n'],
+    ['thread / mutex / atomic / sleep_for', '#include <bits/stdc++.h>\nusing namespace std;\nint total=0; mutex mtx; atomic<int> cnt(0);\nvoid add(int x){ lock_guard<mutex> lk(mtx); total+=x; cnt++; }\nvoid bump(int& r){ r+=10; }\nint main(){ vector<thread> ts; for(int i=1;i<=4;i++) ts.emplace_back(add,i); for(auto& t:ts) t.join();\n int v=1; thread t(bump, ref(v)); t.join(); thread t2([](){ cout<<"lam\\n"; }); t2.join(); cout<<total<<" "<<cnt.load()<<" "<<v<<endl; cnt.store(5); cnt.fetch_add(2); cout<<cnt<<endl;\n this_thread::sleep_for(chrono::milliseconds(10)); cout<<"ok\\n"; }', {}, 'lam\n10 4 11\n7\nok\n'],
+    ['char tràn kiểu signed', '#include <stdio.h>\nint main(){ char c=127; c++; printf("%d\\n",c); }', {}, '-128\n']
+];
+
+(async () => {
+    for (const [name, code, opts, expect, exit] of cases) {
+        const { out, r } = await run(code, opts);
+        assert.strictEqual(out, expect, name + ': output sai\n' + out + (r.error ? '\n[' + r.error + ']' : ''));
+        assert.strictEqual(r.status, 'finished', name + ': status ' + r.status + ' ' + (r.error || ''));
+        assert.strictEqual(r.exitCode, exit || 0, name + ': exitCode');
+        if (name.startsWith('freopen')) assert.strictEqual(r.files['output.txt'].content, '1 3 7 9 \n', name + ': output.txt');
+    }
+    console.log('cpp-js: ' + cases.length + ' chương trình mẫu (cin/scanf/freopen, N** pp, ngoặc nhọn, try/catch, override/noexcept, lớp con exception, thread, ...) — đạt');
+    process.exit(0);
+})().catch((e) => { console.error(e); process.exit(1); });
