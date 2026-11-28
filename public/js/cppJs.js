@@ -404,18 +404,25 @@
 
         function parseProgram() {
             var items = [];
+            // Tham số template (T, U...) chỉ có hiệu lực trong ĐÚNG khai báo đi sau `template<...>`; xong khai báo đó phải gỡ,
+            // nếu không `T.insert(50);` / `T x;` trong main (biến tên T) bị hiểu là kiểu → "Thiếu tên biến".
+            var tplNames = null, tplFresh = false;
+            function dropTpl() { if (tplNames) { tplNames.forEach(function (n) { delete typedefs[n]; }); tplNames = null; } }
             while (peek().type !== 'eof') {
+                if (tplNames) { if (tplFresh) tplFresh = false; else dropTpl(); }
                 if (match('op', ';')) continue;
                 if (peek().type === 'id' && peek().val === 'template' && peek(1).val === '<') {
+                    dropTpl();
                     next(); next();
-                    var depthT = 1;
+                    var depthT = 1; tplNames = [];
                     while (peek().type !== 'eof' && depthT > 0) {
                         var tk = next();
                         if (tk.val === '<') depthT++;
                         else if (tk.val === '>') depthT--;
                         else if (tk.val === '>>') depthT -= 2;
-                        else if ((tk.val === 'typename' || tk.val === 'class') && peek().type === 'id') typedefs[peek().val] = 'auto';
+                        else if ((tk.val === 'typename' || tk.val === 'class') && peek().type === 'id') { if (!typedefs[peek().val]) { typedefs[peek().val] = 'auto'; tplNames.push(peek().val); } }
                     }
+                    tplFresh = true;
                     continue;
                 }
                 if (match('kw', 'using')) {
@@ -459,6 +466,7 @@
                 }
                 items.push(parseTopDeclOrFunc());
             }
+            dropTpl();
             return { type: 'program', items: items };
         }
 
