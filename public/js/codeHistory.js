@@ -35,7 +35,18 @@
         info.innerHTML = 'File: <b>' + esc(r.file || '') + '</b> · ' + esc(new Date(r.timestamp || ts).toLocaleString('vi-VN')) + ' · ' +
             (r.status === 'ok' ? '<span class="ok">chạy xong</span>' : '<span class="bad">có lỗi</span>') +
             (r.exitCode != null ? ' (mã thoát ' + esc(r.exitCode) + ')' : '') +
+            perfText(r) +
             (link ? ' · nguồn: <a href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">' + esc(link) + '</a>' : '');
+    }
+    function num(v) { return v != null && v !== '' && isFinite(Number(v)) ? Number(v) : null; }
+    function fmtMs(ms) { return ms < 1000 ? (ms < 10 ? Math.round(ms * 10) / 10 : Math.round(ms)) + ' ms' : (ms / 1000).toFixed(2) + ' s'; }
+    // Chỉ hiện số đo khi lần chạy đó CÓ lưu (các lần chạy cũ không có → bỏ qua, không hiện null)
+    function perfText(r) {
+        var run = num(r.runMs), total = num(r.durationMs), steps = num(r.steps), wait = num(r.waitMs), parts = [];
+        if (run != null) parts.push('thời gian chạy <b>' + fmtMs(run) + '</b>'); else if (total != null) parts.push('thời gian <b>' + fmtMs(total) + '</b>');
+        if (run != null && wait != null && wait >= 1) parts.push('chờ nhập ' + fmtMs(wait));
+        if (steps != null && steps > 0) { parts.push(steps.toLocaleString('vi-VN') + ' lệnh'); if (run != null) parts.push('≈ ' + (Math.round(run * 1000 / steps * 100) / 100) + ' µs/lệnh'); }
+        return parts.length ? ' · ' + parts.join(' · ') : '';
     }
     function open(ts) {
         if (detail[ts]) return show(ts, detail[ts]);

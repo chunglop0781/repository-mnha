@@ -363,6 +363,9 @@ exports.saveClientResult = wrap(async (req, res) => {   // kết quả chạy tr
         exitCode: b.exitCode == null ? null : Number(b.exitCode), error: b.error ? String(b.error).slice(0, 2000) : null,
         files: b.files && typeof b.files === 'object' ? b.files : {}, finishedAt: new Date().toISOString()
     };
+    // Số đo tốc độ (chỉ lưu khi trình duyệt gửi số hợp lệ; các lần chạy cũ không có các trường này → không lưu null)
+    const m = (v) => { const n = Number(v); return v != null && v !== '' && Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : undefined; };
+    for (const [k, v] of [['durationMs', m(b.durationMs)], ['runMs', m(b.runMs)], ['waitMs', m(b.waitMs)], ['steps', m(b.steps)]]) if (v !== undefined) r[k] = v;
     // code xem trên mạng (có origin hợp lệ): file chương trình ghi ra → codes/cpp/tren-mang/ (tên/kích thước được kiểm lại ở saveOnlineOutputs)
     if (r.origin && lang.key === 'cpp') { r.autoSaved = await store.saveOnlineOutputs(uidOf(req), lang.key, r.files); }
     res.json({ ok: true, saved: await store.saveResult(uidOf(req), lang.key, r), autoSaved: r.autoSaved });

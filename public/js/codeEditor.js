@@ -66,6 +66,7 @@
         var t = String(src || '').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
         return /#\s*include\s*"/.test(t) || /\b(freopen|fopen|ifstream|ofstream|fstream|ifstream)\b/.test(t);
     }
+    function fmtMs(ms) { return ms < 1000 ? (ms < 10 ? Math.round(ms * 10) / 10 : Math.round(ms)) + ' ms' : (ms / 1000).toFixed(2) + ' s'; }
     function runBrowser() {
         if (wasmRun) return;
         termOut.textContent = ''; $('outFiles').innerHTML = ''; wasmInputs = []; wasmConsole = ''; setRunning(true);
@@ -90,9 +91,9 @@
             wasmRun.done.then(function (r) {
                 wasmRun = null; setRunning(false); showInput(false);
                 var ok = r.status === 'finished' && !r.error;
-                info.innerHTML = (ok ? '<span class="ok">Chạy xong (mã thoát ' + r.exitCode + ').</span>' : '<span class="bad">' + esc(r.error || r.status) + '</span>') + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
+                info.innerHTML = (ok ? '<span class="ok">Chạy xong (mã thoát ' + r.exitCode + ')' + (r.runMs != null ? ', ' + fmtMs(r.runMs) : '') + '.</span>' : '<span class="bad">' + esc(r.error || r.status) + '</span>') + ' <span id="sv">Đang lưu kết quả lên GitHub...</span>';
                 renderOutFiles(r.files);
-                api('POST', '/code/cpp/client-result', { file: P.file, dir: P.dir, origin: P.online || undefined, source: code, console: wasmConsole, inputs: wasmInputs, exitCode: r.exitCode, error: r.error, files: r.files })
+                api('POST', '/code/cpp/client-result', { file: P.file, dir: P.dir, origin: P.online || undefined, source: code, console: wasmConsole, inputs: wasmInputs, exitCode: r.exitCode, error: r.error, files: r.files, durationMs: r.durationMs, runMs: r.runMs, waitMs: r.waitMs, steps: r.steps })
                     .then(function (x) { $('sv').innerHTML = 'Đã lưu: ' + esc(x.saved) + autoNote(x.autoSaved); loadHistory(); })
                     .catch(function (e) { var sv = $('sv'); if (sv) sv.innerHTML = '<span class="bad">Lưu kết quả lỗi: ' + esc(e.message) + '</span>'; });
             });

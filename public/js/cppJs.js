@@ -1022,7 +1022,7 @@
         var stdinPos = 0;
         var stdinWaiters = [];
         var stopped = false;
-        var steps = 0;
+        var steps = 0, waitMs = 0;
         var startedAt = Date.now();
         var stdoutFile = null; // freopen(..., stdout)
         var fixedFmt = false;
@@ -1111,7 +1111,9 @@
         async function ensureInput() {
             while (stdinPos >= stdinBuf.length && !inputClosed) {
                 checkStop();
+                var w0 = Date.now();
                 await new Promise(function (r) { stdinWaiters.push(r); });
+                waitMs += Date.now() - w0;          // thời gian chờ người dùng gõ — trừ ra khi tính tốc độ chạy
             }
         }
 
@@ -3384,7 +3386,11 @@
             },
             endInput: function () { inputClosed = true; while (stdinWaiters.length) stdinWaiters.shift()(); },
             collectOutFiles: collectOutFiles,
-            startedAt: function () { return startedAt; }
+            startedAt: function () { return startedAt; },
+            stats: function () {        // số đo của lần chạy: tổng thời gian, thời gian chạy thật (không tính chờ nhập), số bước thực thi
+                var total = Date.now() - startedAt, run = Math.max(0, total - waitMs);
+                return { durationMs: total, runMs: run, waitMs: waitMs, steps: steps, usPerStep: steps ? Math.round(run * 1000 / steps * 100) / 100 : null };
+            }
         };
     }
 
@@ -3412,7 +3418,7 @@
         var doneResolve;
         var promise = new Promise(function (r) { doneResolve = r; });
         var finished = false;
-        function finish(res) { if (finished) return; finished = true; doneResolve(res); }
+        function finish(res) { if (finished) return; finished = true; try { var st = rt.stats(); for (var k in st) res[k] = st[k]; } catch (e) { } doneResolve(res); }
 
         (async function () {
             await Promise.resolve();
