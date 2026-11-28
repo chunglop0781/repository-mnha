@@ -84,7 +84,7 @@
             var code = text();
             warnMissing(j.missing);
             wasmRun = (window.CppJs || window.CppWasm).start({
-                code: code, files: j.files || [], onOut: wasmOut,
+                code: code, files: j.files || [], fileName: P.file, onOut: wasmOut,
                 onStatus: function (m) { info.textContent = m; },
                 onCompiled: function () { showInput(true, 'line'); }
             });

@@ -32,18 +32,140 @@
         });
     }
 
+
+    // =========================================================================
+    // 0. LỖI CHUẨN KIỂU g++  —  file:dòng:cột: error: ...  + trích dòng code + ^~~~
+    // =========================================================================
+    function q(x) { return '\u2018' + x + '\u2019'; }                       // ‘x’ (g++ dùng nháy cong)
+    // Lỗi biên dịch: ném Error có e.cppDiag = { kind, msg, line, col, len, tok, fix, notes, more, fn, raw }
+    function diag(msg, line, col, o) {
+        var e = new Error(msg);
+        e.cppDiag = { kind: 'error', msg: msg, line: line || 0, col: col || 0, len: 0 };
+        if (o) for (var k in o) e.cppDiag[k] = o[k];
+        return e;
+    }
+    // Lỗi lúc chạy (tín hiệu hệ điều hành): SIGFPE / SIGSEGV / SIGABRT
+    function fault(sig, line, detail, pre) { return { __fault: sig, line: line || 0, detail: detail || '', pre: pre || '' }; }
+    var FAULTS = {
+        SIGFPE: { title: 'Floating point exception (core dumped)', code: 136 },
+        SIGSEGV: { title: 'Segmentation fault (core dumped)', code: 139 },
+        SIGABRT: { title: 'Aborted (core dumped)', code: 134 }
+    };
+    function tokDesc(t) {
+        if (!t || t.type === 'eof') return null;
+        if (t.type === 'str') return 'string-constant';
+        if (t.type === 'num') return 'numeric constant';
+        if (t.type === 'char') return 'character constant';
+        if (t.type === 'id' || t.type === 'kw' || t.type === 'bool') return q(String(t.val));
+        return q(String(t.val)) + ' token';
+    }
+    function levenshtein(a, b) {
+        var m = a.length, n = b.length, prev = [], cur = [], i, j;
+        for (j = 0; j <= n; j++) prev[j] = j;
+        for (i = 1; i <= m; i++) {
+            cur[0] = i;
+            for (j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+            var t = prev; prev = cur; cur = t;
+        }
+        return prev[n];
+    }
+    function suggestName(name, cands) {            // "did you mean ‘cout’?" như g++
+        var best = null, bd = 1e9, lim = name.length > 4 ? 2 : 1, low = name.toLowerCase();
+        for (var i = 0; i < cands.length; i++) {
+            var c = cands[i];
+            if (!c || c === name || c.charAt(0) === '_') continue;
+            var d = c.toLowerCase() === low ? 0 : levenshtein(name, c);
+            if (d <= lim && d < bd) { bd = d; best = c; }
+        }
+        return best;
+    }
+    var STD_NAMES = ['cout', 'cin', 'cerr', 'endl', 'string', 'vector', 'map', 'set', 'stack', 'queue', 'pair', 'printf', 'scanf', 'puts', 'getline', 'sort', 'swap', 'min', 'max', 'abs', 'sqrt', 'pow', 'size', 'push_back', 'main', 'getchar', 'strlen', 'reverse', 'unique', 'fabs', 'floor', 'ceil', 'round', 'to_string', 'stoi', 'stoll', 'stod', 'setw', 'setprecision', 'fixed', 'memset', 'make_pair', 'accumulate', 'lower_bound', 'upper_bound', 'binary_search', 'max_element', 'min_element'];
+    var TYPE_MAP = { 'long long': 'long long int', 'long': 'long int', 'short': 'short int', 'unsigned': 'unsigned int', 'unsigned long': 'long unsigned int', 'unsigned long long': 'long long unsigned int', 'unsigned short': 'short unsigned int', 'size_t': 'size_t', 'string': 'std::string' };
+    function typeStr(t) {                          // kiểu → chuỗi như g++ in trong "In function ‘int f(std::string)’"
+        if (!t) return 'int';
+        if (t.base === '#num') return String(t.val);
+        var b = t.base || 'int';
+        var s0 = TYPE_MAP[b] || ((STL_TYPES.has(b) || b === 'ostream' || b === 'istream') ? 'std::' + b : b);
+        if (t.templateArgs && t.templateArgs.length) s0 += '<' + t.templateArgs.map(typeStr).join(', ') + '>';
+        if (t.isConst) s0 = 'const ' + s0;
+        for (var i = 0; i < (t.ptr || 0); i++) s0 += '*';
+        if (t.isRef) s0 += '&';
+        return s0;
+    }
+    function expandTabs(str) {
+        var out = '', c = 0;
+        for (var i = 0; i < str.length; i++) { if (str[i] === '\t') { var n = 8 - (c % 8); out += new Array(n + 1).join(' '); c += n; } else { out += str[i]; c++; } }
+        return out;
+    }
+    function escRe(x) { return x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    function gutter(n) { var t = String(n); while (t.length < 5) t = ' ' + t; return t + ' | '; }
+    // Ghép "main.cpp:7:13: error: ..." + dòng code + ^~~ (+ gợi ý sửa) theo đúng khuôn của g++.
+    // ctx = { fileName, srcLines, fileMap, lineMap, prepLines }
+    function formatDiag(d, ctx) {
+        var lines = [];
+        if (d.raw) return d.raw.join('\n') + '\n';
+        var loc = d.line > 0 ? ctx.lineMap[d.line - 1] : null, file = (loc && loc.f) || ctx.fileName, ln = loc ? loc.l : d.line;
+        var srcLines = loc && loc.f ? String(ctx.fileMap[loc.f] || '').split('\n') : ctx.srcLines;
+        var text = (ln > 0 && ln <= srcLines.length) ? srcLines[ln - 1].replace(/\r$/, '') : null;
+        var col = d.col || 0, len = d.len || (d.tok ? String(d.tok).length : 0) || 1;
+        if (text !== null) {
+            var pre = (ctx.prepLines[d.line - 1] || '').replace(/\r$/, '');
+            var okPrefix = col > 0 && text.substr(0, col - 1) === pre.substr(0, col - 1);
+            if (!okPrefix) {                         // dòng đã bị macro đổi / không biết cột → tìm theo chữ
+                col = 0;
+                if (d.tok) {
+                    var tk = String(d.tok), m = /^\w+$/.test(tk) ? new RegExp('(^|[^\\w])(' + escRe(tk) + ')(?![\\w])').exec(text) : null;
+                    if (m) col = m.index + m[1].length + 1; else { var ix = text.indexOf(tk); if (ix >= 0) col = ix + 1; }
+                }
+                if (!col) { var fs = text.search(/\S/); col = (fs < 0 ? 0 : fs) + 1; len = 1; }
+            }
+        }
+        if (loc && loc.chain && loc.chain.length) {
+            loc.chain.forEach(function (c0, ci) { lines.push((ci === 0 ? 'In file included from ' : '                 from ') + (c0.f || ctx.fileName) + ':' + c0.l + (ci === loc.chain.length - 1 ? ':' : ',')); });
+        }
+        if (d.fn && d.fn !== ctx.lastFn) { lines.push(file + ': In ' + d.fn + ':'); ctx.lastFn = d.fn; }
+        lines.push(file + ':' + ln + (col ? ':' + col : '') + ': ' + (d.kind || 'error') + ': ' + d.msg);
+        if (text !== null && col) {
+            var sp = new Array(expandTabs(text.substr(0, col - 1)).length + 1).join(' ');
+            lines.push(gutter(ln) + expandTabs(text));
+            lines.push('      | ' + sp + '^' + (len > 1 ? new Array(len).join('~') : ''));
+            if (d.fix) lines.push('      | ' + sp + d.fix);
+        }
+        (d.notes || []).forEach(function (n) { lines.push('note: ' + n); });
+        (d.more || []).forEach(function (m2, mi) {          // g++ báo mỗi byte lạ một lỗi, cột tăng dần
+            var c2 = col ? col + mi + 1 : 0;
+            lines.push(file + ':' + ln + (c2 ? ':' + c2 : '') + ': error: ' + m2);
+            if (text !== null && c2) { lines.push(gutter(ln) + expandTabs(text)); lines.push('      | ' + new Array(expandTabs(text.substr(0, c2 - 1)).length + 1).join(' ') + '^'); }
+        });
+        if (d.kind === 'fatal error') lines.push('compilation terminated.');
+        return lines.join('\n') + '\n';
+    }
+    function formatFault(f, ctx) {
+        var F = FAULTS[f.__fault] || FAULTS.SIGSEGV, out = '';
+        if (f.pre) out += f.pre + '\n';
+        out += F.title + '\n';
+        if (f.line > 0) {
+            var loc = ctx.lineMap[f.line - 1], file = (loc && loc.f) || ctx.fileName, ln = loc ? loc.l : f.line;
+            var srcLines = loc && loc.f ? String(ctx.fileMap[loc.f] || '').split('\n') : ctx.srcLines;
+            out += '  \u21B3 ' + file + ':' + ln + ': ' + f.detail + '\n';
+            if (ln > 0 && ln <= srcLines.length) out += gutter(ln) + expandTabs(srcLines[ln - 1].replace(/\r$/, '')) + '\n';
+        } else if (f.detail) out += '  \u21B3 ' + f.detail + '\n';
+        return { text: out, code: F.code, title: F.title };
+    }
+
     // =========================================================================
     // 1. TIỀN XỬ LÝ (PREPROCESSOR): comments, #include, #define, typedef
     // =========================================================================
-    function preprocess(code, fileMap, seenFiles, depth) {
+    function preprocess(code, fileMap, seenFiles, depth, fileName) {
         seenFiles = seenFiles || {};
         depth = depth || 0;
-        if (depth > 16) throw new Error('Lỗi #include lồng nhau quá sâu (> 16 cấp).');
+        if (depth > 16) throw diag('#include nested depth ' + depth + ' exceeds maximum of 16 (use -fmax-include-depth=DEPTH to increase the maximum)', 0, 0, { kind: 'fatal error' });
 
         // Giữ nguyên số dòng khi xóa comment
         var src = stripComments(String(code || ''));
         var lines = src.split('\n');
-        var out = [];
+        var out = [], map = [];
+        function emit(t, idx) { out.push(t); map.push({ f: fileName || null, l: idx + 1 }); }
         var macros = {}; // { name: { params: null | string[], body: string } }
 
         for (var i = 0; i < lines.length; i++) {
@@ -54,49 +176,49 @@
                 // Xử lý dòng tiếp nối '\'
                 while (trimmed.endsWith('\\') && i + 1 < lines.length) {
                     trimmed = trimmed.slice(0, -1) + ' ' + lines[++i].trim();
-                    out.push('');
+                    emit('', i);
                 }
                 var mIncLocal = /^#\s*include\s*"([^"]+)"/.exec(trimmed);
                 if (mIncLocal) {
                     var fname = mIncLocal[1];
                     if (fileMap && Object.prototype.hasOwnProperty.call(fileMap, fname) && !seenFiles[fname]) {
                         seenFiles[fname] = true;
-                        var sub = preprocess(fileMap[fname], fileMap, seenFiles, depth + 1);
+                        var sub = preprocess(fileMap[fname], fileMap, seenFiles, depth + 1, fname);
                         Object.assign(macros, sub.macros);
-                        out.push(sub.code);
+                        sub.code.split('\n').forEach(function (t2, k2) { out.push(t2); var se = sub.map[k2] || { f: fname, l: k2 + 1 }; map.push({ f: se.f, l: se.l, chain: (se.chain || []).concat([{ f: fileName || null, l: i + 1 }]) }); });
                     } else {
-                        out.push('');
+                        emit('', i);
                     }
                     continue;
                 }
                 if (/^#\s*include\s*<[^>]+>/.test(trimmed) || /^#\s*pragma\b/.test(trimmed)) {
-                    out.push('');
+                    emit('', i);
                     continue;
                 }
                 var mDefFn = /^#\s*define\s+([A-Za-z_]\w*)\(([^)]*)\)\s*(.*)$/.exec(trimmed);
                 if (mDefFn) {
                     var params = mDefFn[2].trim() ? mDefFn[2].split(',').map(function (p) { return p.trim(); }) : [];
                     macros[mDefFn[1]] = { params: params, body: mDefFn[3] || '' };
-                    out.push('');
+                    emit('', i);
                     continue;
                 }
                 var mDef = /^#\s*define\s+([A-Za-z_]\w*)(?:\s+(.*))?$/.exec(trimmed);
                 if (mDef) {
                     macros[mDef[1]] = { params: null, body: (mDef[2] || '').trim() };
-                    out.push('');
+                    emit('', i);
                     continue;
                 }
                 if (/^#\s*undef\s+([A-Za-z_]\w*)/.test(trimmed)) {
                     delete macros[RegExp.$1];
-                    out.push('');
+                    emit('', i);
                     continue;
                 }
-                out.push('');
+                emit('', i);
                 continue;
             }
-            out.push(applyMacros(line, macros));
+            emit(applyMacros(line, macros), i);
         }
-        return { code: out.join('\n'), macros: macros };
+        return { code: out.join('\n'), macros: macros, map: map };
     }
 
     function stripComments(s) {
@@ -114,13 +236,12 @@
             } else if (c === '/' && s[i + 1] === '/') {
                 while (i < n && s[i] !== '\n') i++;
             } else if (c === '/' && s[i + 1] === '*') {
-                i += 2;
+                i += 2; res += '  ';
                 while (i < n && !(s[i] === '*' && s[i + 1] === '/')) {
-                    if (s[i] === '\n') res += '\n';
+                    res += s[i] === '\n' ? '\n' : ' ';
                     i++;
                 }
-                i += 2;
-                res += ' ';
+                i += 2; res += '  ';
             } else {
                 res += c; i++;
             }
@@ -206,32 +327,39 @@
     ];
 
     function tokenize(src) {
-        var tokens = [], i = 0, n = src.length, line = 1;
+        var tokens = [], i = 0, n = src.length, line = 1, lineStart = 0, prevCol = 1;
         while (i < n) {
+            if (tokens.length && tokens[tokens.length - 1].col === undefined) { var lt = tokens[tokens.length - 1]; lt.col = prevCol; lt.ecol = i - lineStart + 1; }
+            prevCol = i - lineStart + 1;
             var c = src[i];
-            if (c === '\n') { line++; i++; continue; }
+            if (c === '\n') { line++; i++; lineStart = i; continue; }
             if (/\s/.test(c)) { i++; continue; }
 
             // Chuỗi "..."
             if (c === '"') {
-                var s = '', startLine = line; i++;
+                var s = '', startLine = line, sCol = i - lineStart + 1; i++;
                 while (i < n && src[i] !== '"') {
-                    if (src[i] === '\n') line++;
+                    if (src[i] === '\n') throw diag('missing terminating " character', startLine, sCol, { len: 1 });
                     if (src[i] === '\\' && i + 1 < n) {
+                        if (src[i + 1] === '\n') { line++; lineStart = i + 2; i += 2; continue; }      // nối dòng bằng \
                         s += unescapeChar(src[i + 1]); i += 2;
                     } else { s += src[i++]; }
                 }
-                if (src[i] === '"') i++;
+                if (i >= n) throw diag('missing terminating " character', startLine, sCol, { len: 1 });
+                i++;
                 tokens.push({ type: 'str', val: s, line: startLine });
                 continue;
             }
             // Ký tự '...'
             if (c === "'") {
-                var ch = '', startL = line; i++;
+                var ch = '', startL = line, cCol = i - lineStart + 1; i++;
+                if (src[i] === "'") throw diag('empty character constant', startL, cCol, { len: 2 });
+                if (i >= n || src[i] === '\n') throw diag("missing terminating ' character", startL, cCol, { len: 1 });
                 if (src[i] === '\\' && i + 1 < n) { ch = unescapeChar(src[i + 1]); i += 2; }
                 else if (i < n) { ch = src[i++]; }
-                while (i < n && src[i] !== "'") i++;
-                if (src[i] === "'") i++;
+                while (i < n && src[i] !== "'" && src[i] !== '\n') i++;
+                if (src[i] !== "'") throw diag("missing terminating ' character", startL, cCol, { len: 1 });
+                i++;
                 tokens.push({ type: 'char', val: ch.charCodeAt(0) || 0, line: startL });
                 continue;
             }
@@ -285,11 +413,18 @@
                 tokens.push({ type: 'op', val: matched, line: line });
                 i += matched.length; continue;
             }
+            // Ký tự lạ (g++: stray ‘@’ in program) — gồm cả nháy cong “ ” ‘ ’, gạch dài –, khoảng trắng NBSP... dán từ Word/web
+            if (c === '@' || c === '`' || c === '\\' || c === '#' || /[\u00A0\u2000-\u206F\u2212\u00D7\u00F7\u3000-\u303F\uFF01-\uFF5E]/.test(c)) {
+                var by = [];
+                if (c.charCodeAt(0) < 128) by = [c]; else if (typeof TextEncoder === 'function') by = Array.prototype.slice.call(new TextEncoder().encode(c)).map(function (x) { return '\\' + ('00' + x.toString(8)).slice(-3); }); else by = [c];
+                throw diag('stray ' + q(by[0]) + ' in program', line, i - lineStart + 1, { len: 1, more: by.slice(1).map(function (x) { return 'stray ' + q(x) + ' in program'; }) });
+            }
             // Ký tự đơn
             tokens.push({ type: 'op', val: c, line: line });
             i++;
         }
-        tokens.push({ type: 'eof', val: '', line: line });
+        if (tokens.length && tokens[tokens.length - 1].col === undefined) { var lt2 = tokens[tokens.length - 1]; lt2.col = prevCol; lt2.ecol = i - lineStart + 1; }
+        tokens.push({ type: 'eof', val: '', line: line, col: i - lineStart + 1, ecol: i - lineStart + 1 });
         return tokens;
     }
 
@@ -318,8 +453,18 @@
         }
         function expect(type, val, msg) {
             var t = match(type, val);
-            if (!t) throw new Error('Dòng ' + peek().line + ': ' + (msg || ('Thiếu "' + (val || type) + '" trước "' + peek().val + '"')));
+            if (!t) failExpect(type, val, msg);
             return t;
+        }
+        // g++: expected ‘;’ before ‘}’ token / expected ‘)’ before ‘;’ token / expected ‘}’ at end of input / expected unqualified-id before ...
+        function failExpect(type, val, msg) {
+            var cur = peek(), what = type === 'id' ? (msg && /h[àa]m|bi[eế]n/i.test(msg) ? 'unqualified-id' : 'identifier') : q(val || type);
+            var prevT = cur.type === 'eof' ? tokens[tokens.length - 2] : tokens[pos - 1];
+            var atPrev = !!prevT && (cur.type === 'eof' || val === ';');
+            var line = atPrev ? prevT.line : cur.line, col = atPrev ? prevT.ecol : cur.col;
+            var m = 'expected ' + what + (cur.type === 'eof' ? ' at end of input' : ' before ' + tokDesc(cur));
+            var len = atPrev ? 1 : Math.max(1, (cur.ecol || 0) - (cur.col || 0));
+            throw diag(m, line, col, { len: len, fix: (val === ';' && atPrev) ? ';' : '' });
         }
 
         function isTypeStart(idx) {
@@ -493,6 +638,7 @@
         }
         function parseStruct(typedefMode) {
             var line = peek().line;
+            var isCls = peek().val === 'class';
             next(); // struct / class
             var name = peek().type === 'id' ? next().val : ('__anon' + (anonCount++));
             structNames.add(name);
@@ -565,7 +711,7 @@
                     structNames.delete(name);
                     name = tdAlias[0]; structNames.add(name);
                 } else tdAlias.forEach(function (al) { typedefs[al] = name; structNames.add(al); });
-                return { type: 'struct', name: name, base: baseName, fields: fields, methods: methods, trailingVars: [], line: line, aliases: tdAlias.slice(1) };
+                return { type: 'struct', name: name, base: baseName, fields: fields, methods: methods, trailingVars: [], line: line, aliases: tdAlias.slice(1), isClass: isCls };
             }
             // Hỗ trợ `struct Node { ... } root;`
             var trailingVars = [];
@@ -573,7 +719,7 @@
                 trailingVars = parseVarDeclsAfterType({ base: name, templateArgs: null, ptr: 0, isRef: false });
             }
             expect('op', ';');
-            return { type: 'struct', name: name, base: baseName, fields: fields, methods: methods, trailingVars: trailingVars, line: line };
+            return { type: 'struct', name: name, base: baseName, fields: fields, methods: methods, trailingVars: trailingVars, line: line, isClass: isCls };
         }
 
         function parseParams() {
@@ -747,7 +893,7 @@
                     var cVal = null;
                     if (match('kw', 'case')) { cVal = parseExpr(); expect('op', ':'); }
                     else if (match('kw', 'default')) { expect('op', ':'); }
-                    else throw new Error('Dòng ' + peek().line + ': Thiếu case/default trong switch');
+                    else throw diag('expected ' + q('case') + ', ' + q('default') + ' or ' + q('}') + ' before ' + (tokDesc(peek()) || 'end of input'), peek().line, peek().col, { len: Math.max(1, (peek().ecol || 0) - (peek().col || 0)), notes: ['mọi lệnh trong switch phải nằm sau một nhãn case/default'] });
                     var cStmts = [];
                     while (peek().val !== 'case' && peek().val !== 'default' && peek().val !== '}' && peek().type !== 'eof') {
                         cStmts.push(parseStmt());
@@ -779,7 +925,7 @@
                     expect('op', ')');
                     handlers.push({ all: cAll, ty: cTy, name: cName, body: parseBlock() });
                 }
-                if (!handlers.length) throw new Error('Dòng ' + line + ': Thiếu khối catch sau try.');
+                if (!handlers.length) throw diag('expected ' + q('catch') + (peek().type === 'eof' ? ' at end of input' : ' before ' + tokDesc(peek())), peek().line, peek().col, { len: Math.max(1, (peek().ecol || 0) - (peek().col || 0)) });
                 return { type: 'try', body: tryBody, handlers: handlers, line: line };
             }
             if (match('kw', 'throw')) {
@@ -834,7 +980,7 @@
             var t = peek();
             if (t.type === 'op' && (t.val === '=' || t.val === '+=' || t.val === '-=' || t.val === '*=' || t.val === '/=' || t.val === '%=' || t.val === '&=' || t.val === '|=' || t.val === '^=' || t.val === '<<=' || t.val === '>>=')) {
                 next();
-                return { type: 'assign', op: t.val, left: left, right: parseAssign(), line: t.line };
+                return { type: 'assign', op: t.val, left: left, right: parseAssign(), line: t.line, col: t.col };
             }
             return left;
         }
@@ -993,13 +1139,13 @@
                     var cTyT = parseType();
                     if (peek().val === '(') return { type: 'construct', ty: cTyT, args: parseArgList(), line: t.line };
                     if (peek().val === '{') return { type: 'construct', ty: cTyT, args: [parseInitList()], line: t.line };
-                    return { type: 'id', val: id, line: t.line };
+                    return { type: 'id', val: id, line: t.line, col: t.col };
                 }
                 if ((id === 'greater' || id === 'less') && peek().val === '<') {
                     next(); parseType(); expect('op', '>');
-                    return { type: 'id', val: id, line: t.line };
+                    return { type: 'id', val: id, line: t.line, col: t.col };
                 }
-                return { type: 'id', val: id, line: t.line };
+                return { type: 'id', val: id, line: t.line, col: t.col };
             }
             if (match('op', '(')) {
                 var ex = parseExpr();
@@ -1007,7 +1153,7 @@
                 return ex;
             }
             if (t.val === '{') return parseInitList();
-            throw new Error('Dòng ' + t.line + ': Cú pháp không hợp lệ tại "' + t.val + '"');
+            throw diag(t.type === 'eof' ? 'expected primary-expression at end of input' : 'expected primary-expression before ' + tokDesc(t), t.line, t.col, { len: Math.max(1, (t.ecol || 0) - (t.col || 0)) });
         }
 
         return parseProgram();
@@ -1166,7 +1312,7 @@
         }
 
         function formatFloat(num) {
-            if (!isFinite(num)) return String(num);
+            if (!isFinite(num)) return isNaN(num) ? 'nan' : (num < 0 ? '-inf' : 'inf');       // như libstdc++
             if (fixedFmt) return Number(num).toFixed(precisionFmt);
             return String(Number(Number(num).toPrecision(precisionFmt)));
         }
@@ -1216,8 +1362,8 @@
                 case '+': r = A + B; break;
                 case '-': r = A - B; break;
                 case '*': r = A * B; break;
-                case '/': if (B === 0n) throw new Error('Dòng ' + line + ': Lỗi chia cho 0.'); r = A / B; break;
-                case '%': if (B === 0n) throw new Error('Dòng ' + line + ': Lỗi chia cho 0.'); r = A % B; break;
+                case '/': if (B === 0n) throw fault('SIGFPE', line, 'chia số nguyên cho 0 (toán tử /)'); r = A / B; break;
+                case '%': if (B === 0n) throw fault('SIGFPE', line, 'chia lấy dư cho 0 (toán tử %)'); r = A % B; break;
                 case '<<': r = (B < 0n || B > 4096n) ? 0n : A << B; break;
                 case '>>': r = (B < 0n || B > 4096n) ? (A < 0n ? -1n : 0n) : A >> B; break;
                 case '&': r = A & B; break;
@@ -1250,15 +1396,15 @@
             switch (op) {
                 case '+': case '-': case '*': return arith(op, a, b, line);
                 case '/': {
-                    if (b == 0) throw new Error('Dòng ' + line + ': Lỗi chia cho 0.');
-                    var isFl = function (nd, v) { return nd && (nd.isFloat || (nd.type === 'cast' && /^(float|double|long double)$/.test(nd.target.base))) || (v && v.__cppType === 'double') || (typeof v === 'number' && !Number.isInteger(v)); };
-                    var li = typeof a === 'bigint' || (!(lv && lv.__cppType === 'char') && Number.isInteger(a) && !isFl(lnode, a));
-                    var ri = typeof b === 'bigint' || (!(rv && rv.__cppType === 'char') && Number.isInteger(b) && !isFl(rnode, b));
+                    var isFl = function (nd, v) { if (nd && nd.type === 'unary' && (nd.op === '-' || nd.op === '+') && nd.expr && nd.expr.isFloat) return true; return nd && (nd.isFloat || (nd.type === 'cast' && /^(float|double|long double)$/.test(nd.target.base))) || (v && v.__cppType === 'double') || (typeof v === 'number' && !Number.isInteger(v)); };
+                    var li = typeof a === 'bigint' || (!(lv && lv.__cppType === 'char') && Number.isInteger(a) && !isFl(lnode, lv));
+                    var ri = typeof b === 'bigint' || (!(rv && rv.__cppType === 'char') && Number.isInteger(b) && !isFl(rnode, rv));
+                    if (li && ri && b == 0) throw fault('SIGFPE', line, 'chia số nguyên cho 0 (toán tử /)');      // số thực chia 0 → inf/nan, không lỗi
                     if (li && ri) return (typeof a === 'bigint' || typeof b === 'bigint' || Math.abs(a) > 1e15) ? bigArith('/', a, b, line) : Math.trunc(a / b);
                     return Number(a) / Number(b);
                 }
                 case '%': {
-                    if (b == 0) throw new Error('Dòng ' + line + ': Lỗi chia cho 0.');
+                    if (b == 0) throw fault('SIGFPE', line, 'chia lấy dư cho 0 (toán tử %)');
                     if (typeof a === 'bigint' || typeof b === 'bigint') return bigArith('%', a, b, line);
                     return Math.trunc(a) % Math.trunc(b);
                 }
@@ -1424,7 +1570,7 @@
                 case '==': return A === B;
                 case '!=': return A !== B;
             }
-            throw new Error('Dòng ' + line + ': bitset không hỗ trợ toán tử ' + op);
+            throw diag('no match for ' + q('operator' + op) + ' in bitset expression', line, 0, { tok: op, fn: fnDesc() });
         }
         function pfOf(x) { if (x && x.__stl === 'pair') return [x.first, x.second]; if (Array.isArray(x)) return x; if (x && x.__stl === 'vector') return x.data; return null; }
         function cmpVals(a, b) {
@@ -1780,7 +1926,7 @@
         async function evalLValue(node, env) {
             if (node.type === 'id') {
                 var box = resolveVar(env, node.val);
-                if (!box) throw new Error('Dòng ' + node.line + ': Biến "' + node.val + '" chưa được khai báo.');
+                if (!box) throw undeclared(node, env);
                 if (box.isRef) return box.target;
                 return makeLValue(function () { return box.val; }, function (v) { box.val = box.ty ? castVal(v, box.ty) : v; }, box.ty);
             }
@@ -1804,9 +1950,9 @@
                     var clp = node.callee.prop, cli;
                     if (clp === 'at') {
                         cli = Math.trunc(toNum(await evalExpr(node.args[0], env)));
-                        if (cli < 0 || cli >= clObj.data.length) cppThrow('out_of_range', 'vector::at: chỉ số ' + cli + ' ngoài phạm vi (size ' + clObj.data.length + ')');
+                        if (cli < 0 || cli >= clObj.data.length) cppThrow('out_of_range', (clObj.__stl === 'deque' ? 'deque' : 'vector') + '::_M_range_check: __n (which is ' + cli + ') >= this->size() (which is ' + clObj.data.length + ')');
                     } else {
-                        if (!clObj.data.length) throw new Error('Dòng ' + node.line + ': ' + clp + '() trên vector rỗng.');
+                        if (!clObj.data.length) throw fault('SIGSEGV', node.line, clp + '() gọi trên vector rỗng (hành vi không xác định trong C++)');
                         cli = clp === 'front' ? 0 : clObj.data.length - 1;
                     }
                     return makeLValue(function () { return clObj.data[cli]; }, function (v) { clObj.data[cli] = v; });
@@ -1817,7 +1963,7 @@
                 var idx = await evalExpr(node.idx, env);
                 if (obj && (obj.__stl === 'vector' || obj.__stl === 'deque')) {
                     var i = Math.trunc(toNum(idx));
-                    if (i < 0 || i >= obj.data.length) { if (i < 0 || i > obj.data.length + 5000000) throw new Error('Dòng ' + node.line + ': Truy cập ngoài phạm vi vector (chỉ số ' + i + ', size ' + obj.data.length + ').'); }
+                    if (i < 0 || i >= obj.data.length) { if (i < 0 || i > obj.data.length + 5000000) throw fault('SIGSEGV', node.line, 'chỉ số ' + i + ' vượt xa size ' + obj.data.length + ' của vector (truy cập ngoài phạm vi — hành vi không xác định)'); }
                     return makeLValue(function () { return obj.data[i] !== undefined ? obj.data[i] : 0; }, function (v) { obj.data[i] = v; });
                 }
                 if (obj && obj.__stl === 'bitset') {
@@ -1849,7 +1995,7 @@
                         parentLv.set(cur.slice(0, si) + ch + cur.slice(si + 1));
                     });
                 }
-                throw new Error('Dòng ' + node.line + ': Không thể truy cập chỉ số [] trên đối tượng này.');
+                throw diag('invalid types for array subscript', node.line, 0, { tok: '[', fn: fnDesc() });
             }
             if (node.type === 'member') {
                 var mObj = await evalExpr(node.obj, env);
@@ -1866,9 +2012,9 @@
                     if (fdef) mlv.fty = fdef.varType;            // chỉ dùng cho toán tử & (con trỏ cấp 2), không đổi cách gán
                     return mlv;
                 }
-                throw new Error('Dòng ' + node.line + ': Không có thuộc tính "' + p + '".');
+                throw noMember(node, mObj, p, node.obj);
             }
-            throw new Error('Dòng ' + node.line + ': Biểu thức bên trái không thể gán giá trị.');
+            throw diag('lvalue required as left operand of assignment', node.line, lastAssign && lastAssign.line === node.line ? lastAssign.col : 0, { tok: '=', len: 1, fn: fnDesc() });
         }
 
         function toRaw(v) {
@@ -1927,7 +2073,7 @@
                     if (node.val === 'less') return { __cmp: 'asc' };
                     if (funcs[node.val]) return { __fn: node.val };
                     var box = resolveVar(env, node.val);
-                    if (!box) throw new Error('Dòng ' + node.line + ': Biến hoặc hàm "' + node.val + '" chưa được khai báo.');
+                    if (!box) throw undeclared(node, env);
                     return box.isRef ? box.target.get() : box.val;
                 }
                 case 'comma':
@@ -2003,6 +2149,7 @@
                     return oldV;
                 }
                 case 'assign': {
+                    lastAssign = node;
                     if (node.left.type === 'call' && node.left.callee.type === 'id' && node.left.callee.val === 'tie' && node.op === '=') {
                         var tieV = await evalExpr(node.right, env), tieP = pfOf(tieV) || [tieV];
                         for (var tii = 0; tii < node.left.args.length; tii++) {
@@ -2136,7 +2283,7 @@
                     var idxRaw = await evalExpr(node.idx, env);
                     var idx = Math.trunc(toNum(idxRaw));
                     if (arr && (arr.__stl === 'vector' || arr.__stl === 'deque')) {
-                        if (idx < 0) throw new Error('Dòng ' + node.line + ': Truy cập ngoài phạm vi vector (chỉ số ' + idx + ').');
+                        if (idx < 0) throw fault('SIGSEGV', node.line, 'chỉ số âm ' + idx + ' khi truy cập vector (truy cập ngoài phạm vi — hành vi không xác định)');
                         return arr.data[idx] !== undefined ? arr.data[idx] : 0;
                     }
                     if (arr && arr.__stl === 'map') return mapGet(arr, idxRaw);
@@ -2305,7 +2452,7 @@
                         if (wRoot) return mObj.fields.__what !== undefined ? mObj.fields.__what : 'std::' + wRoot;
                     }
                 }
-                throw new Error('Dòng ' + node.line + ': Không hỗ trợ phương thức "' + mName + '()".');
+                throw noMember(node, mObj, mName, node.callee.obj);
             }
 
             if (node.callee.type === 'lambda' || node.callee.type === 'call') {
@@ -2314,7 +2461,7 @@
                 if (lamV && (lamV.__lambda || lamV.__fn)) return callFnVal(lamV, lamArgs, node.args, env);
             }
             var fnName = node.callee.type === 'id' ? node.callee.val : null;
-            if (!fnName) throw new Error('Dòng ' + node.line + ': Không thể gọi hàm này.');
+            if (!fnName) throw diag('expression cannot be used as a function', node.line, 0, { tok: '(', fn: fnDesc() });
             if (Object.prototype.hasOwnProperty.call(EXC_PARENT, fnName) && !structs[fnName] && !funcs[fnName]) {       // runtime_error("..."), exception(), out_of_range("...")
                 var exA = node.args.length ? await evalExpr(node.args[0], env) : '';
                 return { __exc: fnName, msg: node.args.length ? String(exA) : 'std::' + fnName };
@@ -2402,7 +2549,7 @@
                 case 'capacity': return Math.max(str.length, 15);
                 case 'substr': {
                     var st = a.length ? N(a[0]) : 0;
-                    if (st > str.length) throw new Error('Dòng ' + node.line + ': substr: vị trí ' + st + ' vượt quá độ dài chuỗi (' + str.length + ').');
+                    if (st > str.length) cppThrow('out_of_range', 'basic_string::substr: __pos (which is ' + st + ') > this->size() (which is ' + str.length + ')');
                     return a[1] !== undefined ? str.substr(st, N(a[1])) : str.substr(st);
                 }
                 case 'find': return str.indexOf(S(a[0]), a[1] !== undefined ? N(a[1]) : 0);
@@ -2428,7 +2575,7 @@
                 case 'compare': { var co = S(a[0]); return str < co ? -1 : str > co ? 1 : 0; }
                 case 'back': return chAt(str.length - 1);
                 case 'front': return chAt(0);
-                case 'at': { var ai = N(a[0]); if (ai < 0 || ai >= str.length) cppThrow('out_of_range', 'basic_string::at: chỉ số ' + ai + ' ngoài phạm vi (độ dài ' + str.length + ')'); return chAt(ai); }
+                case 'at': { var ai = N(a[0]); if (ai < 0 || ai >= str.length) cppThrow('out_of_range', 'basic_string::at: __n (which is ' + ai + ') >= this->size() (which is ' + str.length + ')'); return chAt(ai); }
                 case 'begin': return { __sit: true, objNode: node.callee.obj, str: str, idx: 0 };
                 case 'end': return { __sit: true, objNode: node.callee.obj, str: str, idx: str.length };
                 case 'starts_with': return str.startsWith(S(a[0]));
@@ -2519,7 +2666,7 @@
             // ---- bitset ----
             if (mObj.__stl === 'bitset') {
                 var bn = mObj.n, ONE = function (i) { return 1n << BigInt(i); };
-                var chk = function (i) { if (i < 0 || i >= bn) throw new Error('Dòng ' + node.line + ': bitset: chỉ số ' + i + ' ngoài phạm vi (' + bn + ').'); return i; };
+                var chk = function (i) { if (i < 0 || i >= bn) cppThrow('out_of_range', 'bitset::' + name + ': __position (which is ' + i + ') >= _Nb (which is ' + bn + ')'); return i; };
                 switch (name) {
                     case 'set': if (!a.length) mObj.v = bsMask(bn); else mObj.v = (a[1] === undefined || toNum(a[1])) ? (mObj.v | ONE(chk(N(a[0])))) : (mObj.v & ~ONE(chk(N(a[0])))); return mObj;
                     case 'reset': if (!a.length) mObj.v = 0n; else mObj.v &= ~ONE(chk(N(a[0]))); return mObj;
@@ -2555,7 +2702,7 @@
                     case 'front': return D[0];
                     case 'data': return D;
                     case 'reserve': case 'shrink_to_fit': return 0;
-                    case 'at': { var ai = N(a[0]); if (ai < 0 || ai >= D.length) cppThrow('out_of_range', 'vector::at: chỉ số ' + ai + ' ngoài phạm vi (size ' + D.length + ')'); return D[ai]; }
+                    case 'at': { var ai = N(a[0]); if (ai < 0 || ai >= D.length) cppThrow('out_of_range', (mObj.__stl === 'deque' ? 'deque' : 'vector') + '::_M_range_check: __n (which is ' + ai + ') >= this->size() (which is ' + D.length + ')'); return D[ai]; }
                     case 'begin': return { __iter: D, idx: 0 };
                     case 'end': return { __iter: D, idx: D.length };
                     case 'resize': {
@@ -2594,9 +2741,9 @@
                 var SD = mObj.data;
                 switch (name) {
                     case 'push': case 'emplace': SD.push(mObj.et && mObj.et.ptr > 0 ? a[0] : cloneVal(coerceElem(mObj.et, a[0]))); memCharge(mObj, 8); return 0;
-                    case 'pop': if (!SD.length) throw new Error('Dòng ' + node.line + ': pop() trên ' + mObj.__stl + ' rỗng.'); if (mObj.__stl === 'stack') SD.pop(); else SD.shift(); memCharge(mObj, -8); return 0;
-                    case 'top': case 'back': if (!SD.length) throw new Error('Dòng ' + node.line + ': ' + name + '() trên ' + mObj.__stl + ' rỗng.'); return SD[SD.length - 1];
-                    case 'front': if (!SD.length) throw new Error('Dòng ' + node.line + ': front() trên queue rỗng.'); return SD[0];
+                    case 'pop': if (!SD.length) throw fault('SIGSEGV', node.line, 'pop() gọi trên ' + mObj.__stl + ' rỗng (hành vi không xác định trong C++)'); if (mObj.__stl === 'stack') SD.pop(); else SD.shift(); memCharge(mObj, -8); return 0;
+                    case 'top': case 'back': if (!SD.length) throw fault('SIGSEGV', node.line, name + '() gọi trên ' + mObj.__stl + ' rỗng (hành vi không xác định trong C++)'); return SD[SD.length - 1];
+                    case 'front': if (!SD.length) throw fault('SIGSEGV', node.line, 'front() gọi trên queue rỗng (hành vi không xác định trong C++)'); return SD[0];
                     case 'size': return SD.length;
                     case 'empty': return SD.length === 0;
                     case 'swap': { var so = a[0]; if (so && so.data) { var ts = mObj.data; mObj.data = so.data; so.data = ts; } return 0; }
@@ -2607,8 +2754,8 @@
             if (mObj.__stl === 'pq') {
                 switch (name) {
                     case 'push': case 'emplace': await pqPush(mObj, mObj.et && mObj.et.ptr > 0 ? a[0] : cloneVal(coerceElem(mObj.et, a[0])), env); return 0;
-                    case 'pop': if (!mObj.data.length) throw new Error('Dòng ' + node.line + ': pop() trên priority_queue rỗng.'); await pqPop(mObj, env); return 0;
-                    case 'top': if (!mObj.data.length) throw new Error('Dòng ' + node.line + ': top() trên priority_queue rỗng.'); return mObj.data[0];
+                    case 'pop': if (!mObj.data.length) throw fault('SIGSEGV', node.line, 'pop() gọi trên priority_queue rỗng (hành vi không xác định trong C++)'); await pqPop(mObj, env); return 0;
+                    case 'top': if (!mObj.data.length) throw fault('SIGSEGV', node.line, 'top() gọi trên priority_queue rỗng (hành vi không xác định trong C++)'); return mObj.data[0];
                     case 'size': return mObj.data.length;
                     case 'empty': return mObj.data.length === 0;
                 }
@@ -2656,7 +2803,7 @@
                         if (!had || name === 'insert_or_assign') mapPut(mObj, kv[0], cloneVal(coerceElem(mObj.vt, kv[1])));
                         return insResult(mObj, kv[0], !had);
                     }
-                    case 'at': { var ak = keyStr(a[0]); if (!mObj.data.has(ak)) cppThrow('out_of_range', 'map::at: không có khoá này'); return mObj.data.get(ak); }
+                    case 'at': { var ak = keyStr(a[0]); if (!mObj.data.has(ak)) cppThrow('out_of_range', 'map::at'); return mObj.data.get(ak); }
                     case 'count': return mObj.data.has(keyStr(a[0])) ? 1 : 0;
                     case 'contains': return mObj.data.has(keyStr(a[0]));
                     case 'find': return findIt(mObj, a[0]);
@@ -3049,7 +3196,7 @@
                 case '__lg': return Math.floor(Math.log2(toNum(args[0])));
                 case 'to_string_': return '';
             }
-            throw new Error('Dòng ' + node.line + ': Hàm "' + fn + '()" chưa được hỗ trợ trong chế độ JS thuần.');
+            throw undeclared({ val: fn, line: node.line, col: node.callee && node.callee.type === 'id' ? node.callee.col : 0 }, env, LIB_NOTE);
         }
 
         function fillNested(arr, val) {
@@ -3114,7 +3261,8 @@
         async function invokeFunc(fn, argVals, argNodes, callerEnv, thisObj, parentEnv) {
             if (++callDepth > MAX_CALL_DEPTH) { callDepth = 0; throw { __halt: 'stack' }; }
             memTotal += FRAME_BYTES;
-            try { return await invokeFunc2(fn, argVals, argNodes, callerEnv, thisObj, parentEnv); }
+            var pFn = curFn, pCls = curCls; curFn = fn; curCls = thisObj ? thisObj.__struct : null;      // khi lỗi, curFn còn giữ hàm gây lỗi (không khôi phục trong finally)
+            try { var rv0 = await invokeFunc2(fn, argVals, argNodes, callerEnv, thisObj, parentEnv); curFn = pFn; curCls = pCls; return rv0; }
             finally { callDepth--; memTotal -= FRAME_BYTES; if (memTotal < 0) memTotal = 0; }
         }
         async function invokeFunc2(fn, argVals, argNodes, callerEnv, thisObj, parentEnv) {
@@ -3231,6 +3379,35 @@
             return false;
         }
         function cppThrow(kind, msg) { throw { __cppThrow: true, val: { __exc: kind, msg: msg }, line: 0 }; }
+        // ---- lỗi biên dịch kiểu g++ phát hiện lúc chạy ----
+        var curFn = null, curCls = null, lastAssign = null;
+        var LIB_NOTE = 'nếu g++ biên dịch được dòng này thì đây là hàm/phương thức thư viện chuẩn mà trình thông dịch JS chưa hỗ trợ (hãy chạy bằng g++ thật / runner)';
+        function fnDesc() {            // "function ‘int main()’" / "member function ‘void A::f(int)’" / "constructor ‘A::A(int)’"
+            if (!curFn) return '';
+            var ps = (curFn.params || []).map(function (pp) { return typeStr(pp.type); }).join(', ');
+            var nm = (curCls ? curCls + '::' : '') + curFn.name;
+            if (curFn.isCtor) return 'constructor ' + q(nm + '(' + ps + ')');
+            return (curCls ? 'member function ' : 'function ') + q(typeStr(curFn.retType) + ' ' + nm + '(' + ps + ')');
+        }
+        function visibleNames(env) {
+            var out = [], seen = {};
+            for (var e = env; e; e = e.parent) for (var k in e.vars) if (!seen[k] && k !== 'this') { seen[k] = 1; out.push(k); }
+            Object.keys(funcs).forEach(function (k) { if (!seen[k]) { seen[k] = 1; out.push(k); } });
+            return out;
+        }
+        function undeclared(node, env, note) {      // error: ‘x’ was not declared in this scope; did you mean ‘y’?
+            var name = node.val, sg = suggestName(name, visibleNames(env)) || suggestName(name, STD_NAMES);
+            return diag(q(name) + ' was not declared in this scope' + (sg ? '; did you mean ' + q(sg) + '?' : ''), node.line, node.col || 0, { tok: name, len: name.length, fix: sg || '', fn: fnDesc(), notes: note ? [note] : [] });
+        }
+        function noMember(node, obj, name, objNode) {   // error: ‘struct S’ has no member named ‘x’
+            var nm = objNode && objNode.type === 'id' ? objNode.val : null, msg, notes = [];
+            if (obj && obj.__struct) { var sd = structs[obj.__struct]; msg = q((sd && sd.isClass ? 'class ' : 'struct ') + obj.__struct) + ' has no member named ' + q(name); }
+            else if (obj && obj.__stl) { msg = q('class std::' + obj.__stl) + ' has no member named ' + q(name); notes.push(LIB_NOTE); }
+            else if (typeof obj === 'string') { msg = q('std::string') + ' {aka ' + q('class std::__cxx11::basic_string<char>') + '} has no member named ' + q(name); notes.push(LIB_NOTE); }
+            else if (typeof obj === 'number') msg = 'request for member ' + q(name) + (nm ? ' in ' + q(nm) : '') + ', which is of non-class type ' + q(Number.isInteger(obj) ? 'int' : 'double');
+            else msg = 'request for member ' + q(name) + ' in something not a structure or union';
+            return diag(msg, node.line, 0, { tok: name, len: name.length, fn: fnDesc(), notes: notes });
+        }
 
         async function execBlock(block, env) {
             var bEnv = { parent: env, vars: {} };
@@ -3249,13 +3426,15 @@
                     var thVal;
                     if (stmt.expr) thVal = await evalExpr(stmt.expr, env);
                     else if (excStack.length) thVal = excStack[excStack.length - 1].val;
-                    else throw new Error('Dòng ' + stmt.line + ': "throw;" chỉ dùng được bên trong khối catch.');
+                    else throw fault('SIGABRT', stmt.line, 'throw; được gọi khi không có ngoại lệ nào đang xử lý', 'terminate called without an active exception');
                     throw { __cppThrow: true, val: thVal, line: stmt.line };
                 }
                 case 'try': {
+                    var fnAtTry = curFn, clsAtTry = curCls;
                     try { return await execStmt(stmt.body, env); }
                     catch (ex) {
                         if (!ex || !ex.__cppThrow) throw ex;                 // dừng/timeout/lỗi cú pháp... không phải ngoại lệ C++
+                        curFn = fnAtTry; curCls = clsAtTry;
                         var hit = null;
                         for (var hp = 0; hp < 2 && !hit; hp++) for (var hi = 0; hi < stmt.handlers.length && !hit; hi++) if (excMatches(stmt.handlers[hi], ex.val, hp === 1)) hit = stmt.handlers[hi];
                         if (!hit) throw ex;
@@ -3387,7 +3566,7 @@
                     await execVarDecls(item.decls, globalEnv);
                 }
             }
-            if (!funcs.main) throw new Error('Không tìm thấy hàm int main().');
+            if (!funcs.main) throw diag('undefined reference to main', 0, 0, { raw: ['/usr/bin/ld: /usr/lib/gcc/x86_64-linux-gnu/12/../../../x86_64-linux-gnu/Scrt1.o: in function `_start\':', '(.text+0x1b): undefined reference to `main\'', 'collect2: error: ld returned 1 exit status'] });
             var ret = await invokeFunc(funcs.main, [], [], globalEnv, null);
             return Math.trunc(toNum(ret));
         }
@@ -3441,11 +3620,16 @@
     }
 
     function start(opts) {
+        var userOut = opts.onOut, lastCh = '\n', anyOut = false;
+        opts = Object.assign({}, opts, { onOut: function (t, k) { if (t) { lastCh = String(t).slice(-1); if (!k || k === 'out') anyOut = true; } userOut(t, k); } });
         var rt = createRuntime(opts);
         var doneResolve;
         var promise = new Promise(function (r) { doneResolve = r; });
         var finished = false;
         function finish(res) { if (finished) return; finished = true; try { var st = rt.stats(); for (var k in st) res[k] = st[k]; } catch (e) { } doneResolve(res); }
+        // ctx: dữ liệu để in lỗi kiểu g++ (tên file, dòng code gốc, bản đồ dòng sau #include)
+        var ctx = { fileName: String(opts.fileName || 'main.cpp').split(/[\\/]/).pop() || 'main.cpp', srcLines: String(opts.code || '').split('\n'), fileMap: {}, lineMap: [], prepLines: [], lastFn: null };
+        function nl() { if (lastCh !== '\n') opts.onOut('\n', 'err'); }
 
         (async function () {
             await Promise.resolve();
@@ -3453,7 +3637,9 @@
                 if (opts.onStatus) opts.onStatus('Đang phân tích code C++ (JS thuần)...');
                 var fileMap = {};
                 (opts.files || []).forEach(function (f) { fileMap[f.name] = f.content; });
+                ctx.fileMap = fileMap;
                 var prep = preprocess(opts.code, fileMap);
+                ctx.lineMap = prep.map; ctx.prepLines = prep.code.split('\n');
                 var tokens = stripSpecifiers(tokenize(prep.code));
                 var ast = parse(tokens);
                 if (opts.onStatus) opts.onStatus('Đang chạy...');
@@ -3470,20 +3656,36 @@
                     opts.onOut('\n[⚠ CẢNH BÁO TRÀN BỘ NHỚ: bộ nhớ tạm tăng bất thường' + (e.mb ? ' (~' + e.mb + ' MB)' : '') + (e.why === 'hard' || e.why === 'heap' ? ' — vượt giới hạn an toàn' : ' — vẫn tăng đến giây thứ ' + Math.round((Date.now() - rt.startedAt()) / 1000)) + '. Thường do vòng lặp vô hạn cấp phát (push_back / += / new) hoặc đệ quy không dừng. Đã dừng chạy code.]', 'err');
                     finish({ status: 'memory', exitCode: null, files: rt.collectOutFiles(), error: 'Tràn bộ nhớ' });
                 } else if (e && e.__halt === 'stack') {
-                    opts.onOut('\n[⚠ TRÀN NGĂN XẾP: đệ quy quá sâu (> ' + MAX_CALL_DEPTH + ' lần gọi) — thường do đệ quy không có điều kiện dừng. Đã dừng chạy code.]', 'err');
-                    finish({ status: 'memory', exitCode: null, files: rt.collectOutFiles(), error: 'Tràn ngăn xếp' });
+                    nl();
+                    opts.onOut(FAULTS.SIGSEGV.title + '\n  \u21B3 đệ quy quá sâu (> ' + MAX_CALL_DEPTH + ' lần gọi) — stack overflow, thường do đệ quy không có điều kiện dừng. Đã dừng chạy code.\n', 'err');
+                    finish({ status: 'memory', exitCode: FAULTS.SIGSEGV.code, files: rt.collectOutFiles(), error: FAULTS.SIGSEGV.title });
                 } else if (e && e.__cppThrow) {
                     var tv = e.val, tn = tv && tv.__exc ? 'std::' + tv.__exc : tv && tv.__struct ? tv.__struct : typeof tv === 'string' ? 'char const*' : typeof tv === 'number' ? (Number.isInteger(tv) ? 'int' : 'double') : 'unknown';
-                    opts.onOut("terminate called after throwing an instance of '" + tn + "'\n" + (tv && tv.__exc ? '  what():  ' + tv.msg + '\n' : ''), 'err');
+                    nl();
+                    opts.onOut("terminate called after throwing an instance of '" + tn + "'\n" + (tv && tv.__exc ? '  what():  ' + tv.msg + '\n' : '') + FAULTS.SIGABRT.title + '\n', 'err');
                     finish({ status: 'finished', exitCode: 134, files: rt.collectOutFiles(), error: 'Chương trình bị hủy do ngoại lệ không được bắt (mã thoát 134)' });
+                } else if (e && e.__fault) {
+                    nl();
+                    var ft = formatFault(e, ctx);
+                    opts.onOut(ft.text, 'err');
+                    finish({ status: 'finished', exitCode: ft.code, files: rt.collectOutFiles(), error: ft.title });
                 } else if (e && e.__halt === 'exit') {
                     finish({ status: 'finished', exitCode: e.code, files: rt.collectOutFiles(), error: e.code ? 'Mã thoát ' + e.code : null });
                 } else if (e instanceof RangeError && /Invalid (array|string|typed array) length|Array buffer allocation|Invalid count value/i.test(String(e.message))) {
-                    opts.onOut('\n[⚠ CẢNH BÁO TRÀN BỘ NHỚ: chương trình yêu cầu mảng/chuỗi quá lớn (' + String(e.message) + '). Đã dừng chạy code.]', 'err');
-                    finish({ status: 'memory', exitCode: null, files: rt.collectOutFiles(), error: 'Tràn bộ nhớ' });
+                    nl();
+                    opts.onOut("terminate called after throwing an instance of 'std::bad_alloc'\n  what():  std::bad_alloc\n" + FAULTS.SIGABRT.title + '\n  \u21B3 chương trình yêu cầu mảng/chuỗi quá lớn (' + String(e.message) + ').\n', 'err');
+                    finish({ status: 'memory', exitCode: 134, files: rt.collectOutFiles(), error: 'Tràn bộ nhớ' });
+                } else if (e && e.cppDiag) {
+                    if (anyOut) nl();
+                    var dt = formatDiag(e.cppDiag, ctx);
+                    if (anyOut && !e.cppDiag.raw) dt += 'note: g++ sẽ chặn lỗi này ngay lúc biên dịch và không chạy chương trình; trình thông dịch chỉ phát hiện khi chạy tới dòng này, nên phần kết quả phía trên là của các dòng đã chạy trước đó.\n';
+                    opts.onOut(dt, 'err');
+                    var head = dt.split('\n').filter(function (l) { return /(^| )(fatal error|error): /.test(l); })[0] || e.cppDiag.msg;
+                    finish({ status: 'compile-error', exitCode: null, files: anyOut ? rt.collectOutFiles() : {}, error: head });
                 } else {
                     var msg = String(e && e.message || e);
-                    opts.onOut('Lỗi: ' + msg + '\n', 'err');
+                    nl();
+                    opts.onOut('internal error: ' + msg + '\n  \u21B3 lỗi nội bộ của trình thông dịch JS (chưa chắc là lỗi code của bạn). Nếu g++ biên dịch và chạy được thì đây là tính năng C++ chưa được hỗ trợ.\n', 'err');
                     finish({ status: 'compile-error', exitCode: null, files: {}, error: msg });
                 }
             }
