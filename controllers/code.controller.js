@@ -176,6 +176,46 @@ exports.onlineFolder = wrap(async (req, res) => {
     });
 });
 
+// Cả cây thư mục của tôi (gồm thư mục con) cho nút "Tải tất cả" → zip giữ nguyên cấu trúc thư mục.
+exports.tree = wrap(async (req, res) => {
+    const lang = langOf(req);
+    res.set('Cache-Control', 'no-store').json({ ok: true, ...(await store.tree(uidOf(req), lang.key, req.query.dir || '')) });
+});
+
+// Cả cây thư mục trên mạng (GitHub / GitLab, gồm thư mục con) cho nút "Tải tất cả file về": chỉ file thuộc dạng code này.
+// Giới hạn: tối đa 60 thư mục, 400 file, sâu 8 cấp (mỗi thư mục = 1 lần gọi API) — vượt thì báo truncated.
+exports.onlineTree = wrap(async (req, res) => {
+    const lang = langOf(req);
+    const f = await remoteSource.resolveRef(remoteSource.parseFolderUrl(String(req.query.url || '').trim()));
+    const extOf = (n) => { const i = String(n).lastIndexOf('.'); return i > 0 ? String(n).slice(i + 1).toLowerCase() : ''; };
+    const MAX_DIRS = 60, MAX_FILES = 400, MAX_DEPTH = 8;
+    const files = [], failed = []; let truncated = false, scanned = 0;
+    const queue = [{ f, rel: [], depth: 0 }];
+    while (queue.length) {
+        if (scanned >= MAX_DIRS) { truncated = true; break; }
+        const cur = queue.shift(); scanned++;
+        let items;
+        try { items = await remoteSource.listFolder(cur.f); }
+        catch (e) {
+            if (!cur.rel.length) throw e;                           // thư mục gốc lỗi → báo lỗi thật
+            failed.push(cur.rel.join('/') + ' — ' + e.message); if (e.status === 429) { truncated = true; break; } continue;
+        }
+        for (const x of items) {
+            const o = remoteSource.otherRepo(cur.f, x), fx = o ? remoteSource.withRepo(cur.f, o) : cur.f;
+            if (x.type === 'dir') {
+                if (cur.depth + 1 > MAX_DEPTH) { truncated = true; continue; }
+                queue.push({ f: { ...fx, dirSegs: [...cur.f.dirSegs, x.name] }, rel: [...cur.rel, x.name], depth: cur.depth + 1 });
+                continue;
+            }
+            if (!lang.exts.includes(extOf(x.name))) continue;
+            if (files.length >= MAX_FILES) { truncated = true; continue; }
+            files.push({ dir: cur.rel.join('/'), name: x.name, web: remoteSource.fromParts(fx, [...cur.f.dirSegs, x.name]).web });
+        }
+    }
+    files.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir.localeCompare(b.dir)));
+    res.set('Cache-Control', 'no-store').json({ ok: true, files, failed, truncated });
+});
+
 // Tải 1 file văn bản của "Đọc thư mục trên mạng" về máy (link GitHub/GitLab công khai; máy chủ tải hộ, đã qua danh sách host + giới hạn 200KB của remoteSource).
 // Nút "Tải tất cả" ở trang đó gọi lần lượt từng file rồi gói zip ở trình duyệt.
 exports.onlineDownload = wrap(async (req, res) => {

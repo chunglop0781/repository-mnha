@@ -1,4 +1,4 @@
-// public/js/textTransfer.js — trang thư mục code (cpp, emu8086, html): TẢI FILE VĂN BẢN LÊN (trùng tên → ghi đè) + TẢI TẤT CẢ file văn bản về (zip)
+// public/js/textTransfer.js — trang thư mục code (cpp, emu8086, html): TẢI FILE VĂN BẢN LÊN (trùng tên → ghi đè) + TẢI TẤT CẢ file văn bản về (zip, gồm cả thư mục con)
 (function () {
     'use strict';
     var root = document.getElementById('codeFiles') || document.getElementById('htmlFiles'); if (!root) return;
@@ -77,28 +77,50 @@
         };
     }
 
-    // ---------- TẢI VỀ (zip tự dựng ở trình duyệt, không nén — chỉ gói lại)
+    // ---------- TẢI VỀ (zip tự dựng ở trình duyệt, không nén — chỉ gói lại). Gồm CẢ THƯ MỤC CON, giữ nguyên cấu trúc như tải ở GitHub / Google Drive.
     var zip = window.MnhaZip.zip, save = window.MnhaZip.save;
-    function fetchOne(name) {
-        return fetch('/code/' + lang + '/download?dir=' + encodeURIComponent(dir) + '&file=' + encodeURIComponent(name), { headers: { Accept: 'application/json' } })
+    function fetchOne(rel, name) {
+        var d = dir ? (rel ? dir + '/' + rel : dir) : rel;
+        return fetch('/code/' + lang + '/download?dir=' + encodeURIComponent(d) + '&file=' + encodeURIComponent(name), { headers: { Accept: 'application/json' } })
             .then(function (r) { if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); }); return r.arrayBuffer(); })
-            .then(function (b) { return { name: name, data: new Uint8Array(b) }; });
+            .then(function (b) { return { dir: rel, name: name, data: new Uint8Array(b) }; });
+    }
+    function getTree() {      // cả cây thư mục; máy chủ cũ chưa có /tree → chỉ gói file của thư mục này
+        return fetch('/code/' + lang + '/tree?dir=' + encodeURIComponent(dir), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (t) { if (!t || !Array.isArray(t.files)) throw new Error('bad'); return t; })
+            .catch(function () { return { files: names().map(function (n) { return { dir: '', name: n }; }), emptyDirs: [], truncated: false }; });
     }
     if (btnAll) btnAll.onclick = function () {
-        var list = names(); if (!list.length) return say('Thư mục này chưa có file văn bản nào để tải.', 'err');
-        btnAll.disabled = true; var done = 0, failed = [], got = [], i = 0;
-        say('Đang tải 0/' + list.length + ' file...');
-        function worker() {
-            if (i >= list.length) return Promise.resolve();
-            var n = list[i++];
-            return fetchOne(n).then(function (e) { got.push(e); }, function (er) { failed.push(n + ' — ' + er.message); }).then(function () { say('Đang tải ' + (++done) + '/' + list.length + ' file...'); return worker(); });
-        }
-        Promise.all([worker(), worker(), worker(), worker()]).then(function () {
-            if (!got.length) return say('Không tải được file nào:\n' + failed.join('\n'), 'err');
-            got.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
-            var base = (dir ? dir.split('/').pop() : lang) || 'codes';
-            if (got.length === 1) save(new Blob([got[0].data], { type: 'text/plain' }), got[0].name); else save(zip(got), base + '.zip');
-            say('Đã tải về ' + got.length + ' file' + (got.length > 1 ? ' (' + base + '.zip)' : '') + '.' + (failed.length ? '\nKhông tải được ' + failed.length + ' file:\n' + failed.join('\n') : ''), failed.length ? 'info' : 'ok');
+        btnAll.disabled = true; say('Đang quét thư mục con...');
+        getTree().then(function (t) {
+            var list = t.files, emptyDirs = t.emptyDirs || [];
+            if (!list.length && !emptyDirs.length) { say('Thư mục này chưa có file văn bản nào để tải.', 'err'); return; }
+            var done = 0, failed = [], got = [], i = 0;
+            say('Đang tải 0/' + list.length + ' file...');
+            function worker() {
+                if (i >= list.length) return Promise.resolve();
+                var it = list[i++], label = (it.dir ? it.dir + '/' : '') + it.name;
+                return fetchOne(it.dir, it.name).then(function (e) { got.push(e); }, function (er) { failed.push(label + ' — ' + er.message); })
+                    .then(function () { say('Đang tải ' + (++done) + '/' + list.length + ' file...'); return worker(); });
+            }
+            return Promise.all([worker(), worker(), worker(), worker()]).then(function () {
+                if (!got.length && !emptyDirs.length) return say('Không tải được file nào:\n' + failed.join('\n'), 'err');
+                got.sort(function (a, b) { var x = a.dir + '/' + a.name, y = b.dir + '/' + b.name; return x < y ? -1 : x > y ? 1 : 0; });
+                var base = ((dir ? dir.split('/').pop() : lang) || 'codes').replace(/[\\/:*?"<>|]+/g, '_');
+                var nested = got.some(function (e) { return e.dir; }) || emptyDirs.length > 0;
+                if (got.length === 1 && !nested) save(new Blob([got[0].data], { type: 'text/plain' }), got[0].name);
+                else {
+                    var top = nested ? base + '/' : '', entries = [];
+                    if (nested) entries.push({ name: top, data: new Uint8Array(0) });
+                    emptyDirs.forEach(function (d) { entries.push({ name: top + d + '/', data: new Uint8Array(0) }); });      // thư mục rỗng vẫn có trong zip
+                    got.forEach(function (e) { entries.push({ name: top + (e.dir ? e.dir + '/' : '') + e.name, data: e.data }); });
+                    save(zip(entries), base + '.zip');
+                }
+                say('Đã tải về ' + got.length + ' file' + (nested ? ' cùng thư mục con' : '') + (got.length > 1 || nested ? ' (' + base + '.zip)' : '') + '.'
+                    + (t.truncated ? '\n(Thư mục rất lớn — chỉ gói 500 file đầu.)' : '')
+                    + (failed.length ? '\nKhông tải được ' + failed.length + ' file:\n' + failed.join('\n') : ''), failed.length || t.truncated ? 'info' : 'ok');
+            });
         }).catch(function (e) { say('Lỗi: ' + e.message, 'err'); }).then(function () { btnAll.disabled = false; });
     };
 })();

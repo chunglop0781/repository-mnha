@@ -90,6 +90,35 @@ async function list(uid, lang, dir) {
     return { dir: segs.join('/'), folders: [...folders].sort(), files: files.sort() };
 }
 
+/** Cả cây thư mục (gồm mọi thư mục con) để tải thư mục mẹ thành .zip: chỉ file văn bản của dạng code này (tải được qua /download).
+ *  → { dir, files:[{dir:'thư-mục-con-tương-đối', name}], emptyDirs:[...], truncated } — quét từ 1 lần đọc cây repo, không gọi GitHub theo từng thư mục. */
+async function tree(uid, lang, dir) {
+    const cfg = assertLang(lang);
+    const hidden = cfg.kind === 'web' ? MEDIA.MANIFEST : (cfg.manifest || null);
+    const segs = cleanDir(dir);
+    const prefix = [root(uid, lang), ...segs].join('/') + '/';
+    const t = await gh.getRepoTree();
+    const MAX_FILES = 500;
+    const files = [], dirs = new Set(), full = new Set(); let truncated = false;
+    for (const [p] of t.files) {
+        if (!p.startsWith(prefix)) continue;
+        const parts = p.slice(prefix.length).split('/'), name = parts.pop();
+        if (parts.includes(MEDIA.HIDDEN_DIR)) continue;
+        let rel = ''; try { rel = cleanDir(parts.join('/')).join('/'); } catch (_) { continue; }      // tên thư mục lạ → bỏ
+        let acc = '';
+        for (const s of parts) { acc = acc ? acc + '/' + s : s; dirs.add(acc); }
+        if (name === KEEP || (hidden && name === hidden)) continue;
+        let ok = false; try { ok = cleanFileName(lang, name) === name; } catch (_) { ok = false; }
+        if (!ok) continue;
+        if (files.length >= MAX_FILES) { truncated = true; continue; }
+        files.push({ dir: rel, name });
+        acc = ''; for (const s of parts) { acc = acc ? acc + '/' + s : s; full.add(acc); }
+    }
+    files.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir.localeCompare(b.dir)));
+    const emptyDirs = [...dirs].filter((d) => !full.has(d)).sort();
+    return { dir: segs.join('/'), files, emptyDirs, truncated };
+}
+
 async function mkdir(uid, lang, dir, name) {
     assertLang(lang);
     const segs = [...cleanDir(dir), ...cleanDir(name)];
@@ -309,4 +338,4 @@ async function readResult(uid, lang, ts) {
 }
 
 module.exports = {
-    putTextPart, finishText, saveUploads, githubUrl, githubFolderUrl, displayText, renameFolder, renameFile, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName };
+    putTextPart, finishText, saveUploads, githubUrl, githubFolderUrl, displayText, renameFolder, renameFile, list, mkdir, readFile, writeFile, removeFile, removeFolder, siblingTextFiles, saveOnlineOutputs, saveResult, listResults, readResult, cleanDir, cleanFileName, tree };
