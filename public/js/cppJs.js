@@ -4,7 +4,8 @@
     'use strict';
 
     var RUN_LIMIT_MS = 60000;
-    var YIELD_EVERY = 1500;
+    var CHECK_MASK = 255;                           // kiểm tra dừng/bộ nhớ/đồng hồ mỗi 256 bước thay vì mỗi bước (Date.now() mỗi bước rất tốn)
+    var SLICE_MS = 12;                              // mỗi lát chạy ≈12ms rồi nhường trình duyệt (UI/nút Dừng vẫn mượt, vòng lặp nặng chạy hết tốc lực)
     // Giới hạn bộ nhớ tạm (ước lượng): từ giây thứ 5 trở đi, nếu bộ nhớ vẫn đang TĂNG nhanh và vượt ngưỡng mềm → dừng + cảnh báo.
     // Nếu không tràn (bộ nhớ ổn định/đã giải phóng) → cho chạy tiếp. Ngưỡng cứng chặn ngay để tab trình duyệt không bị sập.
     var MEM_CHECK_AFTER_MS = 5000;
@@ -13,6 +14,23 @@
     var MEM_HARD_BYTES = 768 * 1024 * 1024;         // vượt mức này dừng ngay (không đợi giây 5)
     var MAX_CALL_DEPTH = 150000;                    // đệ quy sâu hơn → tràn ngăn xếp
     var FRAME_BYTES = 256;
+
+
+    // Nhường trình duyệt bằng MessageChannel: không bị khoá tối thiểu ~4ms của setTimeout(0) lồng nhau (Chrome/Safari) → nhanh hơn nhiều lần.
+    // Cứ ~50ms lại nhường 1 lần bằng setTimeout để timer/sự kiện khác (nút Dừng, ô nhập) không bao giờ bị MessageChannel làm đói.
+    var yChan = null, yQueue = [], lastTimerYield = 0;
+    function yieldNow() {
+        return new Promise(function (resolve) {
+            var now = Date.now();
+            if (typeof root.MessageChannel !== 'function' || now - lastTimerYield >= 50) { lastTimerYield = now; return void setTimeout(resolve, 0); }
+            if (!yChan) {
+                yChan = new root.MessageChannel();
+                yChan.port1.onmessage = function () { var f = yQueue.shift(); if (f) f(); };
+                if (typeof yChan.port1.unref === 'function') yChan.port1.unref();      // Node: không giữ tiến trình sống
+            }
+            yQueue.push(resolve); yChan.port2.postMessage(0);
+        });
+    }
 
     // =========================================================================
     // 1. TIỀN XỬ LÝ (PREPROCESSOR): comments, #include, #define, typedef
@@ -1062,13 +1080,15 @@
             if (now - startedAt > RUN_LIMIT_MS) throw { __halt: 'timeout' };
             memCheck(now);
         }
-        async function tickStep() {
+        var lastYieldAt = startedAt;
+        function tickStep() {                           // trả về Promise chỉ khi cần nhường; còn lại trả undefined (không tạo microtask)
+            if (stopped) throw { __halt: 'stopped' };
+            if ((++steps & CHECK_MASK) !== 0) return;
             checkStop();
-            if (++steps % YIELD_EVERY === 0) {
-                if (heapNearLimit()) throw memOver('heap');
-                await new Promise(function (r) { setTimeout(r, 0); });
-                checkStop();
-            }
+            var now = Date.now();
+            if (now - lastYieldAt < SLICE_MS) return;
+            if (heapNearLimit()) throw memOver('heap');
+            return yieldNow().then(function () { lastYieldAt = Date.now(); checkStop(); });
         }
 
         function emitOut(text, kind) {
@@ -1847,7 +1867,7 @@
         }
 
         async function evalExpr(node, env) {
-            await tickStep();
+            var yy = tickStep(); if (yy) await yy;
             if (!node) return 0;
             switch (node.type) {
                 case 'lit':
@@ -3193,7 +3213,7 @@
         }
 
         async function execStmt(stmt, env) {
-            await tickStep();
+            var yy = tickStep(); if (yy) await yy;
             if (!stmt || stmt.type === 'empty') return null;
             switch (stmt.type) {
                 case 'throw': {

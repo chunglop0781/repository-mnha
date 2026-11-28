@@ -61,14 +61,25 @@
         text = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '');
         var sp = document.createElement('span'); if (kind === 'err') sp.className = 't-err'; else if (kind === 'in') sp.className = 't-in'; sp.textContent = text; termOut.appendChild(sp);
     }
+    // Code có dùng file ngoài không? (bỏ comment trước khi dò để dòng // freopen(...) bị tắt không làm chậm lần chạy)
+    function needsSiblingFiles(src) {
+        var t = String(src || '').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+        return /#\s*include\s*"/.test(t) || /\b(freopen|fopen|ifstream|ofstream|fstream|ifstream)\b/.test(t);
+    }
     function runBrowser() {
         if (wasmRun) return;
         termOut.textContent = ''; $('outFiles').innerHTML = ''; wasmInputs = []; wasmConsole = ''; setRunning(true);
         info.textContent = 'Đang chuẩn bị...';
-        (text() !== saved ? save().catch(function () { }) : Promise.resolve()).then(function () {
+        // Lưu GitHub chạy SONG SONG (không chặn việc bắt đầu chạy — code chạy ngay trong trình duyệt, không cần bản đã lưu).
+        // Gọi /siblings chỉ khi code thật sự cần file khác (#include "..." / freopen / fopen / ifstream / ofstream); chương trình thuần cin/cout chạy ngay, không chờ mạng.
+        if (text() !== saved) save().catch(function () { });
+        var src0 = text();
+        var needFiles = !!P.online || needsSiblingFiles(src0);
+        (needFiles
             // file cùng thư mục: .txt + header #include (code của tôi: thư mục của tôi; code trên mạng: cùng thư mục trong repo GitHub/GitLab)
-            return api('POST', '/code/cpp/siblings', { dir: P.dir, file: P.file, code: text(), online: P.online || undefined }).catch(function (e) { info.innerHTML = '<span class="bad">Không nạp được file cùng thư mục: ' + esc(e.message) + '</span>'; return { files: [] }; });
-        }).then(function (j) {
+            ? api('POST', '/code/cpp/siblings', { dir: P.dir, file: P.file, code: src0, online: P.online || undefined }).catch(function (e) { info.innerHTML = '<span class=\"bad\">Không nạp được file cùng thư mục: ' + esc(e.message) + '</span>'; return { files: [] }; })
+            : Promise.resolve({ files: [] })
+        ).then(function (j) {
             var code = text();
             warnMissing(j.missing);
             wasmRun = (window.CppJs || window.CppWasm).start({
