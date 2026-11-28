@@ -1884,6 +1884,9 @@
                     if (node.kind === 'char') return { __cppType: 'char', val: node.val };
                     return node.val;
                 case 'id': {
+                    // Biến người dùng khai báo luôn thắng tên có sẵn (left/right/fixed/dec/less/npos...): int left=0, right=n-1; không bị hiểu là std::left / std::right
+                    var uBox = resolveVar(env, node.val);
+                    if (uBox) return uBox.isRef ? uBox.target.get() : uBox.val;
                     if (node.val === 'cin') return { __io: 'cin' };
                     if (node.val === 'stdin' || node.val === 'stdout' || node.val === 'stderr') return node.val;
                     if (node.val === 'cout') return { __io: 'cout' };
@@ -2056,7 +2059,10 @@
                     if (node.op === '>>') {
                         var rstream = await evalExpr(node.left, env);
                         if (rstream && rstream.__stl && /stream$/.test(rstream.__stl)) {
+                            if (node.right.type === 'id' && node.right.val === 'ws') { while (rstream.pos < rstream.buf.length && /\s/.test(rstream.buf[rstream.pos])) rstream.pos++; return rstream; }      // ss >> ws
                             var sTarget = await evalLValue(node.right, env);
+                            var sCur = sTarget.get();
+                            if (sCur && sCur.__struct && funcOv['operator>>']) { await invokeFunc(pickFunc('operator>>', [rstream, sCur]), [rstream, sCur], [], env, null); return rstream; }      // ss >> sv (friend operator>> của người dùng)
                             var sTok = streamRead(rstream);
                             if (sTok === null) return 0;
                             assignParsed(sTarget, sTarget.get(), sTok);
@@ -2064,7 +2070,20 @@
                         }
                         if (!rstream) return 0;
                         if (rstream && rstream.__io === 'cin') {
+                            if (node.right.type === 'id' && node.right.val === 'ws') {          // cin >> ws / getline(in >> ws, s): bỏ qua khoảng trắng đầu
+                                while (true) {
+                                    await ensureInput();
+                                    while (stdinPos < stdinBuf.length && /\s/.test(stdinBuf[stdinPos])) stdinPos++;
+                                    if (stdinPos < stdinBuf.length || inputClosed) break;
+                                }
+                                return rstream;
+                            }
                             var target = await evalLValue(node.right, env);
+                            var curStruct = target.get();
+                            if (curStruct && curStruct.__struct && funcOv['operator>>']) {       // cin >> sv: gọi friend/hàm operator>>(istream&, SV&) do người dùng viết
+                                await invokeFunc(pickFunc('operator>>', [rstream, curStruct]), [rstream, curStruct], [], env, null);
+                                return rstream;
+                            }
                             var tok = await readToken();
                             if (tok === null) return 0;
                             var curVal = target.get();
